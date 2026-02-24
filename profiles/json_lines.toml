@@ -1,0 +1,33 @@
+# LogSleuth Format Profile: JSON Lines (NDJSON)
+#
+# One JSON object per line, common in containerised/cloud-native apps:
+#   {"timestamp":"2024-01-15T14:30:22Z","level":"error","message":"Connection refused","service":"api"}
+#   {"ts":"2024-01-15 14:30:22","severity":"INFO","msg":"Server started","port":8080}
+#
+# This profile matches any file where most lines start with '{'.
+# Timestamp and level field names vary; the parser handles common variants.
+
+[profile]
+id = "json-lines"
+name = "JSON Lines (NDJSON)"
+version = "1.0"
+description = "Newline-delimited JSON logs (one JSON object per line)"
+
+[detection]
+file_patterns = ["*.jsonl", "*.ndjson"]
+content_match = '^\s*\{'
+
+[parsing]
+# For JSON lines, the entire line is the message.
+# The parser has special handling for JSON: it extracts known field names
+# (timestamp/ts/time/datetime, level/severity/loglevel, message/msg).
+line_pattern = '^(?P<message>\{.+\})$'
+timestamp_format = "%Y-%m-%dT%H:%M:%S"
+multiline_mode = "skip"
+
+[severity_mapping]
+critical = ["CRITICAL", "FATAL", "EMERGENCY"]
+error = ["ERROR", "ERR"]
+warning = ["WARNING", "WARN"]
+info = ["INFO", "INFORMATION"]
+debug = ["DEBUG", "TRACE", "VERBOSE"]

@@ -1,0 +1,33 @@
+# LogSleuth Format Profile: Plain Text (Fallback)
+#
+# Assigned to files that match no other format profile.
+# No timestamp or level extraction; every line becomes a standalone entry.
+# The file is still fully searchable via text/regex filters.
+#
+# This profile should never win auto-detection over a more specific profile
+# because its content_match matches any non-empty line.
+
+[profile]
+id = "plain-text"
+name = "Plain Text (Unstructured)"
+version = "1.0"
+description = "Fallback for files with no recognised log format. Full-text search only."
+
+[detection]
+file_patterns = []
+# Matches any non-empty, non-whitespace line
+content_match = '\S'
+
+[parsing]
+# Entire line is the message; no timestamp, level, or other fields extracted
+line_pattern = '^(?P<message>.+)$'
+# Unused but required by schema
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "raw"
+
+[severity_mapping]
+critical = ["CRITICAL", "FATAL"]
+error = ["ERROR", "FAIL", "FAILED", "Exception"]
+warning = ["WARNING", "WARN"]
+info = []
+debug = []

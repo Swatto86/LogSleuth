@@ -1,0 +1,63 @@
+[package]
+name = "logsleuth"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Swatto"]
+description = "Cross-platform log file viewer and analyser with extensible format profiles"
+license = "MIT"
+repository = "https://github.com/swatto86/LogSleuth"
+readme = "README.md"
+keywords = ["log", "viewer", "analyser", "troubleshooting"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# GUI framework
+eframe = "0.31"
+egui = "0.31"
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+csv = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Filesystem
+walkdir = "2"
+glob = "0.3"
+
+# Regex
+regex = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Memory-mapped I/O for large files
+memmap2 = "0.9"
+
+# Parallel processing
+rayon = "1"
+
+# Native file dialogs
+rfd = "0.15"
+
+# Platform-appropriate config/data directories
+directories = "5"
+
+# Application icon embedding
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

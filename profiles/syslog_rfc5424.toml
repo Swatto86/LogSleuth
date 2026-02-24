@@ -1,0 +1,29 @@
+# LogSleuth Format Profile: Syslog RFC 5424 (IETF)
+#
+# Structured syslog format:
+#   <34>1 2024-01-15T14:30:22.123Z hostname app 1234 ID47 - Message text
+#   <165>1 2024-01-15T14:30:22+00:00 router bgpd 12345 - - BGP peer down
+#
+# Log locations: varies by syslog implementation and configuration
+
+[profile]
+id = "syslog-rfc5424"
+name = "Syslog (IETF/RFC 5424)"
+version = "1.0"
+description = "Structured IETF syslog with ISO 8601 timestamps and priority"
+
+[detection]
+file_patterns = []
+content_match = '^<\d+>\d\s\d{4}-\d{2}-\d{2}T'
+
+[parsing]
+line_pattern = '^<\d+>\d\s(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s(?P<component>\S+)\s(?P<source>\S+)\s(?P<thread>\S+)\s\S+\s(?:\S+\s)?(?P<message>.+)$'
+timestamp_format = "%Y-%m-%dT%H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["emerg", "panic", "CRITICAL"]
+error = ["err", "error", "crit", "alert", "Failed"]
+warning = ["warning", "warn"]
+info = ["notice", "info"]
+debug = ["debug"]

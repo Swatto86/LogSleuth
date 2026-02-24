@@ -1,0 +1,46 @@
+# LogSleuth Format Profile: Veeam Backup & Replication
+#
+# Covers VBR service logs (Svc.VeeamBackup.log, Svc.VeeamBroker.log, etc.)
+# and job logs (Job.*.log). These all use the same bracketed format:
+#
+#   [23.11.2016 23:07:16] <01> Info     ------- Veeam Endpoint Job Started -------
+#   [23.11.2016 23:07:16] <01> Error    Failed to connect to host 10.0.0.5
+#
+# Format: [DD.MM.YYYY HH:MM:SS] <ThreadID> Level     Message
+#
+# Log locations:
+#   Windows: %ProgramData%\Veeam\Backup\
+#   Linux:   /var/log/VeeamBackup/
+
+[profile]
+id = "veeam-vbr"
+name = "Veeam Backup & Replication"
+version = "1.0"
+description = "VBR service and job logs (Svc.*.log, Job.*.log, Agent.*.log)"
+
+[detection]
+file_patterns = [
+    "Svc.Veeam*.log",
+    "Svc.Veeam*_[0-9]*.log",
+    "Job.*.log",
+    "Agent.*.log",
+    "VeeamBackupManager.log",
+    "VeeamPowerShell.log",
+    "CatalogReplicationJob.log",
+    "Veeam.WebApp.log",
+]
+# Matches the opening bracket-timestamp pattern unique to VBR logs
+content_match = '^\[\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2}\]\s<\d+>'
+
+[parsing]
+# Named groups: timestamp, thread, level, message
+line_pattern = '^\[(?P<timestamp>\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2})\]\s<(?P<thread>\d+)>\s(?P<level>\w+)\s+(?P<message>.+)$'
+timestamp_format = "%d.%m.%Y %H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["Critical", "Fatal"]
+error = ["Error", "Failed"]
+warning = ["Warning", "Warn"]
+info = ["Info"]
+debug = ["Debug", "Verbose"]

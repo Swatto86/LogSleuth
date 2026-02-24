@@ -1,0 +1,30 @@
+# LogSleuth Format Profile: Log4j / Logback Default Layout
+#
+# Standard Java logging format (Log4j, Logback, SLF4J):
+#   2024-01-15 14:30:22,123 ERROR [main] com.example.App - Connection failed
+#   2024-01-15 14:30:22.456 WARN  [http-nio-8080-exec-1] c.e.Service - Timeout
+#
+# Timestamp may use comma or dot as millisecond separator.
+# Thread name is in square brackets.
+
+[profile]
+id = "log4j-default"
+name = "Log4j / Logback Default"
+version = "1.0"
+description = "Standard Java logging output (Log4j, Logback, SLF4J)"
+
+[detection]
+file_patterns = []
+content_match = '^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}[.,]\d{3}\s+(?:ERROR|WARN|INFO|DEBUG|TRACE|FATAL)\s+\['
+
+[parsing]
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})[.,]\d{3}\s+(?P<level>\w+)\s+\[(?P<thread>[^\]]+)\]\s+(?P<component>\S+)\s+-\s+(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["FATAL"]
+error = ["ERROR"]
+warning = ["WARN"]
+info = ["INFO"]
+debug = ["DEBUG", "TRACE"]

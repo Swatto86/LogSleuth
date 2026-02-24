@@ -1,0 +1,45 @@
+# LogSleuth Format Profile: Veeam Backup for Microsoft 365
+#
+# Covers VBO365 service and component logs. These use a different format
+# from VBR with US-style date, AM/PM, process ID, and thread ID:
+#
+#   3/27/2019 9:21:14 AM 1 (2384) Veeam.Archiver.Shell.exe: Version=9.6.3.594
+#   3/27/2019 9:21:15 AM 7 (2228) Connecting to 127.0.0.1 (port: 9191) using current account...
+#
+# Format: M/DD/YYYY H:MM:SS AM/PM ProcessID (ThreadID) Message
+#
+# The first number after the time is the ProcessID and the second
+# (in parentheses) is the ThreadID.
+#
+# Log locations:
+#   Windows: %ProgramData%\Veeam\Backup365\Logs\
+
+[profile]
+id = "veeam-vbo365"
+name = "Veeam Backup for Microsoft 365"
+version = "1.0"
+description = "VBO365 Archiver, Proxy, and Shell logs"
+
+[detection]
+file_patterns = [
+    "Veeam.Archiver.*.log",
+    "Veeam.Archiver.*_[0-9]*.log",
+]
+# Matches US date + AM/PM + PID (TID) pattern
+content_match = '^\d{1,2}/\d{1,2}/\d{4}\s\d{1,2}:\d{2}:\d{2}\s[AP]M\s\d+'
+
+[parsing]
+# Named groups: timestamp, thread (TID in parens), message
+# Process ID captured separately as 'component' for filtering
+line_pattern = '(?P<timestamp>\d{1,2}/\d{1,2}/\d{4}\s\d{1,2}:\d{2}:\d{2}\s[AP]M)\s(?P<component>\d+)\s\((?P<thread>\d+)\)\s(?P<message>.+)$'
+timestamp_format = "%-m/%-d/%Y %-I:%M:%S %p"
+multiline_mode = "continuation"
+
+# VBO365 logs do not include an explicit severity level field.
+# Severity is inferred from message content keywords.
+[severity_mapping]
+critical = ["FATAL", "CRITICAL"]
+error = ["Error", "Failed", "Exception", "Cannot"]
+warning = ["Warning", "Warn", "Timeout", "Retry"]
+info = []
+debug = []

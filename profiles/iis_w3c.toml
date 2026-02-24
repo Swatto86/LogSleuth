@@ -1,0 +1,45 @@
+# LogSleuth Format Profile: IIS W3C Extended Log Format
+#
+# IIS web server logs using W3C Extended format. Header lines starting
+# with '#' define the field order. Data lines are space-delimited.
+#
+#   #Software: Microsoft Internet Information Services 10.0
+#   #Fields: date time s-ip cs-method cs-uri-stem cs-uri-query s-port cs-username c-ip cs(User-Agent) cs(Referer) sc-status sc-substatus sc-win32-status time-taken
+#   2024-01-15 14:30:22 10.0.0.1 GET /api/health - 443 - 192.168.1.100 Mozilla/5.0 - 200 0 0 15
+#   2024-01-15 14:30:23 10.0.0.1 POST /api/login - 443 admin 192.168.1.101 Mozilla/5.0 - 500 0 64 1523
+#
+# Log locations:
+#   Windows: %SystemDrive%\inetpub\logs\LogFiles\W3SVC<SiteID>\
+
+[profile]
+id = "iis-w3c"
+name = "IIS W3C Extended Log"
+version = "1.0"
+description = "Microsoft IIS web server logs in W3C Extended format"
+
+[detection]
+file_patterns = [
+    "u_ex*.log",
+    "u_in*.log",
+]
+# Matches W3C header or data line with ISO date
+content_match = '^(#Fields:|#Software: Microsoft Internet Information Services|\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\s)'
+
+[parsing]
+# IIS W3C logs are space-delimited. This captures the timestamp and
+# treats the rest as the message. The sc-status (HTTP status code)
+# is extracted for severity mapping.
+# Lines starting with '#' are metadata/headers (skipped).
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})\s(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "skip"
+
+# IIS logs encode severity in the HTTP status code within the message.
+# The parser will attempt keyword matching against the full message line.
+# HTTP 5xx = error, 4xx = warning. No explicit level field exists.
+[severity_mapping]
+critical = []
+error = [" 500 ", " 502 ", " 503 ", " 504 "]
+warning = [" 400 ", " 401 ", " 403 ", " 404 ", " 408 ", " 429 "]
+info = []
+debug = []

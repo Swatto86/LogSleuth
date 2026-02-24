@@ -1,0 +1,30 @@
+# LogSleuth Format Profile: Syslog RFC 3164 (BSD)
+#
+# Traditional BSD syslog format:
+#   Jan 15 14:30:22 hostname sshd[1234]: Failed password for root
+#   Feb  3 09:15:01 webserver cron[567]: (root) CMD (/usr/lib/sa/sa1)
+#
+# Log locations:
+#   Linux: /var/log/syslog, /var/log/messages, /var/log/auth.log
+
+[profile]
+id = "syslog-rfc3164"
+name = "Syslog (BSD/RFC 3164)"
+version = "1.0"
+description = "Traditional BSD syslog format used by rsyslog, syslog-ng"
+
+[detection]
+file_patterns = ["syslog", "syslog.[0-9]*", "messages", "messages.[0-9]*", "auth.log", "auth.log.[0-9]*"]
+content_match = '^[A-Z][a-z]{2}\s[\s\d]\d\s\d{2}:\d{2}:\d{2}\s\S+'
+
+[parsing]
+line_pattern = '^(?P<timestamp>[A-Z][a-z]{2}\s[\s\d]\d\s\d{2}:\d{2}:\d{2})\s(?P<component>\S+)\s(?P<source>[^\[:\s]+)(?:\[(?P<thread>\d+)\])?:\s*(?P<message>.+)$'
+timestamp_format = "%b %d %H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["panic", "emerg", "CRITICAL"]
+error = ["err", "error", "crit", "alert", "Failed", "failure"]
+warning = ["warning", "warn"]
+info = ["notice", "info"]
+debug = ["debug"]

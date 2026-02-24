@@ -1,0 +1,32 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+# Cargo.lock is committed for binary projects (reproducible builds)
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+*.exe
+*.msi
+*.dmg
+*.AppImage
+
+# Installer output
+installer/output/
+
+# Log files (from testing)
+*.log
+!profiles/*.toml
+
+# User config (contains local paths)
+config.toml
