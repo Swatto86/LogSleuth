@@ -108,8 +108,15 @@ LogSleuth/
 |   +-- profiles/                # Test profile TOML files
 +-- assets/
 |   +-- app.manifest             # Windows UAC/DPI manifest
-|   +-- icon.ico                 # Application icon (Windows)
-|   +-- icon.png                 # Application icon (Linux/macOS)
+|   +-- icon.svg                 # Master icon source (512x512, regenerate PNGs/ICO from this)
+|   +-- icon.ico                 # Multi-res Windows ICO (16/32/48/64/128/256 px), embedded by build.rs
+|   +-- icon.png                 # Canonical 512x512 PNG, embedded in EXE at compile time via include_bytes!
+|   +-- icon_32.png              # 32x32 PNG for egui fallback
+|   +-- icon_48.png              # 48x48 PNG for taskbar/dock medium
+|   +-- icon_256.png             # 256x256 PNG for installer/large display
+|   +-- icon_512.png             # 512x512 PNG for high-DPI display
++-- examples/
+|   +-- gen_icons.rs             # Dev tool: renders SVG -> PNG/ICO (cargo run --example gen_icons)
 +-- installer/
 |   +-- windows/
 |   |   +-- logsleuth.nsi        # NSIS installer script
@@ -121,7 +128,7 @@ LogSleuth/
 |   +-- workflows/
 |       +-- ci.yml               # Build + test on all platforms
 |       +-- release.yml          # Tag-triggered release pipeline
-+-- build.rs                     # Icon embedding, profile embedding
++-- build.rs                     # Embeds assets/icon.ico into the Windows EXE via winres (titlebar/taskbar/Alt+Tab)
 +-- Cargo.toml                   # Dependencies and metadata
 +-- Cargo.lock                   # Locked dependency versions
 +-- config.example.toml          # Example configuration file
@@ -260,6 +267,9 @@ These invariants MUST hold at all times. Violation is a defect.
 | Rust toolchain | 1.75+ | Edition 2021, async traits stabilised |
 | Windows 10 SDK | 10.0.19041+ | Windows builds only |
 | Xcode Command Line Tools | 14+ | macOS builds only |
+| `winres` (build-dep, Windows only) | 0.1 | Embeds ICO resource into the Windows EXE so the OS shows the icon in titlebar, taskbar, Alt+Tab, and Explorer |
+| `resvg` (dev-dep, gen_icons tool) | 0.44 | SVG -> PNG rendering for icon asset regeneration |
+| `ico` (dev-dep, gen_icons tool) | 0.3 | Builds multi-resolution ICO file from individual PNG layers |
 
 ---
 

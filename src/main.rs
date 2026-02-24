@@ -21,6 +21,54 @@ pub mod util;
 use clap::Parser;
 use std::path::PathBuf;
 
+/// Compile-time-embedded icon PNG bytes (512x512 RGBA).
+///
+/// Using `include_bytes!` ensures the asset is baked into the binary so the
+/// icon is always available regardless of the working directory at runtime.
+static ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
+
+/// Decode the embedded PNG and return an `eframe`-compatible `IconData`.
+///
+/// Falls back to a transparent 1x1 placeholder if decoding fails so the
+/// application always launches rather than panicking on a missing asset.
+fn load_icon() -> egui::IconData {
+    use image::ImageDecoder;
+
+    match image::codecs::png::PngDecoder::new(std::io::Cursor::new(ICON_PNG)) {
+        Ok(decoder) => {
+            let (w, h) = decoder.dimensions();
+            // Convert to RGBA8 regardless of the source colour space.
+            match image::DynamicImage::from_decoder(decoder) {
+                Ok(img) => {
+                    let rgba = img.into_rgba8();
+                    egui::IconData {
+                        rgba: rgba.into_raw(),
+                        width: w,
+                        height: h,
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to decode icon PNG; using placeholder");
+                    placeholder_icon()
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to open icon PNG decoder; using placeholder");
+            placeholder_icon()
+        }
+    }
+}
+
+/// 1x1 transparent RGBA icon used when the real icon cannot be loaded.
+fn placeholder_icon() -> egui::IconData {
+    egui::IconData {
+        rgba: vec![0u8; 4],
+        width: 1,
+        height: 1,
+    }
+}
+
 /// LogSleuth - Cross-platform log file viewer and analyser.
 ///
 /// Point LogSleuth at a directory to discover, parse, and analyse log files
@@ -89,6 +137,15 @@ fn main() {
     }
 
     // Launch the GUI
+    //
+    // The icon is applied at two levels:
+    //   1. OS-level (Windows EXE resource) — embedded by build.rs via winres.
+    //      This covers the taskbar, Alt+Tab, title bar, and Explorer.
+    //   2. Runtime (eframe viewport) — loaded here from the PNG asset.
+    //      This covers the eframe-managed window icon on all platforms and
+    //      acts as the canonical source on Linux/macOS.
+    let icon_data = load_icon();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!(
@@ -97,7 +154,8 @@ fn main() {
                 util::constants::APP_VERSION
             ))
             .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_min_inner_size([800.0, 500.0])
+            .with_icon(icon_data),
         ..Default::default()
     };
 

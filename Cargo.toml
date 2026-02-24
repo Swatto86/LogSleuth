@@ -56,6 +56,15 @@ clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Icon generation tool (examples/gen_icons.rs): render SVG -> PNG -> ICO
+# Run with: cargo run --example gen_icons
+resvg = "0.44"
+ico = "0.3"
+
+# Embed ICO resource into the Windows executable (titlebar, taskbar, Alt+Tab).
+# Scoped to Windows targets only so cross-compiling from Linux/macOS still works.
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [profile.release]
 opt-level = 3

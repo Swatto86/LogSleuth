@@ -23,7 +23,7 @@
 - [x] `gui.rs` - eframe::App implementation wiring all panels
 - [x] `main.rs` - CLI parsing, logging init, profile loading, GUI launch
 - [x] 9 built-in format profiles (Veeam VBR, VBO365, IIS, syslog x2, JSON, Log4j, generic, plain-text)
-- [x] Application icon (SVG)
+- [x] Application icon (SVG + PNG + ICO assets, 'LS' brand mark, all sizes regenerated via `cargo run --example gen_icons`)
 - [x] Unit tests for profile loading, parsing, filtering, export
 - [x] config.example.toml
 - [x] LogSleuth-Specification.md
@@ -68,6 +68,6 @@
 - [ ] GitHub Actions CI workflow
 - [ ] GitHub Actions release workflow
 - [ ] update-application.ps1 release script
-- [ ] Application icon embedding (ICO for Windows)
+- [x] Application icon embedding (ICO for Windows, via winres build.rs; runtime PNG via eframe viewport `with_icon`)
 - [ ] DMG builder (macOS)
 - [ ] AppImage builder (Linux)
