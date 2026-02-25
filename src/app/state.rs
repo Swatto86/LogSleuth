@@ -6,7 +6,7 @@
 
 use crate::core::filter::FilterState;
 use crate::core::model::{DiscoveredFile, FormatProfile, LogEntry, ScanSummary};
-use crate::util::constants::DEFAULT_CORRELATION_WINDOW_SECS;
+use crate::util::constants::{DEFAULT_CORRELATION_WINDOW_SECS, MAX_CLIPBOARD_ENTRIES};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -368,6 +368,84 @@ impl AppState {
                 out.push_str(&format!("[{ts}] {sev:<8} {src}{label}\n  {preview}\n\n"));
             }
         }
+        out
+    }
+
+    /// Generate a plain-text report of all currently-filtered entries for clipboard export.
+    ///
+    /// Each entry is rendered as a single-line row: `[timestamp] severity  source  message`.
+    /// The report begins with a header that summarises the active filters so the recipient
+    /// understands the scope of what they are looking at.
+    ///
+    /// Bounded to [`MAX_CLIPBOARD_ENTRIES`] to prevent clipboard overload on very large
+    /// filtered sets. A truncation notice is appended when the limit is hit.
+    pub fn filtered_results_report(&self) -> String {
+        let total_filtered = self.filtered_indices.len();
+        let take = total_filtered.min(MAX_CLIPBOARD_ENTRIES);
+        let generated = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+
+        // Build a concise human-readable description of the active filter so the
+        // clipboard recipient understands what criteria were applied.
+        let mut filter_parts: Vec<String> = Vec::new();
+        if !self.filter_state.severity_levels.is_empty() {
+            let mut sevs: Vec<String> = self
+                .filter_state
+                .severity_levels
+                .iter()
+                .map(|s| format!("{s:?}"))
+                .collect();
+            sevs.sort();
+            filter_parts.push(format!("Severity: {}", sevs.join("+")));
+        }
+        if let Some(secs) = self.filter_state.relative_time_secs {
+            if secs < 3_600 {
+                filter_parts.push(format!("Last {}m", secs / 60));
+            } else {
+                filter_parts.push(format!("Last {}h", secs / 3_600));
+            }
+        } else if self.filter_state.time_start.is_some() || self.filter_state.time_end.is_some() {
+            filter_parts.push("Time range active".to_string());
+        }
+        if !self.filter_state.text_search.is_empty() {
+            filter_parts.push(format!("Text: \"{}\"", self.filter_state.text_search));
+        }
+        if self.filter_state.regex_search.is_some() {
+            filter_parts.push(format!("Regex: /{}/", self.filter_state.regex_pattern));
+        }
+        let filter_desc = if filter_parts.is_empty() {
+            "No filter (all entries)".to_string()
+        } else {
+            filter_parts.join(" | ")
+        };
+
+        let mut out = format!(
+            "LogSleuth Filtered Results\nGenerated: {generated}\nFilter:    {filter_desc}\nEntries:   {total_filtered}\n{}\n\n",
+            "=".repeat(80)
+        );
+
+        for &entry_idx in self.filtered_indices.iter().take(take) {
+            if let Some(entry) = self.entries.get(entry_idx) {
+                let ts = entry
+                    .timestamp
+                    .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| "no timestamp         ".to_string());
+                let src = entry
+                    .source_file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?");
+                let sev = format!("{:?}", entry.severity);
+                let preview: String = entry.message.chars().take(200).collect();
+                out.push_str(&format!("[{ts}] {sev:<8}  {src}\n  {preview}\n\n"));
+            }
+        }
+
+        if take < total_filtered {
+            out.push_str(&format!(
+                "--- truncated: {take} of {total_filtered} entries shown (limit: {MAX_CLIPBOARD_ENTRIES}) ---\n"
+            ));
+        }
+
         out
     }
 

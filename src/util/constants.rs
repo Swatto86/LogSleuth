@@ -74,6 +74,11 @@ pub const TAIL_CANCEL_CHECK_INTERVAL_MS: u64 = 100;
 /// Prevents a large burst of new content from stalling the entire poll loop.
 pub const MAX_TAIL_READ_BYTES_PER_TICK: usize = 512 * 1_024; // 512 KiB
 
+/// Maximum number of log entries included in a single "Copy Filtered Results"
+/// clipboard export.  Prevents multi-second clipboard operations and excessive
+/// memory allocation when the filtered set is very large.
+pub const MAX_CLIPBOARD_ENTRIES: usize = 10_000;
+
 // =============================================================================
 // Profile limits
 // =============================================================================

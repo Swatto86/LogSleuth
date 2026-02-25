@@ -28,6 +28,24 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.filter_state.source_files = current_files;
             state.apply_filters();
         }
+        // Combined troubleshooting preset: severity Error+Warning + last 15-minute rolling window.
+        // Single click brings up the most recent problem signals across all loaded files,
+        // and continues to show live tail entries that fall within the advancing window.
+        if ui
+            .small_button("Err+Warn+15m")
+            .on_hover_text(
+                "Show only Error / Warning entries from the last 15 minutes.\n\
+                 When Live Tail is active the window advances automatically.",
+            )
+            .clicked()
+        {
+            let current_files = std::mem::take(&mut state.filter_state.source_files);
+            state.filter_state = crate::core::filter::FilterState::errors_and_warnings_from(fuzzy);
+            state.filter_state.source_files = current_files;
+            state.filter_state.relative_time_secs = Some(15 * 60);
+            state.filter_state.relative_time_input.clear();
+            state.apply_filters();
+        }
         if ui.small_button("Clear").clicked() {
             state.filter_state = crate::core::filter::FilterState {
                 fuzzy,
@@ -245,6 +263,16 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             egui::RichText::new(format!("After {}", start.format("%H:%M:%S")))
                 .small()
                 .color(egui::Color32::from_rgb(96, 165, 250)),
+        );
+    }
+    // When Live Tail is active and a rolling window is set, confirm the window is
+    // continuously advancing with each frame so the user knows new tail entries
+    // entering the window will appear automatically.
+    if state.tail_active && state.filter_state.relative_time_secs.is_some() {
+        ui.label(
+            egui::RichText::new("\u{25cf} Rolling window (live)")
+                .small()
+                .color(egui::Color32::from_rgb(34, 197, 94)),
         );
     }
 
@@ -536,16 +564,33 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         });
     }
 
-    // Entry-count summary at the bottom of the filter section
+    // Entry-count summary and "Copy Filtered" action at the bottom of the filter section.
     if !state.entries.is_empty() {
         ui.add_space(6.0);
         ui.separator();
         let total = state.entries.len();
         let filtered = state.filtered_indices.len();
-        if filtered == total {
-            ui.label(format!("{total} entries"));
-        } else {
-            ui.label(format!("{filtered} / {total} entries"));
-        }
+        ui.horizontal(|ui| {
+            if filtered == total {
+                ui.label(format!("{total} entries"));
+            } else {
+                ui.label(format!("{filtered} / {total} entries"));
+            }
+            // Disabled when filtered set is empty (Rule 16: controls reflect valid actions).
+            ui.add_enabled_ui(filtered > 0, |ui| {
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("\u{1f4cb} Copy").small(),
+                    ))
+                    .on_hover_text("Copy all filtered entries to clipboard as a plain-text report")
+                    .clicked()
+                {
+                    let report = state.filtered_results_report();
+                    ui.ctx().copy_text(report);
+                    state.status_message =
+                        format!("Copied {filtered} filtered entries to clipboard.");
+                }
+            });
+        });
     }
 }

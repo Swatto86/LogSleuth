@@ -368,6 +368,19 @@ impl eframe::App for LogSleuthApp {
                             ui.close_menu();
                         }
                     });
+                    // Copy all currently-filtered entries as a plain-text report.
+                    // Disabled when no filtered entries exist (Rule 16).
+                    ui.add_enabled_ui(has_entries, |ui| {
+                        let n = self.state.filtered_indices.len();
+                        let copy_label = format!("Copy Filtered Results ({n} entries)");
+                        if ui.button(copy_label).clicked() {
+                            let report = self.state.filtered_results_report();
+                            ctx.copy_text(report);
+                            self.state.status_message =
+                                format!("Copied {n} filtered entries to clipboard.");
+                            ui.close_menu();
+                        }
+                    });
                 });
             });
         });

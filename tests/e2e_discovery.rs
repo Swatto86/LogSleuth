@@ -521,3 +521,116 @@ fn e2e_session_save_restore_round_trip() {
         "load() must return None for a missing file"
     );
 }
+
+// =============================================================================
+// filtered_results_report tests
+// =============================================================================
+
+use logsleuth::app::state::AppState;
+use logsleuth::core::model::{LogEntry, Severity};
+
+/// Helper: build a minimal LogEntry for testing.
+fn make_entry(id: u64, severity: Severity, message: &str, ts_offset_secs: i64) -> LogEntry {
+    LogEntry {
+        id,
+        timestamp: Some(chrono::Utc::now() - chrono::Duration::seconds(ts_offset_secs)),
+        severity,
+        message: message.to_string(),
+        raw_text: message.to_string(),
+        source_file: std::path::PathBuf::from("app.log"),
+        line_number: id,
+        thread: None,
+        component: None,
+        profile_id: "test".to_string(),
+    }
+}
+
+/// report on an empty filtered set is well-formed and shows 0 entries.
+#[test]
+fn filtered_results_report_empty_state() {
+    let state = AppState::new(vec![], false);
+    let report = state.filtered_results_report();
+    assert!(
+        report.contains("LogSleuth Filtered Results"),
+        "report must contain header"
+    );
+    assert!(
+        report.contains("Entries:   0"),
+        "empty state must show 0 entries, got: {report}"
+    );
+}
+
+/// report with filtered entries contains timestamp, severity, and message text.
+#[test]
+fn filtered_results_report_populated() {
+    let mut state = AppState::new(vec![], false);
+    state
+        .entries
+        .push(make_entry(0, Severity::Error, "disk full", 30));
+    state
+        .entries
+        .push(make_entry(1, Severity::Warning, "high memory", 20));
+    state
+        .entries
+        .push(make_entry(2, Severity::Info, "startup complete", 10));
+    // Filter to just the first two (Error + Warning).
+    state.filter_state.severity_levels.insert(Severity::Error);
+    state.filter_state.severity_levels.insert(Severity::Warning);
+    state.apply_filters();
+
+    let report = state.filtered_results_report();
+
+    assert!(
+        report.contains("disk full"),
+        "Error entry message must appear in report"
+    );
+    assert!(
+        report.contains("high memory"),
+        "Warning entry message must appear in report"
+    );
+    assert!(
+        !report.contains("startup complete"),
+        "Info entry must not appear when filtered to Error+Warning"
+    );
+    assert!(
+        report.contains("Entries:   2"),
+        "report must show 2 filtered entries, got: {report}"
+    );
+    // Filter description must mention the severity constraint.
+    assert!(
+        report.contains("Severity:"),
+        "filter description must mention severity"
+    );
+}
+
+/// report is truncated at MAX_CLIPBOARD_ENTRIES with a notice appended.
+#[test]
+fn filtered_results_report_truncation() {
+    use logsleuth::util::constants::MAX_CLIPBOARD_ENTRIES;
+
+    let mut state = AppState::new(vec![], false);
+    // Push MAX + 1 entries so truncation fires.
+    let total = MAX_CLIPBOARD_ENTRIES + 1;
+    for i in 0..total {
+        state
+            .entries
+            .push(make_entry(i as u64, Severity::Error, "overflow", 0));
+    }
+    state.apply_filters();
+
+    assert_eq!(
+        state.filtered_indices.len(),
+        total,
+        "all entries must pass an empty filter"
+    );
+
+    let report = state.filtered_results_report();
+    assert!(
+        report.contains("truncated"),
+        "report must contain truncation notice when over limit"
+    );
+    assert!(
+        report.contains(&format!("{MAX_CLIPBOARD_ENTRIES}")),
+        "report must cite the limit value"
+    );
+}

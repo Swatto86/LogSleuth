@@ -1,6 +1,6 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 12 complete -- persistent sessions
+> **Status**: Increment 13 complete -- "Copy Filtered Results" + "Err+Warn+15m" troubleshoot preset
 > **Last updated**: 2026-02-25
 
 ---
@@ -67,7 +67,7 @@ LogSleuth/
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
 |   |   +-- session.rs           # Session persistence: SessionData + PersistedFilter structs (serde JSON); session_path(), save() (atomic write via .json.tmp rename), load() (returns None on missing/corrupt/version-mismatch — never errors to user); SESSION_VERSION const for forward-compat
-|   |   +-- state.rs             # Application state; tail flags; show_log_summary; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), update_correlation(), next_entry_id(), save_session(), restore_from_session()
+|   |   +-- state.rs             # Application state; tail flags; show_log_summary; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), filtered_results_report() (bounded to MAX_CLIPBOARD_ENTRIES), update_correlation(), next_entry_id(), save_session(), restore_from_session()
 |   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo
 |   +-- core/
 |   |   +-- mod.rs
@@ -86,7 +86,7 @@ LogSleuth/
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
 |   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
-|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset; "Summary" quick-button; "Bookmarks (N)" toggle + "clear bm" button
+|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input + rolling-window live indicator (green dot when tail active), source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset; "Errors only" / "Errors+Warn" / "Err+Warn+15m" quick-presets; "Summary" quick-button; "Bookmarks (N)" toggle + "clear bm" button; "Copy" clipboard button at entry-count footer (disabled when filtered set empty)
 |   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=290
 |   +-- platform/
 |   |   +-- mod.rs
@@ -96,7 +96,7 @@ LogSleuth/
 |       +-- mod.rs
 |       +-- error.rs             # LogSleuthError enum, error chain helpers
 |       +-- logging.rs           # tracing setup, debug mode activation
-|       +-- constants.rs         # Named constants (limits, defaults, versions)
+|       +-- constants.rs         # Named constants (limits, defaults, versions); includes MAX_CLIPBOARD_ENTRIES (clipboard export row cap)
 +-- profiles/
 |   +-- veeam_vbr.toml           # Veeam Backup & Replication
 |   +-- veeam_vbo365.toml        # Veeam Backup for M365
