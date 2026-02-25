@@ -35,6 +35,10 @@ id = "windows-dhcp"
 name = "Windows DHCP Server Log"
 version = "1.0"
 description = "Windows Server DHCP service daily activity logs"
+log_locations = [
+    "Windows: %SystemRoot%\\System32\\dhcp\\DhcpSrvLog-Mon.log (through Sun)",
+    "Windows (IPv6): %SystemRoot%\\System32\\dhcp\\DhcpV6SrvLog-Mon.log",
+]
 
 [detection]
 file_patterns = [

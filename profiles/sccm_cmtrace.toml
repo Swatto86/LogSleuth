@@ -1,0 +1,111 @@
+# LogSleuth Format Profile: Microsoft SCCM / ConfigMgr (CMTrace)
+#
+# Microsoft System Center Configuration Manager (SCCM) and its successor
+# Microsoft Endpoint Configuration Manager (MECM) write all component logs
+# in CMTrace XML-attribute format — the same format used by Intune IME.
+# Every log entry is a single line with this structure:
+#
+#   <![LOG[message text here]LOG]!><time="HH:MM:SS.mmm+offset"
+#     date="M-D-YYYY" component="ComponentName" context="" type="N"
+#     thread="ThreadId" file="SourceFile.cpp">
+#
+# The `type` attribute controls severity:
+#   1 = Information
+#   2 = Warning
+#   3 = Error
+#
+# This profile targets SCCM/ConfigMgr client and server logs by filename.
+# For Intune Management Extension logs (IntuneManagementExtension.log, etc.)
+# use the intune-ime profile instead; it has higher file-pattern priority.
+#
+# Covered log files (representative selection — SCCM has 100+ log files):
+#   smsts.log              — Task Sequence engine
+#   AppEnforce.log         — Application enforcement
+#   AppDiscovery.log       — Application detection
+#   CcmExec.log            — SMS Agent Host service
+#   PolicyAgent.log        — Local Policy Agent
+#   PolicyEvaluator.log    — Policy Evaluator
+#   UpdatesDeployment.log  — Software Update Deployment
+#   UpdatesHandler.log     — Software Update Handler
+#   WUAHandler.log         — Windows Update Agent
+#   SoftwareCenter.log     — Software Center
+#   execmgr.log            — Program/Package Execution Manager
+#   inventoryagent.log     — Hardware Inventory Agent
+#   LocationServices.log   — Site boundary and location
+#   ContentTransferManager.log — Content delivery
+#   ccmsetup.log           — Client installation
+#   ClientIDManagerStartup.log — Client identity
+#   RebootCoordinator.log  — Reboot management
+#   ScanAgent.log          — Software update scan
+#   distmgr.log            — Distribution Manager (server)
+#   replmgr.log            — Replication Manager (server)
+#
+# Log locations:
+#   Client:  C:\Windows\CCM\Logs\
+#   Setup:   C:\Windows\ccmsetup\Logs\
+#   Server:  C:\Program Files\Microsoft Configuration Manager\Logs\
+#   SMS:     C:\SMS_CCM\Logs\ (legacy/DP role)
+
+[profile]
+id = "sccm-cmtrace"
+name = "Microsoft SCCM / ConfigMgr (CMTrace)"
+version = "1.0"
+description = "SCCM/MECM client and server CMTrace-format logs (smsts.log, AppEnforce.log, CcmExec.log, etc.)"
+log_locations = [
+    "Client logs: C:\\Windows\\CCM\\Logs\\",
+    "Client setup: C:\\Windows\\ccmsetup\\Logs\\",
+    "Server: C:\\Program Files\\Microsoft Configuration Manager\\Logs\\",
+]
+
+[detection]
+file_patterns = [
+    "smsts.log",
+    "smsts-*.log",
+    "AppEnforce.log",
+    "AppDiscovery.log",
+    "CcmExec.log",
+    "ClientIDManagerStartup.log",
+    "PolicyAgent.log",
+    "PolicyEvaluator.log",
+    "UpdatesDeployment.log",
+    "UpdatesHandler.log",
+    "WUAHandler.log",
+    "SoftwareCenter.log",
+    "execmgr.log",
+    "inventoryagent.log",
+    "LocationServices.log",
+    "ContentTransferManager.log",
+    "ccmsetup.log",
+    "RebootCoordinator.log",
+    "ScanAgent.log",
+    "distmgr.log",
+    "replmgr.log",
+    "objreplmgr.log",
+    "hman.log",
+    "smsexec.log",
+    "sitestat.log",
+    "MP_GetPolicy.log",
+    "StatusMessageReceiver.log",
+    "DcmWmiProvider.log",
+    "MaintenanceCoordinator.log",
+    "MTRMgr.log",
+    "PatchDownloader.log",
+]
+# The <![LOG[ prefix is unique to CMTrace-format logs
+content_match = '^\<!\[LOG\['
+
+[parsing]
+# Named groups (identical to intune-ime — same wire format):
+#   message   — log text between <![LOG[  and  ]LOG]!>
+#   timestamp — HH:MM:SS extracted from the time= attribute (second precision)
+#   component — component name from the component= attribute
+#   level     — numeric severity from the type= attribute (1/2/3)
+#   thread    — thread ID from the thread= attribute
+line_pattern = '^\<!\[LOG\[(?P<message>.*?)\]LOG\]!\>\<time="(?P<timestamp>\d{2}:\d{2}:\d{2})\.\d+[^"]*"\s+date="[^"]+"\s+component="(?P<component>[^"]*)"\s+context="[^"]*"\s+type="(?P<level>\d)"\s+thread="(?P<thread>[^"]*)"\s+file="[^"]*"\>$'
+timestamp_format = "%H:%M:%S"
+multiline_mode = "skip"
+
+[severity_mapping]
+error   = ["3"]
+warning = ["2"]
+info    = ["1"]

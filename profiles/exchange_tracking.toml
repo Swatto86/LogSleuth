@@ -1,0 +1,74 @@
+# LogSleuth Format Profile: Microsoft Exchange Server Message Tracking Log
+#
+# Exchange Server writes per-day CSV message tracking logs with a header block
+# followed by comma-delimited event records.  The header lines begin with '#'
+# and describe the schema; data rows begin with an ISO 8601 timestamp:
+#
+#   #Software: Microsoft Exchange Server 2019
+#   #Version: 15.02.0986.026
+#   #Log-type: Message Tracking Log
+#   #Date: 2024-01-15T00:00:00.000Z
+#   #Fields: date-time,client-ip,client-hostname,server-ip,server-hostname,...
+#   2024-01-15T09:50:45.123Z,,,,SMTP,,,FromLocal,SEND,<uid>,...
+#   2024-01-15T09:50:46.234Z,,,,,,,ToLocal,RECEIVE,<uid>,...
+#
+# Key event-id values (appear as the 9th CSV column, inside the message group):
+#   RECEIVE  — message received from external sender
+#   SEND     — message sent to external recipient
+#   DELIVER  — local delivery to mailbox
+#   FAIL     — permanent delivery failure
+#   REDIRECT — redirected or forwarded
+#   RESOLVE  — recipient resolved
+#   DELAY    — transient delivery delay
+#   BADMAIL  — undeliverable, moved to badmail
+#   QUARANTINE — held by content filter or policy
+#   SUBMIT   — submitted to transport pipeline
+#   EXPAND   — distribution group expanded
+#   TRANSFER — transferred to another server
+#
+# Non-data header lines are skipped (multiline_mode = "skip").
+#
+# Log locations:
+#   Exchange 2016/2019: C:\Program Files\Microsoft\Exchange Server\V15\TransportRoles\Logs\MessageTracking\
+#   Exchange 2013:      C:\Program Files\Microsoft\Exchange Server\V15\TransportRoles\Logs\MessageTracking\
+#   File pattern:       MSGTRK<YYYYMMDD-NNNN>.LOG
+
+[profile]
+id = "exchange-tracking"
+name = "Microsoft Exchange Message Tracking Log"
+version = "1.0"
+description = "Exchange Server message tracking logs — CSV format with ISO 8601 timestamps"
+log_locations = [
+    "Exchange 2016/2019: C:\\Program Files\\Microsoft\\Exchange Server\\V15\\TransportRoles\\Logs\\MessageTracking\\",
+    "File pattern: MSGTRK<YYYYMMDD-NNNN>.LOG",
+]
+
+[detection]
+file_patterns = [
+    "MSGTRK*.LOG",
+    "MSGTRKMD*.LOG",
+    "MSGTRKMS*.LOG",
+    "MSGTRKMA*.LOG",
+    "MSGTRKE*.LOG",
+    "MSGTRKF*.LOG",
+]
+# Data rows start with an ISO 8601 datetime followed by a comma
+content_match = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z,'
+
+[parsing]
+# The timestamp is captured without fractional seconds or the trailing Z so
+# NaiveDateTime can parse the clean YYYY-MM-DDTHH:MM:SS string.
+# Everything from the second column onward is captured as the message (contains
+# all the CSV fields including client-ip, server, event-id, sender, recipient).
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.\d+Z,(?P<message>.+)$'
+timestamp_format = "%Y-%m-%dT%H:%M:%S"
+multiline_mode = "skip"
+
+[severity_mapping]
+# Not applicable — no explicit severity level field in this log format.
+# Severity is inferred from the event-id keyword within the message text.
+
+[severity_override]
+error   = ['(?i)\bFAIL\b', '(?i)\bBADMAIL\b', '(?i)\bQUARANTINE\b']
+warning = ['(?i)\bDELAY\b', '(?i)\bREDIRECT\b', '(?i)\bPOISON\b']
+info    = ['(?i)\bRECEIVE\b', '(?i)\bDELIVER\b', '(?i)\bSEND\b', '(?i)\bSUBMIT\b', '(?i)\bRESOLVE\b', '(?i)\bEXPAND\b', '(?i)\bTRANSFER\b']

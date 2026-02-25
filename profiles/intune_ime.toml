@@ -35,6 +35,10 @@ id = "intune-ime"
 name = "Microsoft Intune Management Extension"
 version = "1.0"
 description = "Intune IME and agent CMTrace-format logs (IntuneManagementExtension.log, AgentExecutor.log, etc.)"
+log_locations = [
+    "Windows: C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\",
+    "MDM Diagnostics: run mdmdiagnosticstool.exe -area DeviceEnrollment;DeviceProvisioning -zip <path>",
+]
 
 [detection]
 file_patterns = [

@@ -26,6 +26,11 @@ id = "nginx-error"
 name = "nginx Error Log"
 version = "1.0"
 description = "nginx web server error log"
+log_locations = [
+    "Linux: /var/log/nginx/error.log",
+    "Windows: C:\\nginx\\logs\\error.log",
+    "macOS (Homebrew): /usr/local/var/log/nginx/error.log",
+]
 
 [detection]
 file_patterns = [

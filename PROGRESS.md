@@ -322,6 +322,8 @@
 - [x] `app/state.rs` - Added `show_about: bool` field (initialised `false`; not reset on `clear()` — independent of scan state).
 - [x] `gui.rs` - Right-aligned greyed `ⓘ` frameless button in the menu bar (rendered before left-anchored `File`/`View` menus so egui allocates its space first). Hover text: "About LogSleuth". Click sets `state.show_about = true`.
 
+**NOTE: The About button placement was subsequently found to be a bug — see Increment 19.**
+
 **Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (no new tests; UI only)**
 
 ---
@@ -342,6 +344,106 @@ Expanded the built-in profile library from 9 to 14 profiles. All profiles are em
 
 ---
 
+## Increment 18: Sidebar Width + Intune Profile + Menu Bar Fix
+**Status: COMPLETE**
+
+- [x] `ui/theme.rs` - `SIDEBAR_WIDTH` raised from 320 to 380 px so all four Row 1 filter buttons ("Errors only" / "Errors + Warn" / "Err+Warn+15m" / "Clear") fit on a single line without wrapping.
+- [x] `gui.rs` - Updated `.default_width` and `.min_width` to use the new `SIDEBAR_WIDTH` constant.
+- [x] `profiles/intune_ime.toml` (NEW) - Microsoft Intune Management Extension CMTrace format. Covers `IntuneManagementExtension*.log`, `AgentExecutor.log`, `SidecarExtension.log`, `EventCollector.log`. `type=` attribute drives severity (1=Info, 2=Warning, 3=Error); `component=` attribute populates the component column; `thread=` captures the thread ID. `timestamp` captures `HH:MM:SS` only (the `date=` attribute follows `time=` in the line, making a combined capture impractical).
+- [x] `src/core/profile.rs` - `intune_ime.toml` registered in `builtin_profile_sources()` (omitted from prior increment; was never active at runtime).
+- [x] `README.md` - Added Intune profile to the built-in profiles table.
+- [x] `ATLAS.md` - `intune_ime.toml` entry added to profiles list in repo structure.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing**
+
+---
+
+## Increment 19: Menu Bar About Button Placement Bug Fix
+**Status: COMPLETE**
+
+Root cause: the `with_layout(right_to_left, ...)` block for the ⓘ About button was allocated first inside `egui::menu::bar`, consuming all remaining horizontal space before File and View were rendered. Both menus were allocated zero width and never appeared.
+
+Fix: move the About button block to **after** the View menu so egui allocates File and View their space first and the right-to-left block fills the remainder.
+
+- [x] `gui.rs` - Removed `with_layout(right_to_left, ...)` block from before `ui.menu_button("File", ...)`. Re-added it after the closing `});` of the View menu, with a code comment explaining why the order is load-bearing. Now File → View → ⓘ render correctly.
+- [x] `README.md` - Fixed "File > Scan Summary" (incorrect) → "View > Scan Summary"; removed erroneous `Ctrl+S` shortcut.
+- [x] `ATLAS.md` - Updated `about.rs` entry to document correct button placement semantics.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (no new tests; menu bar regression fix)**
+
+---
+
+## Increment 20: Log Location Tooltips, 3 New Built-in Profiles, Documentation
+**Status: COMPLETE**
+
+### Log location tooltips
+
+Added an optional `log_locations` array field to all TOML format profiles. These strings appear as a hover tooltip on the profile confidence label next to each file in the discovery panel — allowing the user to quickly find where to look for more logs of that type.
+
+- [x] `core/model.rs` - Added `log_locations: Vec<String>` to `FormatProfile`.
+- [x] `core/profile.rs` - Added `log_locations: Vec<String>` (serde default = empty) to `ProfileMeta`; `validate_and_compile` passes the field through to `FormatProfile`.
+- [x] All 18 profiles - Added `log_locations = [...]` to the `[profile]` section with platform-specific paths, `%EnvVar%` notation for Windows paths, and fallback notes for generic/application-defined formats.
+- [x] `ui/panels/discovery.rs` - Profile label widget now stores the egui `Response` and calls `.on_hover_text(...)` with "Default log locations:\n{list}" when the matched profile's `log_locations` is non-empty. Profiles are looked up from `state.profiles` by ID (disjoint field borrows; no extra data copying).
+
+### New built-in profiles (18 total, up from 14)
+
+- [x] `profiles/windows_cluster.toml` (NEW) - Windows Failover Cluster service log (`cluster.log`). Format: `HexPID.HexTID::YYYY/MM/DD-HH:MM:SS.mmm  LEVEL  message`. Thread field captures the hex PID.TID; milliseconds excluded from timestamp capture. Severity: INFO / WARN / ERR / DBG.
+- [x] `profiles/kubernetes_klog.toml` (NEW) - Kubernetes klog format used by kube-apiserver, kubelet, kube-proxy, etc. Single-char level prefix (I/W/E/F). **Timestamp limitation documented**: klog omits the year; timestamp capture is intentionally omitted so entries degrade gracefully to no-timestamp rather than producing wrong timestamps. Modern Kubernetes with `--logging-format=json` is handled by the existing `json-lines` profile.
+- [x] `profiles/exchange_tracking.toml` (NEW) - Microsoft Exchange Server message tracking CSV logs (`MSGTRK*.LOG`). ISO 8601 timestamp (fractional/Z stripped from capture); rest of CSV row is the message. `severity_override` patterns classify FAIL/BADMAIL/QUARANTINE as Error, DELAY/REDIRECT as Warning, RECEIVE/DELIVER/SEND as Info.
+- [x] `src/core/profile.rs` - All 4 new/fixed profiles (intune_ime was already added in Inc 18; windows_cluster, kubernetes_klog, exchange_tracking are new) registered in `builtin_profile_sources()` between `windows_dhcp` and `generic_timestamp`.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (`test_load_builtin_profiles` validates all 18 profiles compile cleanly)**
+
+---
+
+## Increment 21: 4 New Built-in Profiles, 3 Bug Fixes
+**Status: COMPLETE**
+
+### Bug fixes
+
+- [x] `src/gui.rs` - Fixed wrong filename in the module-level comment (`// LogSleuth - app.rs` → `// LogSleuth - gui.rs`).
+- [x] `src/core/filter.rs` - `matches_all()`: Text search and regex search now also check `entry.thread` and `entry.component` metadata fields in addition to `entry.message`. Previously, typing a thread ID or component name in the search box would not match any entries. Both exact-substring and fuzzy-subsequence modes benefit from the fix.
+- [x] `src/ui/panels/filters.rs` - Preset buttons "Errors only", "Errors + Warn", and "Err+Warn+15m" now correctly preserve the `hide_all_sources` flag alongside `source_files` when a file filter was active. Previously, clicking a preset after selecting "None" in the file filter would silently reset the source-file filter to "all pass", unexpectedly showing entries from all files.
+
+### New built-in profiles (22 total, up from 18)
+
+- [x] `profiles/postgresql_log.toml` (NEW) - PostgreSQL server log. Default `log_line_prefix '%m [%p] '` format: `YYYY-MM-DD HH:MM:SS[.mmm] [TZ] [PID] LEVEL:  message`. TZ component optional (excluded from timestamp capture). Severity: PANIC → Critical; ERROR/FATAL → Error; WARNING → Warning; LOG/INFO/NOTICE/DETAIL/HINT/CONTEXT/STATEMENT → Info; DEBUG1-5 → Debug. `continuation` multiline mode for embedded stack traces.
+- [x] `profiles/tomcat_catalina.toml` (NEW) - Apache Tomcat / Catalina log. `java.util.logging` format: `DD-Mon-YYYY HH:MM:SS.mmm LEVEL [thread] logger.class.Method message`. Severity: SEVERE → Error; WARNING → Warning; INFO/CONFIG → Info; FINE/FINER/FINEST → Debug. `continuation` multiline mode for Java exception traces.
+- [x] `profiles/sccm_cmtrace.toml` (NEW) - Microsoft SCCM / ConfigMgr CMTrace-format logs. Same wire format as the intune-ime profile (`<![LOG[...]LOG]!>` envelope) but targets SCCM/MECM client and server log file names (`smsts.log`, `AppEnforce.log`, `CcmExec.log`, `PolicyAgent.log`, `WUAHandler.log`, etc.). File-pattern matching differentiates from intune-ime on Intune log files; on unknown CMTrace files the profile registered first wins.
+- [x] `profiles/windows_firewall.toml` (NEW) - Windows Firewall packet log (`pfirewall.log`). W3C-style format: `YYYY-MM-DD HH:MM:SS ACTION PROTOCOL src-ip dst-ip src-port dst-port ...`. `#` header lines discarded by `skip` multiline mode. Severity: DROP/DROP-ICMP → Warning; ALLOW/ALLOW-ICMP → Info.
+- [x] `src/core/profile.rs` - All 4 new profiles registered in `builtin_profile_sources()` between `exchange_tracking` and `generic_timestamp`.
+- [x] `ATLAS.md` / `README.md` / `PROGRESS.md` - Updated status, profile count, profiles list, and README profile table.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (`test_load_builtin_profiles` validates all 22 profiles compile cleanly)**
+
+---
+
+## Increment 22: 2 Bug Fixes (Explorer /select arg, per-frame clone)
+**Status: COMPLETE**
+
+### Bug fixes
+
+- [x] `src/ui/panels/detail.rs` - **"Show in folder" on Windows never highlighted the file.** `explorer /select,<path>` must be passed as a single argument token. The previous code used `.arg("/select,").arg(&entry.source_file)`, which passes two separate argv entries to `explorer.exe`. Windows Explorer does not concatenate them, so it received `/select,` as one argument and the path as another — silently opening the default folder without selecting the file. Fixed by using `.arg(format!("/select,{}", entry.source_file.display()))` to produce one combined arg.
+
+- [x] `src/ui/panels/summary.rs` - **Scan Summary window cloned `ScanSummary` on every render frame (≈60×/sec while open).** The `if let Some(summary) = state.scan_summary.clone()` pattern cloned the full struct (including `Vec<FileSummary>` with one entry per scanned file) on every frame. Changed to `if let Some(ref summary) = state.scan_summary` so the render borrows the data without copying it.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing**
+
+---
+
+## Increment 23: 2 Bug Fixes (CLI --filter-level, dead severity_bg_colour)
+**Status: COMPLETE**
+
+### Bug fixes
+
+- [x] `src/main.rs` — **`--filter-level` CLI argument was declared in the `Cli` struct and parsed by clap but the value was never read or applied after `let cli = Cli::parse()`.** Running `logsleuth --filter-level warning` silently ignored the flag and started with no severity filter. Fixed by adding a block after the `cli.path` override that parses the string case-insensitively against `Severity::all()` labels, then populates `state.filter_state.severity_levels` with the requested level and all more-severe variants (e.g. `--filter-level warning` enables Critical + Error + Warning). Unknown strings emit a `tracing::warn!` noting the valid values.
+
+- [x] `src/ui/panels/timeline.rs` + `src/ui/theme.rs` — **`theme::severity_bg_colour()` was defined but never called anywhere in the codebase.** The function returns a subtle semi-transparent background tint for Critical (dark red), Error (red), and Warning (amber) rows, and `None` for all other severities. It was clearly intended for row background colouring but was never wired up. Fixed by calling it at the start of each row's paint phase in `timeline.rs`, painting the severity tint as the lowest-priority background layer (drawn first so the existing correlated-teal and bookmarked-gold tints still take visual precedence over it).
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing**
+
+---
+
 ## Future Enhancements
 
 ### High Priority
@@ -351,7 +453,7 @@ Expanded the built-in profile library from 9 to 14 profiles. All profiles are em
 - [ ] **Column visibility toggles** -- Allow the user to show/hide columns in the timeline (e.g. hide the filepath column when viewing a single file).
 - [ ] **Export retains filter** -- Optionally export the full entry set (pre-filter) alongside the filtered export.
 - [ ] **Profile editor UI** -- In-app wizard to create and test a new TOML profile without leaving LogSleuth.
-- [x] **Additional built-in profiles** -- Increment 17 added SQL Server Error Log, SQL Server Agent, Apache Combined, nginx Error, and Windows DHCP. Remaining candidates: Windows Event Log XML exports, Docker/podman JSON logs, systemd journal exports.
+- [x] **Additional built-in profiles** -- Increments 17/18/20/21 added SQL Server, Apache, nginx, DHCP, Intune IME, Windows Cluster, Kubernetes klog, Exchange tracking, PostgreSQL, Tomcat/Catalina, SCCM CMTrace, Windows Firewall. Remaining candidates: Windows Event Log XML exports, Docker/podman JSON logs (use json-lines profile), systemd journal exports (use syslog profile).
 - [ ] **Configurable max files / max entries** -- Surface `DEFAULT_MAX_FILES` and any entry cap as editable config values in the UI rather than compile-time constants only.
 
 ### Low Priority / Research

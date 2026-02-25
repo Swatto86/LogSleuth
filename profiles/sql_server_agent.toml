@@ -24,6 +24,9 @@ id = "sql-server-agent"
 name = "SQL Server Agent Log"
 version = "1.0"
 description = "SQL Server Agent logs (SQLAGENT.OUT)"
+log_locations = [
+    "Windows: %ProgramFiles%\\Microsoft SQL Server\\MSSQL*.*\\MSSQL\\Log\\SQLAGENT.OUT",
+]
 
 [detection]
 file_patterns = [

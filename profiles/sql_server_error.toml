@@ -31,6 +31,10 @@ id = "sql-server-error"
 name = "SQL Server Error Log"
 version = "1.0"
 description = "Microsoft SQL Server ERRORLOG files (all versions)"
+log_locations = [
+    "Windows: %ProgramFiles%\\Microsoft SQL Server\\MSSQL*.*\\MSSQL\\Log\\ERRORLOG",
+    "Windows (named instance): %ProgramFiles%\\Microsoft SQL Server\\MSSQL*.InstanceName\\MSSQL\\Log\\ERRORLOG",
+]
 
 [detection]
 file_patterns = [

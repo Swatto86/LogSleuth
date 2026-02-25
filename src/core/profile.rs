@@ -37,6 +37,9 @@ pub struct ProfileMeta {
     pub version: String,
     #[serde(default)]
     pub description: String,
+    /// Optional list of default log file locations shown as a UI tooltip.
+    #[serde(default)]
+    pub log_locations: Vec<String>,
 }
 
 fn default_version() -> String {
@@ -221,6 +224,7 @@ pub fn validate_and_compile(
         name: def.profile.name,
         version: def.profile.version,
         description: def.profile.description,
+        log_locations: def.profile.log_locations,
         file_patterns: def.detection.file_patterns,
         content_match,
         line_pattern,
@@ -381,6 +385,38 @@ pub fn builtin_profile_sources() -> Vec<(&'static str, &'static str)> {
         (
             "windows_dhcp.toml",
             include_str!("../../profiles/windows_dhcp.toml"),
+        ),
+        (
+            "intune_ime.toml",
+            include_str!("../../profiles/intune_ime.toml"),
+        ),
+        (
+            "windows_cluster.toml",
+            include_str!("../../profiles/windows_cluster.toml"),
+        ),
+        (
+            "kubernetes_klog.toml",
+            include_str!("../../profiles/kubernetes_klog.toml"),
+        ),
+        (
+            "exchange_tracking.toml",
+            include_str!("../../profiles/exchange_tracking.toml"),
+        ),
+        (
+            "postgresql_log.toml",
+            include_str!("../../profiles/postgresql_log.toml"),
+        ),
+        (
+            "tomcat_catalina.toml",
+            include_str!("../../profiles/tomcat_catalina.toml"),
+        ),
+        (
+            "sccm_cmtrace.toml",
+            include_str!("../../profiles/sccm_cmtrace.toml"),
+        ),
+        (
+            "windows_firewall.toml",
+            include_str!("../../profiles/windows_firewall.toml"),
         ),
         (
             "generic_timestamp.toml",

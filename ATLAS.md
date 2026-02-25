@@ -1,6 +1,6 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 17 complete — 14 built-in profiles, About dialog, sidebar layout fixes
+> **Status**: Increment 22 complete — 22 built-in profiles, Explorer /select arg fix, per-frame ScanSummary clone fix
 > **Last updated**: 2026-02-25
 
 ---
@@ -20,7 +20,7 @@ LogSleuth is a cross-platform log file viewer and analyser that discovers, parse
 | Concept | Definition |
 |---------|-----------|
 | **Log Entry** | A single parsed event from a log file, normalised into common fields (timestamp, severity, message, source file, etc.) |
-| **Format Profile** | A TOML definition describing how to detect and parse a specific log format (regex patterns, timestamp format, severity mappings) |
+| **Format Profile** | A TOML definition describing how to detect and parse a specific log format (regex patterns, timestamp format, severity mappings, optional `log_locations` displayed as a hover tooltip in the discovery panel) |
 | **Discovery** | Recursive scan of a directory tree to find candidate log files using glob patterns |
 | **Auto-detection** | Matching discovered files to format profiles by sampling the first N lines against each profile's content regex |
 | **Severity** | Normalised enum: Critical, Error, Warning, Info, Debug, Unknown |
@@ -81,14 +81,14 @@ LogSleuth/
 |   |   +-- mod.rs
 |   |   +-- panels/
 |   |   |   +-- mod.rs
-|   |   |   +-- about.rs         # About dialog: centred modal window (version from CARGO_PKG_VERSION, GitHub link, MIT licence); show_about flag on AppState; ⓘ button right-aligned in menu bar
-|   |   |   +-- discovery.rs     # Directory picker, scan controls, file list (max_height 360 px)
+|   |   +-- about.rs         # About dialog: centred modal window (version from CARGO_PKG_VERSION, GitHub link, MIT licence); show_about flag on AppState; ⓘ button right-aligned in menu bar (placed AFTER File/View menus so layout allocation is correct)
+|   |   |   +-- discovery.rs     # Directory picker, scan controls, file list (max_height 360 px); profile label shows log_locations as hover tooltip
 |   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
 |   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
 |   |   |   +-- filters.rs       # Filter controls sidebar: two button rows (Row 1: severity presets — Errors only/Errors+Warn/Err+Warn+15m/Clear; Row 2: Summary/Bookmarks/clear bm); severity checkboxes; text/regex inputs; fuzzy ~ toggle; relative time quick-buttons (15m/1h/6h/24h) + custom input + rolling-window live indicator; source file checklist with coloured dot + Solo button + real-time search box (shown >8 files); Select All/None on visible subset; "● Rolling window (live)" indicator; "Copy" clipboard button at entry-count footer (disabled when empty)
-|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=320 (min_width enforced on SidePanel)
+|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=380 (min_width enforced on SidePanel)
 |   +-- platform/
 |   |   +-- mod.rs
 |   |   +-- fs.rs                # FileReader trait + OS implementations
@@ -108,7 +108,14 @@ LogSleuth/
 |   +-- nginx_error.toml         # nginx error log
 |   +-- windows_dhcp.toml        # Windows DHCP Server daily logs
 |   +-- intune_ime.toml          # Microsoft Intune Management Extension (CMTrace format)
-|   +-- syslog_rfc3164.toml      # BSD syslog
+|   +-- windows_cluster.toml    # Windows Failover Cluster service log
+|   +-- kubernetes_klog.toml    # Kubernetes klog format (control-plane components)
+|   +-- exchange_tracking.toml  # Microsoft Exchange Server message tracking CSV
+|   +-- postgresql_log.toml     # PostgreSQL server log
+|   +-- tomcat_catalina.toml    # Apache Tomcat / Catalina log
+|   +-- sccm_cmtrace.toml       # Microsoft SCCM / ConfigMgr (CMTrace format)
+|   +-- windows_firewall.toml   # Windows Firewall log (pfirewall.log)
+|   +-- syslog_rfc3164.toml     # BSD syslog
 |   +-- syslog_rfc5424.toml      # IETF syslog
 |   +-- json_lines.toml          # JSON Lines (generic)
 |   +-- log4j_default.toml       # Log4j/Logback default

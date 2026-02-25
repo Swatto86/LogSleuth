@@ -12,6 +12,10 @@ id = "json-lines"
 name = "JSON Lines (NDJSON)"
 version = "1.0"
 description = "Newline-delimited JSON logs (one JSON object per line)"
+log_locations = [
+    "Docker containers: /var/lib/docker/containers/<id>/<id>-json.log",
+    "Application-defined; common in containerised and cloud-native workloads",
+]
 
 [detection]
 file_patterns = ["*.jsonl", "*.ndjson"]

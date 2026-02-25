@@ -16,6 +16,10 @@ id = "iis-w3c"
 name = "IIS W3C Extended Log"
 version = "1.0"
 description = "Microsoft IIS web server logs in W3C Extended format"
+log_locations = [
+    "Windows: %SystemDrive%\\inetpub\\logs\\LogFiles\\W3SVC1\\",
+    "Windows Event Viewer path: C:\\inetpub\\logs\\LogFiles\\",
+]
 
 [detection]
 file_patterns = [

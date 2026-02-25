@@ -1,0 +1,57 @@
+# LogSleuth Format Profile: Windows Failover Cluster Log
+#
+# The Windows Failover Cluster service writes a rolling debug log at
+# C:\Windows\Cluster\cluster.log. Each entry has a hex PID/TID prefix,
+# a timestamp with milliseconds, a severity level, and the message:
+#
+#   00000fa0.00000ea8::2024/01/15-14:30:22.297 INFO  [RCM] Bringing resource 'Cluster Name' online
+#   00000fa0.00001430::2024/01/15-14:30:35.516 WARN  [GUM] Quorum not achieved yet
+#   00000fa0.00001430::2024/01/15-14:30:40.001 ERR   [RCM] Failed to bring resource online: 0x80070005
+#
+# Format: HexPID.HexTID::YYYY/MM/DD-HH:MM:SS.mmm  LEVEL  [COMPONENT] message
+#
+# The millisecond suffix (.mmm) is excluded from the captured timestamp so
+# NaiveDateTime can parse the truncated string cleanly.
+#
+# Log locations:
+#   Windows: %SystemRoot%\Cluster\cluster.log (active log, 64 MB rolling)
+#   Windows: %SystemRoot%\Cluster\cluster.log.bak (previous rotation)
+#
+# Enable/adjust in Failover Cluster Manager → Diagnostics, or via:
+#   Get-ClusterLog -Destination .
+
+[profile]
+id = "windows-cluster"
+name = "Windows Failover Cluster Log"
+version = "1.0"
+description = "Windows Server Failover Cluster service debug log (cluster.log)"
+log_locations = [
+    "Windows: %SystemRoot%\\Cluster\\cluster.log",
+    "Windows (backup): %SystemRoot%\\Cluster\\cluster.log.bak",
+    "Generate on-demand: Get-ClusterLog -Destination <path>",
+]
+
+[detection]
+file_patterns = [
+    "cluster.log",
+    "cluster.log.bak",
+    "cluster.log.[0-9]",
+]
+# Hex PID.TID followed by :: and a YYYY/MM/DD-HH:MM:SS timestamp
+content_match = '^[0-9a-f]+\.[0-9a-f]+::\d{4}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2}'
+
+[parsing]
+# Named groups:
+#   thread    — hex PID.TID identifier (e.g. 00000fa0.00000ea8)
+#   timestamp — YYYY/MM/DD-HH:MM:SS (milliseconds excluded from capture)
+#   level     — INFO, WARN, ERR, DBG, DBGPRINT
+#   message   — remainder of the line (may start with [COMPONENT])
+line_pattern = '^(?P<thread>[0-9a-fA-F]+\.[0-9a-fA-F]+)::(?P<timestamp>\d{4}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2})\.\d+\s+(?P<level>\w+)\s+(?P<message>.+)$'
+timestamp_format = "%Y/%m/%d-%H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+error   = ["ERR"]
+warning = ["WARN"]
+info    = ["INFO"]
+debug   = ["DBG", "DBGPRINT", "TRACE"]

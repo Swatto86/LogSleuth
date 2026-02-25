@@ -130,7 +130,7 @@ Click the **ⓘ** icon in the top-right corner of the menu bar to open the About
 
 ## Scan Summary
 
-Use **File > Scan Summary** (or `Ctrl+S`) after a scan to see:
+Use **View > Scan Summary** after a scan to see:
 - Total entries, errors, and scan duration
 - Per-file table: profile detected, entry count, error count, earliest and latest timestamps
 
@@ -150,6 +150,14 @@ A **Cancel** button appears in the status bar during an active scan. Cancellatio
 | Apache / nginx Combined Access | Apache httpd and nginx Combined Log Format (`access.log`, `access_log`) |
 | nginx Error Log | nginx web server error log (`error.log`) |
 | Windows DHCP Server Log | Windows Server DHCP daily activity logs (`DhcpSrvLog-*.log`) |
+| Intune Management Extension | Microsoft Intune IME CMTrace-format logs (`IntuneManagementExtension.log`) |
+| SCCM / ConfigMgr (CMTrace) | Microsoft SCCM/MECM client and server CMTrace-format logs (`smsts.log`, `CcmExec.log`, etc.) |
+| Windows Failover Cluster | Windows Failover Cluster service log (`cluster.log`) |
+| Windows Firewall Log | Windows Firewall packet log (`pfirewall.log`) — DROP/ALLOW entries |
+| PostgreSQL Server Log | PostgreSQL database server log (default `log_line_prefix '%m [%p] '`) |
+| Apache Tomcat / Catalina | Apache Tomcat `catalina.out` and rolling `catalina.YYYY-MM-DD.log` |
+| Microsoft Exchange Tracking | Exchange Server message tracking CSV (`MSGTRK*.LOG`) |
+| Kubernetes klog | Kubernetes control-plane component logs (`kube-apiserver`, `kubelet`, etc.) |
 | Syslog (RFC 3164) | BSD syslog (rsyslog, syslog-ng) |
 | Syslog (RFC 5424) | IETF structured syslog |
 | JSON Lines | Newline-delimited JSON logs |

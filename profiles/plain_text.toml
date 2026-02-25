@@ -12,6 +12,9 @@ id = "plain-text"
 name = "Plain Text (Unstructured)"
 version = "1.0"
 description = "Fallback for files with no recognised log format. Full-text search only."
+log_locations = [
+    "Generic fallback - matches any text file not claimed by another profile",
+]
 
 [detection]
 file_patterns = []

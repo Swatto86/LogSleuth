@@ -1,0 +1,69 @@
+# LogSleuth Format Profile: PostgreSQL Server Log
+#
+# PostgreSQL writes its server log in a structured text format controlled by
+# the `log_line_prefix` GUC.  The default prefix is `%m [%p] ` which produces:
+#
+#   2024-01-15 14:30:22.123 UTC [1234] LOG:  database system is ready to accept connections
+#   2024-01-15 14:30:22.456 UTC [1234] ERROR:  division by zero
+#   2024-01-15 14:30:22.789 UTC [5678] FATAL:  password authentication failed for user "admin"
+#
+# Fields:
+#   timestamp   — date/time with optional milliseconds (TZ excluded from group)
+#   thread      — backend PID in brackets
+#   level       — PostgreSQL severity: LOG, DEBUG[1-5], INFO, NOTICE, WARNING, ERROR, FATAL, PANIC
+#                 Plus supplementary-line prefixes: DETAIL, HINT, CONTEXT, STATEMENT
+#   message     — log message body
+#
+# Some configurations omit the TZ abbreviation (e.g. `%t` instead of `%m`).
+# The regex makes the TZ component optional so both variants are detected.
+#
+# Supplementary lines (DETAIL, HINT, CONTEXT, STATEMENT) have their own
+# timestamps and are parsed as separate Info entries.  Use `continuation` mode
+# so that any embedded stack traces or multi-line payloads without timestamps
+# are appended to the preceding entry rather than discarded.
+#
+# Log locations:
+#   Linux (Debian/Ubuntu): /var/log/postgresql/postgresql-YYYY-MM-DD_NNNN.log
+#   Linux (RHEL/Fedora):   /var/lib/pgsql/data/pg_log/postgresql-YYYY-MM-DD_NNNN.log
+#   Windows (default):     C:\Program Files\PostgreSQL\<ver>\data\pg_log\postgresql-YYYY-MM-DD_NNNN.log
+#   macOS (Homebrew):      /usr/local/var/log/postgresql@<ver>.log
+
+[profile]
+id = "postgresql-log"
+name = "PostgreSQL Server Log"
+version = "1.0"
+description = "PostgreSQL database server log (default log_line_prefix '%m [%p] ')"
+log_locations = [
+    "Linux (Debian/Ubuntu): /var/log/postgresql/postgresql-YYYY-MM-DD_NNNN.log",
+    "Linux (RHEL/Fedora): /var/lib/pgsql/data/pg_log/",
+    "Windows: C:\\Program Files\\PostgreSQL\\<ver>\\data\\pg_log\\",
+    "macOS (Homebrew): /usr/local/var/log/postgresql@<ver>.log",
+]
+
+[detection]
+file_patterns = [
+    "postgresql*.log",
+    "postgresql-*.log",
+    "postgres*.log",
+    "pgsql*.log",
+]
+# YYYY-MM-DD HH:MM:SS[.mmm] [optional TZ] [PID] LEVEL:
+content_match = '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[\d. A-Z]*\[\d+\] [A-Z]+'
+
+[parsing]
+# Named groups:
+#   timestamp — date and time (fractional seconds optional; TZ excluded so
+#               chrono can parse cleanly with %Y-%m-%d %H:%M:%S%.f)
+#   thread    — PostgreSQL backend PID
+#   level     — severity keyword (LOG, ERROR, FATAL, WARNING, etc.)
+#   message   — log message body
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:\s+[A-Z]+)?\s+\[(?P<thread>\d+)\]\s+(?P<level>[A-Z][A-Z0-9]*):\s{1,2}(?P<message>.*)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S%.f"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["PANIC"]
+error    = ["ERROR", "FATAL"]
+warning  = ["WARNING"]
+info     = ["LOG", "INFO", "NOTICE", "DETAIL", "HINT", "CONTEXT", "STATEMENT"]
+debug    = ["DEBUG", "DEBUG1", "DEBUG2", "DEBUG3", "DEBUG4", "DEBUG5"]

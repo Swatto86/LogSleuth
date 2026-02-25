@@ -84,10 +84,12 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
             let folder = entry.source_file.parent().unwrap_or(&entry.source_file);
             #[cfg(target_os = "windows")]
             {
-                // Use `explorer /select,<path>` to highlight the specific file.
+                // `explorer /select,<path>` must be ONE argument — no space between
+                // the comma and the path.  Two separate .arg() calls would be parsed
+                // as distinct argv entries, causing Explorer to ignore the path and
+                // open the default folder without selecting the file.
                 let _ = std::process::Command::new("explorer")
-                    .arg("/select,")
-                    .arg(&entry.source_file)
+                    .arg(format!("/select,{}", entry.source_file.display()))
                     .spawn();
             }
             #[cfg(target_os = "macos")]

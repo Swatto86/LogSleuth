@@ -1,0 +1,69 @@
+# LogSleuth Format Profile: Kubernetes klog
+#
+# The Kubernetes control-plane components (kube-apiserver, kube-scheduler,
+# kube-controller-manager, kubelet, kube-proxy) write logs using the klog
+# library in this compact format:
+#
+#   I0115 14:30:22.123456       1 main.go:234] Started serving on [::]:8080
+#   W0115 14:31:00.000001    1001 reflector.go:424] watch of *v1.ConfigMap closed
+#   E0115 14:31:05.123456       1 runtime.go:78] observe failed for *v1.Service
+#   F0115 14:31:05.123456       1 runtime.go:78] Fatal: runtime assertion failed
+#
+# Format: {Level}{MMDD} HH:MM:SS.microseconds{thread}  file:line] message
+#
+# Level characters: I = Info, W = Warning, E = Error, F = Fatal (Critical)
+#
+# TIMESTAMP LIMITATION: klog does not include the year.  The timestamp
+# capture group contains only MM/DD + time (no year), which cannot be parsed
+# into a full datetime by chrono.  Entries will appear with no timestamp in
+# the timeline and are sorted to the end.  Severity, message, and text
+# filtering all work normally.  For structured/JSON klog output
+# (--logging-format=json, Kubernetes 1.24+) use the json-lines profile instead.
+#
+# Log locations:
+#   Managed clusters: exposed via `kubectl logs <pod> -n <ns>`
+#   Linux host (kubeadm): /var/log/pods/<namespace>_<pod>_<uid>/<container>/*.log
+#   Static pods: /var/log/containers/ (symlinks to pods dir)
+#   Windows nodes: C:\var\log\pods\ (same structure)
+
+[profile]
+id = "kubernetes-klog"
+name = "Kubernetes klog"
+version = "1.0"
+description = "Kubernetes control-plane and node component logs (klog format)"
+log_locations = [
+    "Linux (kubeadm): /var/log/pods/<ns>_<pod>_<uid>/<container>/*.log",
+    "Linux container symlinks: /var/log/containers/<pod>_<ns>_<container>.log",
+    "Windows nodes: C:\\var\\log\\pods\\",
+    "Live: kubectl logs <pod> [-n <namespace>] [-c <container>]",
+]
+
+[detection]
+file_patterns = [
+    "kube-apiserver.log",
+    "kube-scheduler.log",
+    "kube-controller-manager.log",
+    "kubelet.log",
+    "kube-proxy.log",
+    "etcd.log",
+    "kubernetes.log",
+    "*.log",
+]
+# Single letter I/W/E/F followed by MMDD and a time — unique to klog
+content_match = '^[IWEF]\d{4}\s\d{2}:\d{2}:\d{2}\.\d+\s'
+
+[parsing]
+# Named groups:
+#   level   — single char: I=Info, W=Warning, E=Error, F=Fatal(Critical)
+#   message — everything after the source-file:line] marker
+# NOTE: timestamp is not captured (no year field in klog format);
+#       entries will have no timestamp in the merged timeline.
+line_pattern = '^(?P<level>[IWEF])\d{4}\s\d{2}:\d{2}:\d{2}\.\d+\s+\d+\s+[^\]]+\]\s+(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["F"]
+error    = ["E"]
+warning  = ["W"]
+info     = ["I"]

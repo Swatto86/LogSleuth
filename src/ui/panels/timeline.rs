@@ -86,6 +86,18 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .monospace()
                 .size(12.0);
 
+                // Severity background tint — lowest priority layer, drawn first so
+                // that the correlated (teal) and bookmarked (gold) tints visually
+                // override it.  Only Critical / Error / Warning produce a tint;
+                // Info, Debug, and Unknown return None and paint nothing.
+                if let Some(sev_bg) = theme::severity_bg_colour(&entry.severity) {
+                    let tint_rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(ui.available_width(), row_height),
+                    );
+                    ui.painter().rect_filled(tint_rect, 0.0, sev_bg);
+                }
+
                 // Teal tint on correlated rows (drawn first so that the gold
                 // bookmark tint on bookmarked+correlated rows takes visual priority).
                 if is_correlated {

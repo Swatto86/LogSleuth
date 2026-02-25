@@ -193,6 +193,11 @@ pub struct FormatProfile {
 
     /// Whether this is a built-in profile (true) or user-defined (false).
     pub is_builtin: bool,
+
+    /// Default log file locations for this format (informational).
+    /// Shown as a tooltip in the discovery panel when this profile is matched.
+    /// Each entry is a human-readable path string, e.g. "Windows: C:\\ProgramData\\...".
+    pub log_locations: Vec<String>,
 }
 
 impl FormatProfile {

@@ -213,22 +213,35 @@ fn matches_all(entry: &LogEntry, filter: &FilterState, text_lower: &str) -> bool
         }
     }
 
-    // Text search: fuzzy subsequence or exact case-insensitive substring
+    // Text search: fuzzy subsequence or exact case-insensitive substring.
+    // Searches message, thread, and component metadata fields (any match passes).
     if !text_lower.is_empty() {
         let msg_lower = entry.message.to_lowercase();
+        let thread_lower = entry.thread.as_deref().unwrap_or("").to_lowercase();
+        let component_lower = entry.component.as_deref().unwrap_or("").to_lowercase();
         let hit = if filter.fuzzy {
             fuzzy_match(text_lower, &msg_lower)
+                || fuzzy_match(text_lower, &thread_lower)
+                || fuzzy_match(text_lower, &component_lower)
         } else {
             msg_lower.contains(text_lower)
+                || thread_lower.contains(text_lower)
+                || component_lower.contains(text_lower)
         };
         if !hit {
             return false;
         }
     }
 
-    // Regex search
+    // Regex search: also matches thread and component metadata fields.
     if let Some(ref regex) = filter.regex_search {
-        if !regex.is_match(&entry.message) {
+        let matches = regex.is_match(&entry.message)
+            || entry.thread.as_deref().is_some_and(|t| regex.is_match(t))
+            || entry
+                .component
+                .as_deref()
+                .is_some_and(|c| regex.is_match(c));
+        if !matches {
             return false;
         }
     }

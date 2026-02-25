@@ -11,6 +11,11 @@ id = "syslog-rfc5424"
 name = "Syslog (IETF/RFC 5424)"
 version = "1.0"
 description = "Structured IETF syslog with ISO 8601 timestamps and priority"
+log_locations = [
+    "Linux (Debian/Ubuntu): /var/log/syslog",
+    "Linux (RHEL/CentOS): /var/log/messages",
+    "Remote syslog server: /var/log/remote/<hostname>.log",
+]
 
 [detection]
 file_patterns = []

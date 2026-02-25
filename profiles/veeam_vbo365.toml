@@ -19,6 +19,9 @@ id = "veeam-vbo365"
 name = "Veeam Backup for Microsoft 365"
 version = "1.0"
 description = "VBO365 Archiver, Proxy, and Shell logs"
+log_locations = [
+    "Windows: %ProgramData%\\Veeam\\VBO\\Logs\\",
+]
 
 [detection]
 file_patterns = [

@@ -1,0 +1,61 @@
+# LogSleuth Format Profile: Windows Firewall Log
+#
+# Windows Firewall with Advanced Security writes a W3C-extended log file
+# (pfirewall.log) when packet logging is enabled.  The file starts with
+# several `#` comment/header lines followed by space-delimited data records:
+#
+#   #Version: 1.5
+#   #Software: Microsoft Windows Firewall
+#   #Time Format: Local
+#   #Fields: date time action protocol src-ip dst-ip src-port dst-port ...
+#
+#   2024-01-15 14:30:22 DROP TCP 192.168.1.100 10.0.0.1 12345 443 60 S 0 0 65535 - - - RECEIVE
+#   2024-01-15 14:30:22 ALLOW UDP 192.168.1.100 8.8.8.8 54321 53 40 - - - - - - - SEND
+#   2024-01-15 14:30:22 DROP ICMP 192.168.1.100 10.0.0.2 - - 60 - - - - 8 0 - RECEIVE
+#
+# The `action` column maps naturally to severity:
+#   DROP / DROP-ICMP → Warning  (packet blocked — notable security event)
+#   ALLOW / ALLOW-ICMP → Info  (packet permitted — normal traffic)
+#
+# The `#` header and comment lines do not match the line_pattern and are
+# discarded by multiline_mode = "skip".
+#
+# The `message` group captures all fields after the action (protocol, IPs,
+# ports, flags, path) as a single space-delimited string so the full record
+# is available in the detail panel.
+#
+# Log locations:
+#   Windows: %SystemRoot%\System32\LogFiles\Firewall\pfirewall.log
+#   (Enabled via: Windows Defender Firewall > Advanced Settings > Properties > Logging)
+
+[profile]
+id = "windows-firewall"
+name = "Windows Firewall Log"
+version = "1.0"
+description = "Windows Firewall with Advanced Security packet log (pfirewall.log)"
+log_locations = [
+    "Windows: C:\\Windows\\System32\\LogFiles\\Firewall\\pfirewall.log",
+    "Enable via: Windows Defender Firewall > Advanced Settings > Properties > Logging",
+]
+
+[detection]
+file_patterns = [
+    "pfirewall.log",
+    "pfirewall.log.old",
+    "pfirewall*.log",
+]
+# YYYY-MM-DD HH:MM:SS followed by DROP or ALLOW (the firewall log action field)
+content_match = '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (DROP|ALLOW)'
+
+[parsing]
+# Named groups:
+#   timestamp — YYYY-MM-DD HH:MM:SS (date and time columns joined)
+#   level     — action: DROP, ALLOW, DROP-ICMP, ALLOW-ICMP
+#   message   — remaining fields: protocol src-ip dst-ip src-port dst-port ... path
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?P<level>DROP-ICMP|ALLOW-ICMP|DROP|ALLOW) (?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "skip"
+
+[severity_mapping]
+warning = ["DROP", "DROP-ICMP"]
+info    = ["ALLOW", "ALLOW-ICMP"]

@@ -17,6 +17,10 @@ id = "veeam-vbr"
 name = "Veeam Backup & Replication"
 version = "1.0"
 description = "VBR service and job logs (Svc.*.log, Job.*.log, Agent.*.log)"
+log_locations = [
+    "Windows: %ProgramData%\\Veeam\\Backup\\",
+    "Linux: /var/log/VeeamBackup/",
+]
 
 [detection]
 file_patterns = [

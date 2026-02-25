@@ -12,6 +12,12 @@ id = "syslog-rfc3164"
 name = "Syslog (BSD/RFC 3164)"
 version = "1.0"
 description = "Traditional BSD syslog format used by rsyslog, syslog-ng"
+log_locations = [
+    "Linux (Debian/Ubuntu): /var/log/syslog",
+    "Linux (RHEL/CentOS/Fedora): /var/log/messages",
+    "macOS: /var/log/system.log",
+    "Network devices: varies; often /var/log/messages on syslog server",
+]
 
 [detection]
 file_patterns = ["syslog", "syslog.[0-9]*", "messages", "messages.[0-9]*", "auth.log", "auth.log.[0-9]*"]

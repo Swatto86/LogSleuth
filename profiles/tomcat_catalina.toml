@@ -1,0 +1,73 @@
+# LogSleuth Format Profile: Apache Tomcat / Catalina Log
+#
+# Apache Tomcat writes its main log (catalina.out / catalina.YYYY-MM-DD.log)
+# using java.util.logging with the following format:
+#
+#   DD-Mon-YYYY HH:MM:SS.mmm LEVEL [thread-name] logger.class.Method message
+#
+# Examples:
+#   25-Jan-2024 14:30:22.123 INFO [main] org.apache.catalina.startup.Catalina.start Server startup in [1234] milliseconds
+#   25-Jan-2024 14:30:22.456 SEVERE [http-nio-8080-exec-1] org.apache.catalina.core.StandardWrapperValve.invoke Servlet threw exception
+#   25-Jan-2024 14:30:22.789 WARNING [Catalina-utility-1] org.apache.catalina.loader.WebappClassLoaderBase.checkThreadLocalsForLeaks A web application created a ThreadLocal
+#
+# Fields:
+#   timestamp — DD-Mon-YYYY HH:MM:SS.mmm (e.g. 25-Jan-2024 14:30:22.123)
+#   level     — java.util.logging level: SEVERE, WARNING, INFO, CONFIG, FINEST, FINER, FINE
+#   thread    — thread name in brackets
+#   component — fully-qualified logger name (package.Class.method, no spaces)
+#   message   — log message (remainder of line after component)
+#
+# java.util.logging severity ladder:
+#   SEVERE   → Error   (highest severity, unrecoverable)
+#   WARNING  → Warning
+#   INFO     → Info    (normal operational messages)
+#   CONFIG   → Info    (static configuration messages)
+#   FINE     → Debug   (tracing/debugging)
+#   FINER    → Debug
+#   FINEST   → Debug   (lowest, most verbose)
+#
+# Log locations:
+#   Linux:   $CATALINA_HOME/logs/catalina.out  (rolling: catalina.YYYY-MM-DD.log)
+#   Windows: %CATALINA_HOME%\logs\catalina.out
+#   Docker:  stdout/stderr stream (redirect to file for capture)
+
+[profile]
+id = "tomcat-catalina"
+name = "Apache Tomcat / Catalina Log"
+version = "1.0"
+description = "Apache Tomcat catalina.out and catalina.YYYY-MM-DD.log files"
+log_locations = [
+    "Linux: $CATALINA_HOME/logs/catalina.out",
+    "Linux (rolling): $CATALINA_HOME/logs/catalina.YYYY-MM-DD.log",
+    "Windows: %CATALINA_HOME%\\logs\\catalina.out",
+    "Docker: stdout/stderr (pipe to file)",
+]
+
+[detection]
+file_patterns = [
+    "catalina.out",
+    "catalina.*.log",
+    "catalina*.log",
+    "localhost*.log",
+    "manager*.log",
+    "host-manager*.log",
+]
+# DD-Mon-YYYY HH:MM:SS.mmm LEVEL [thread] — the month abbreviation makes this distinctive
+content_match = '^\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}\.\d+ (SEVERE|WARNING|INFO|CONFIG|FINE)'
+
+[parsing]
+# Named groups:
+#   timestamp — DD-Mon-YYYY HH:MM:SS.mmm (chrono %d-%b-%Y %H:%M:%S%.f)
+#   level     — java.util.logging level keyword
+#   thread    — thread name extracted from brackets
+#   component — logger name (package.Class.method)
+#   message   — message body (remainder after component name)
+line_pattern = '^(?P<timestamp>\d{2}-\w{3}-\d{4} \d{2}:\d{2}:\d{2}\.\d+) (?P<level>SEVERE|WARNING|INFO|CONFIG|FINEST|FINER|FINE) \[(?P<thread>[^\]]+)\] (?P<component>\S+) (?P<message>.*)$'
+timestamp_format = "%d-%b-%Y %H:%M:%S%.f"
+multiline_mode = "continuation"
+
+[severity_mapping]
+error   = ["SEVERE"]
+warning = ["WARNING"]
+info    = ["INFO", "CONFIG"]
+debug   = ["FINEST", "FINER", "FINE"]

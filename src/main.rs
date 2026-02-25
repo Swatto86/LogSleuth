@@ -244,6 +244,34 @@ fn main() {
         state.initial_scan = Some(path.clone());
     }
 
+    // A severity level supplied on the CLI overrides the session-restored filter.
+    // `--filter-level warning` shows Warning + Error + Critical (i.e. the given
+    // level and all more-severe levels).  Matching is case-insensitive.
+    if let Some(ref level_str) = cli.filter_level {
+        use crate::core::model::Severity;
+        let level_lower = level_str.to_lowercase();
+        let matched = Severity::all()
+            .iter()
+            .copied()
+            .find(|s| s.label().to_lowercase() == level_lower);
+        if let Some(sev) = matched {
+            // Collect all variants that are at least as severe as the requested level.
+            // Severity derives Ord; smaller discriminant == more severe (Critical < Error < …).
+            state.filter_state.severity_levels = Severity::all()
+                .iter()
+                .copied()
+                .filter(|s| *s <= sev)
+                .collect();
+            tracing::info!(level = %level_str, "Applied CLI --filter-level");
+        } else {
+            tracing::warn!(
+                level = %level_str,
+                "Unknown --filter-level value, ignoring. \
+                 Valid values: critical, error, warning, info, debug"
+            );
+        }
+    }
+
     // Launch the GUI
     //
     // The icon is applied at two levels:

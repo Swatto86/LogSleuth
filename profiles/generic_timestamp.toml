@@ -12,6 +12,9 @@ id = "generic-timestamp"
 name = "Generic Timestamp + Message"
 version = "1.0"
 description = "Fallback for logs with a leading ISO-style timestamp and unstructured message"
+log_locations = [
+    "Generic fallback - applies to any log with an ISO 8601 timestamp prefix",
+]
 
 [detection]
 file_patterns = []

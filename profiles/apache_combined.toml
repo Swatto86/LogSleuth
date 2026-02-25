@@ -29,6 +29,11 @@ id = "apache-combined"
 name = "Apache / nginx Combined Access Log"
 version = "1.0"
 description = "Apache httpd and nginx Combined Log Format access logs"
+log_locations = [
+    "Linux (Debian/Ubuntu): /var/log/apache2/access.log",
+    "Linux (RHEL/CentOS): /var/log/httpd/access_log",
+    "Windows: C:\\Apache24\\logs\\access.log",
+]
 
 [detection]
 file_patterns = [

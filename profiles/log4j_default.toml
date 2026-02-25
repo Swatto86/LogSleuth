@@ -12,6 +12,10 @@ id = "log4j-default"
 name = "Log4j / Logback Default"
 version = "1.0"
 description = "Standard Java logging output (Log4j, Logback, SLF4J)"
+log_locations = [
+    "Application-defined; check log4j.properties / logback.xml",
+    "Common default: <app_dir>/logs/application.log",
+]
 
 [detection]
 file_patterns = []

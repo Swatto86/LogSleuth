@@ -1,4 +1,4 @@
-// LogSleuth - app.rs
+// LogSleuth - gui.rs
 //
 // Top-level eframe::App implementation.
 // Wires together all UI panels and manages the scan lifecycle.

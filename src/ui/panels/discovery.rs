@@ -156,11 +156,24 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     })
                     .response
                     .on_hover_text(file.path.display().to_string());
-                    ui.label(
-                        egui::RichText::new(profile_text)
+
+                    // Profile label — hovering shows the profile's known default
+                    // log locations (pulled from log_locations in the TOML profile).
+                    let profile_label = ui.label(
+                        egui::RichText::new(&profile_text)
                             .small()
                             .color(profile_colour),
                     );
+                    if let Some(pid) = &file.profile_id {
+                        if let Some(prof) = state.profiles.iter().find(|p| &p.id == pid) {
+                            if !prof.log_locations.is_empty() {
+                                profile_label.on_hover_text(format!(
+                                    "Default log locations:\n{}",
+                                    prof.log_locations.join("\n")
+                                ));
+                            }
+                        }
+                    }
                     ui.add_space(2.0);
                 }
             });

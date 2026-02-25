@@ -18,14 +18,18 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         let fuzzy = state.filter_state.fuzzy;
         if ui.small_button("Errors only").clicked() {
             let current_files = std::mem::take(&mut state.filter_state.source_files);
+            let hide_all = state.filter_state.hide_all_sources;
             state.filter_state = crate::core::filter::FilterState::errors_only_from(fuzzy);
             state.filter_state.source_files = current_files;
+            state.filter_state.hide_all_sources = hide_all;
             state.apply_filters();
         }
         if ui.small_button("Errors + Warn").clicked() {
             let current_files = std::mem::take(&mut state.filter_state.source_files);
+            let hide_all = state.filter_state.hide_all_sources;
             state.filter_state = crate::core::filter::FilterState::errors_and_warnings_from(fuzzy);
             state.filter_state.source_files = current_files;
+            state.filter_state.hide_all_sources = hide_all;
             state.apply_filters();
         }
         // Combined troubleshooting preset: severity Error+Warning + last 15-minute rolling window.
@@ -40,8 +44,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             .clicked()
         {
             let current_files = std::mem::take(&mut state.filter_state.source_files);
+            let hide_all = state.filter_state.hide_all_sources;
             state.filter_state = crate::core::filter::FilterState::errors_and_warnings_from(fuzzy);
             state.filter_state.source_files = current_files;
+            state.filter_state.hide_all_sources = hide_all;
             state.filter_state.relative_time_secs = Some(15 * 60);
             state.filter_state.relative_time_input.clear();
             state.apply_filters();

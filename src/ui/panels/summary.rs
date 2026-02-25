@@ -18,7 +18,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
         .min_width(480.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            if let Some(summary) = state.scan_summary.clone() {
+            if let Some(ref summary) = state.scan_summary {
                 // -----------------------------------------------------------------
                 // Overall statistics
                 // -----------------------------------------------------------------
