@@ -1,0 +1,25 @@
+[15.01.2024 14:30:22] <01> Info     ------- Veeam Backup Job Started -------
+[15.01.2024 14:30:22] <01> Info     Processing VM: DC01
+[15.01.2024 14:30:23] <02> Info     Creating snapshot for VM: DC01
+[15.01.2024 14:30:25] <02> Info     Snapshot created successfully
+[15.01.2024 14:30:26] <03> Info     Transferring data blocks
+[15.01.2024 14:31:45] <03> Warning  Slow transfer detected: 12 MB/s (expected >50 MB/s)
+[15.01.2024 14:32:10] <03> Info     Transfer completed: 45.2 GB in 104s
+[15.01.2024 14:32:11] <02> Info     Removing snapshot for VM: DC01
+[15.01.2024 14:32:12] <01> Info     Processing VM: FILESVR01
+[15.01.2024 14:32:13] <02> Info     Creating snapshot for VM: FILESVR01
+[15.01.2024 14:32:14] <02> Error    Failed to create snapshot for VM: FILESVR01
+Error details: VSS writer 'SqlServerWriter' has reported an error during snapshot creation.
+Writer status: Failed
+Error code: 0x800423f4
+[15.01.2024 14:32:15] <02> Warning  Retrying snapshot creation (attempt 2 of 3)
+[15.01.2024 14:32:20] <02> Info     Snapshot created on retry
+[15.01.2024 14:32:21] <03> Info     Transferring data blocks
+[15.01.2024 14:35:45] <03> Error    Network connection lost to repository server 10.0.1.50
+Connection error: The semaphore timeout period has expired.
+Stack trace:
+  at Veeam.Backup.Core.CDataTransfer.TransferBlocks()
+  at Veeam.Backup.Core.CJobSession.ProcessVm()
+  at Veeam.Backup.Core.CJobSession.Run()
+[15.01.2024 14:35:46] <01> Error    Job failed with errors
+[15.01.2024 14:35:46] <01> Info     ------- Veeam Backup Job Finished -------

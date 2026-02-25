@@ -61,9 +61,10 @@ tempfile = "3"
 resvg = "0.44"
 ico = "0.3"
 
-# Embed ICO resource into the Windows executable (titlebar, taskbar, Alt+Tab).
-# Scoped to Windows targets only so cross-compiling from Linux/macOS still works.
-[target.'cfg(windows)'.build-dependencies]
+# winres must be an unconditional build-dependency so build.rs compiles on all
+# host platforms (Linux/macOS CI). The resource embedding only executes at
+# runtime of build.rs when CARGO_CFG_TARGET_OS == "windows".
+[build-dependencies]
 winres = "0.1"
 
 [profile.release]
