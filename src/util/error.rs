@@ -84,7 +84,7 @@ pub enum ProfileError {
     /// TOML file could not be parsed.
     TomlParse {
         path: PathBuf,
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     /// Profile file exceeds the maximum allowed size.

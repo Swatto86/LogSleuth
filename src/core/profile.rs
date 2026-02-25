@@ -10,7 +10,7 @@ use crate::util::error::ProfileError;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // =============================================================================
 // TOML deserialization structures (raw input)
@@ -79,11 +79,11 @@ pub struct SeverityMappingDef {
 /// `source_path` is used for error messages only (not for I/O).
 pub fn parse_profile_toml(
     toml_content: &str,
-    source_path: &PathBuf,
+    source_path: &Path,
 ) -> Result<ProfileDefinition, ProfileError> {
     toml::from_str(toml_content).map_err(|e| ProfileError::TomlParse {
-        path: source_path.clone(),
-        source: e,
+        path: source_path.to_path_buf(),
+        source: Box::new(e),
     })
 }
 
@@ -97,7 +97,7 @@ pub fn parse_profile_toml(
 /// Returns a fully compiled `FormatProfile` ready for use.
 pub fn validate_and_compile(
     def: ProfileDefinition,
-    source_path: &PathBuf,
+    source_path: &Path,
     is_builtin: bool,
 ) -> Result<FormatProfile, ProfileError> {
     let id = &def.profile.id;
@@ -263,14 +263,13 @@ pub fn auto_detect(
             confidence = (confidence + 0.2).min(1.0);
         }
 
-        if confidence >= constants::AUTO_DETECT_MIN_CONFIDENCE {
-            if best.as_ref().map_or(true, |b| confidence > b.confidence) {
+        if confidence >= constants::AUTO_DETECT_MIN_CONFIDENCE
+            && best.as_ref().map_or(true, |b| confidence > b.confidence) {
                 best = Some(DetectionResult {
                     profile_id: profile.id.clone(),
                     confidence,
                 });
             }
-        }
     }
 
     tracing::debug!(

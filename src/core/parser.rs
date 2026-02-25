@@ -6,7 +6,7 @@
 use crate::core::model::{FormatProfile, LogEntry};
 use crate::util::error::ParseError;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use std::path::PathBuf;
+use std::path::Path;
 
 /// Configuration for parsing operations.
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ pub struct ParseResult {
 /// * `id_start` - Starting ID for entries (for global uniqueness across files)
 pub fn parse_content(
     content: &str,
-    file_path: &PathBuf,
+    file_path: &Path,
     profile: &FormatProfile,
     config: &ParseConfig,
     id_start: u64,
@@ -102,7 +102,7 @@ pub fn parse_content(
                         Err(_msg) => {
                             if errors.len() < config.max_parse_errors_per_file {
                                 errors.push(ParseError::TimestampParse {
-                                    file: file_path.clone(),
+                                    file: file_path.to_path_buf(),
                                     line_number,
                                     raw_timestamp: raw_ts.to_string(),
                                     format: profile.timestamp_format.clone(),
@@ -119,7 +119,7 @@ pub fn parse_content(
                 id: current_id,
                 timestamp,
                 severity,
-                source_file: file_path.clone(),
+                source_file: file_path.to_path_buf(),
                 line_number,
                 thread: caps.name("thread").map(|m| m.as_str().to_string()),
                 component: caps.name("component").map(|m| m.as_str().to_string()),
@@ -151,7 +151,7 @@ pub fn parse_content(
                         id: current_id,
                         timestamp: None,
                         severity: crate::core::model::Severity::Unknown,
-                        source_file: file_path.clone(),
+                        source_file: file_path.to_path_buf(),
                         line_number,
                         thread: None,
                         component: None,
@@ -170,7 +170,7 @@ pub fn parse_content(
                     || entries.is_empty()
                 {
                     errors.push(ParseError::LineParse {
-                        file: file_path.clone(),
+                        file: file_path.to_path_buf(),
                         line_number,
                         reason: "Line does not match profile pattern".to_string(),
                     });
@@ -241,6 +241,7 @@ mod tests {
     use super::*;
     use crate::core::model::Severity;
     use crate::core::profile;
+    use std::path::PathBuf;
 
     fn make_test_profile() -> FormatProfile {
         let toml = r#"

@@ -346,7 +346,7 @@ fn run_scan(
 
     let summary = ScanSummary {
         total_files_discovered: total_files,
-        total_entries: total_entries,
+        total_entries,
         total_parse_errors: total_errors,
         files_matched: files_with_entries,
         file_summaries,
@@ -435,7 +435,7 @@ fn read_small_file_with_retry(path: &Path) -> io::Result<String> {
         }
     }
 
-    Err(last_err.unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "Unknown read error")))
+    Err(last_err.unwrap_or_else(|| io::Error::other("Unknown read error")))
 }
 
 /// Returns true for transient I/O errors that are worth retrying.

@@ -8,7 +8,7 @@
 use crate::core::model::LogEntry;
 use crate::util::error::ExportError;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::Path;
 
 /// Export filtered entries to CSV format.
 ///
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 pub fn export_csv<W: Write>(
     entries: &[LogEntry],
     writer: W,
-    _export_path: &PathBuf,
+    _export_path: &Path,
 ) -> Result<usize, ExportError> {
     let mut csv_writer = csv::Writer::from_writer(writer);
 
@@ -32,7 +32,7 @@ pub fn export_csv<W: Write>(
             "message",
         ])
         .map_err(|e| ExportError::Csv {
-            path: _export_path.clone(),
+            path: _export_path.to_path_buf(),
             source: e,
         })?;
 
@@ -51,14 +51,14 @@ pub fn export_csv<W: Write>(
                 &entry.message,
             ])
             .map_err(|e| ExportError::Csv {
-                path: _export_path.clone(),
+                path: _export_path.to_path_buf(),
                 source: e,
             })?;
         count += 1;
     }
 
     csv_writer.flush().map_err(|e| ExportError::Io {
-        path: _export_path.clone(),
+        path: _export_path.to_path_buf(),
         source: e,
     })?;
 
@@ -69,10 +69,10 @@ pub fn export_csv<W: Write>(
 pub fn export_json<W: Write>(
     entries: &[LogEntry],
     writer: W,
-    export_path: &PathBuf,
+    export_path: &Path,
 ) -> Result<usize, ExportError> {
     serde_json::to_writer_pretty(writer, entries).map_err(|e| ExportError::Json {
-        path: export_path.clone(),
+        path: export_path.to_path_buf(),
         source: e,
     })?;
     Ok(entries.len())
@@ -82,6 +82,7 @@ pub fn export_json<W: Write>(
 mod tests {
     use super::*;
     use crate::core::model::Severity;
+    use std::path::PathBuf;
 
     fn make_entry(id: u64, message: &str) -> LogEntry {
         LogEntry {

@@ -35,17 +35,15 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         if ui.button("Cancel").clicked() {
             state.request_cancel = true;
         }
-    } else {
-        if ui
-            .add_enabled(
-                !state.scan_in_progress,
-                egui::Button::new("Open Directory\u{2026}"),
-            )
-            .clicked()
-        {
-            if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                state.pending_scan = Some(path);
-            }
+    } else if ui
+        .add_enabled(
+            !state.scan_in_progress,
+            egui::Button::new("Open Directory\u{2026}"),
+        )
+        .clicked()
+    {
+        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+            state.pending_scan = Some(path);
         }
     }
 

@@ -62,12 +62,14 @@ pub struct LogEntry {
 /// All format-specific level strings (Error, ERR, E, error, Failed, etc.)
 /// are mapped to one of these variants via the profile's severity_mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum Severity {
     Critical,
     Error,
     Warning,
     Info,
     Debug,
+    #[default]
     Unknown,
 }
 
@@ -115,11 +117,6 @@ impl std::fmt::Display for Severity {
     }
 }
 
-impl Default for Severity {
-    fn default() -> Self {
-        Severity::Unknown
-    }
-}
 
 // =============================================================================
 // Multiline mode
@@ -128,9 +125,11 @@ impl Default for Severity {
 /// How the parser handles lines that do not match the profile's line_pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum MultilineMode {
     /// Append non-matching lines to the previous entry's message.
     /// This is the correct behaviour for stack traces and multi-line messages.
+    #[default]
     Continuation,
 
     /// Skip non-matching lines entirely.
@@ -140,11 +139,6 @@ pub enum MultilineMode {
     Raw,
 }
 
-impl Default for MultilineMode {
-    fn default() -> Self {
-        MultilineMode::Continuation
-    }
-}
 
 // =============================================================================
 // Format Profile (runtime representation)
