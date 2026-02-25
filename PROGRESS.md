@@ -159,23 +159,129 @@
 
 ---
 
+## Increment 8: UI Polish, Log Summary, Tooltips & Filter Fixes
+**Status: COMPLETE**
+
+### Font & Encoding
+- [x] `main.rs` - `configure_fonts()` rewritten: Consolas inserted at position 0 of the monospace family (primary), Segoe UI inserted at position 0 of the proportional family, Segoe UI Symbol + Segoe UI Emoji inserted as Unicode-range fallbacks. HashSet-based loading guard prevents double-insertion.
+
+### Log Summary Panel
+- [x] `ui/panels/log_summary.rs` (NEW) - Severity breakdown table listing each severity with count + percentage; collapsible per-severity sections (up to 50 message previews each). Colour-coded with `theme::severity_colour`. `sanitise_preview()` function replaces control characters (including binary/NUL) with U+FFFD and truncates to 140 chars. `Label::truncate()` prevents grid overflow from very long lines.
+- [x] `ui/panels/mod.rs` - Exported `pub mod log_summary`
+- [x] `app/state.rs` - `show_log_summary: bool` field added, initialized to `false`, cleared in `clear()`
+- [x] `ui/panels/filters.rs` - "Summary" quick-button opens `show_log_summary` (disabled while no filtered entries)
+- [x] `gui.rs` - View menu "Log Summary" item (disabled while no filtered entries); `log_summary::render()` call after summary render
+- [x] `ui/panels/log_summary.rs` - `CollapsingState::load_with_default_open` with stable static string IDs replaces `CollapsingHeader::new(RichText)` — fixes sections that could not be recollapsed after expanding
+- [x] `ui/panels/log_summary.rs` - `.open(&mut open)` for title-bar × close; `default_pos` near top of screen prevents window from spawning off-screen; `ScrollArea::max_height = available_height - 80` prevents window growing taller than the screen; `close_clicked` bool pattern avoids double-borrow of `open`
+
+### Sidebar Layout
+- [x] `gui.rs` - Sidebar split into two independent `ScrollArea`s: discovery panel (top ~45%), filters panel (remainder). Prevents one panel's growth from squashing the other.
+- [x] `ui/panels/discovery.rs` - Discovery file list `max_height` raised from 200 px to 360 px.
+- [x] `ui/theme.rs` - `SIDEBAR_WIDTH` raised from 250 to 290 px.
+
+### File Path Tooltips
+- [x] `ui/panels/discovery.rs` - `.on_hover_text(file.path.display())` on each file name row.
+- [x] `ui/panels/filters.rs` - `.on_hover_text(path.display())` on each source-file checkbox.
+- [x] `ui/panels/log_summary.rs` - Full path stored in preview tuple; filename extracted at render time; `.on_hover_text(full_path)` on each message cell.
+- [x] `ui/panels/timeline.rs` - `on_hover_ui` shows full timestamp + full source path on hover.
+
+### Source File Filter Fix
+- [x] `core/filter.rs` - `hide_all_sources: bool` field added to `FilterState`. Represents the explicit "nothing selected" state that an empty whitelist cannot encode (empty = all pass). `is_empty()` and `matches_all()` both respect it.
+- [x] `ui/panels/filters.rs` - None button: clears whitelist, sets `hide_all_sources = true`. Select all button: clears flag. Checkbox display: respects `hide_all_sources`. Individual uncheck: sets flag when unchecking the last file. Individual re-check: clears flag. Solo button: resets flag on both solo and un-solo.
+
+**Test results: 45 unit tests + 9 E2E tests = 54 total, all passing**
+
+---
+
+## Increment 9: Bookmarks & Annotations
+**Status: COMPLETE**
+
+- [x] `core/filter.rs` - `bookmarks_only: bool` and `bookmarked_ids: HashSet<u64>` added to `FilterState`. `is_empty()` returns false when `bookmarks_only` is set. `matches_all()` excludes entries whose IDs are not in `bookmarked_ids` when `bookmarks_only` is true. Core remains pure: `bookmarked_ids` is populated by the app layer before each filter call.
+- [x] `app/state.rs` - `bookmarks: HashMap<u64, String>` field (entry ID -> annotation label). New methods: `toggle_bookmark(id) -> bool`, `is_bookmarked(id) -> bool`, `bookmark_count() -> usize`, `clear_bookmarks()` (resets filter + refreshes), `bookmarks_report() -> String` (plain-text report sorted by entry ID, showing timestamp, severity, filename, first 200 chars of message, and label). `apply_filters()` populates `filter_state.bookmarked_ids` from `bookmarks` when `bookmarks_only` is true. `clear()` removes all bookmarks and resets `bookmarks_only`.
+- [x] `ui/panels/timeline.rs` - Bookmark star button (★ / ☆) added to every row, between the 4 px file stripe and the entry text. Star is amber (★) when bookmarked, dim outline (☆) when not. Bookmarked rows receive a subtle gold background tint. Star click collected outside the `show_rows` closure (safe borrow pattern) and applied after the scroll area. In `bookmarks_only` mode, removing the last bookmark triggers an immediate `apply_filters()` so the row disappears from view.
+- [x] `ui/panels/filters.rs` - "★ Bookmarks (N)" quick-filter toggle button: amber when active, dim when off. Activating it sets `bookmarks_only = true` and calls `apply_filters()`. Adjacent "× clear bm" button (shown when N > 0) calls `clear_bookmarks()`. "Clear" quick-filter button already resets `bookmarks_only` via `FilterState::default()`.
+- [x] `gui.rs` - View menu "Copy Bookmark Report (N entries)" item (disabled when no bookmarks). Calls `bookmarks_report()`, copies text to clipboard via `ctx.copy_text()`, sets status bar confirmation message.
+- [x] 2 new unit tests: `test_bookmark_filter_returns_only_bookmarked_entries`, `test_bookmark_filter_tracked_in_is_empty`
+
+**Test results: 47 unit tests + 9 E2E tests = 56 total, all passing**
+
+---
+
+## Increment 10: Regex-Based Severity Override
+**Status: COMPLETE**
+
+- [x] `core/model.rs` - Added `severity_override: HashMap<Severity, Vec<regex::Regex>>` field to `FormatProfile`. Added `apply_severity_override(&self, text: &str) -> Option<Severity>` method that iterates severities in priority order (Critical → Error → Warning → Info → Debug) and returns the first matching result.
+- [x] `core/profile.rs` - Added `SeverityOverrideDef` TOML deserialization struct (mirrors `SeverityMappingDef`). Added `#[serde(default)] pub severity_override: SeverityOverrideDef` field to `ProfileDefinition`. Added override compilation block in `validate_and_compile`: iterates all five severity levels and compiles each `Vec<String>` of regex patterns into `Vec<Regex>` using the existing `compile_regex` helper (same `MAX_REGEX_PATTERN_LENGTH` guard; invalid patterns fail compilation with an actionable `ProfileError`).
+- [x] `core/parser.rs` - Replaced 4-line flat severity extraction with a 3-tier layered approach:
+  1. `level` capture group present → `map_severity()` → if result is Unknown, try `apply_severity_override()` as a second chance → fall back to Unknown.
+  2. No `level` capture group → `apply_severity_override()` first (regex precision) → `infer_severity_from_message()` substring fallback.
+- [x] `profiles/plain_text.toml` - Added `[severity_override]` section with patterns for common bracket-style markers (`[CRIT]`, `[ERR]`, `[WARN]`) and Java exception class names that substring matching misses or over-broadly catches.
+- [x] `profiles/generic_timestamp.toml` - Added `[severity_override]` section with the same bracket-style marker patterns.
+- [x] 2 new unit tests in `core/profile.rs`:
+  - `test_severity_override_regex_matching`: verifies `\[ERROR\]` requires literal brackets ("ERROR code 123" → None), `\bFAILED\b` uses word boundaries, correct severity mapping, no-match returns None.
+  - `test_severity_override_absent_when_not_configured`: verifies `apply_severity_override` returns None when the map is empty.
+
+**Test results: 49 unit tests + 9 E2E tests = 58 total, all passing**
+
+---
+
+## Increment 11: Time Correlation Window
+**Status: COMPLETE**
+
+- [x] `util/constants.rs` - Added `MIN_CORRELATION_WINDOW_SECS = 1` and `MAX_CORRELATION_WINDOW_SECS = 3600` named bounds (Rule 11 compliance).
+- [x] `app/state.rs` - Added four new fields: `correlation_active: bool`, `correlation_window_secs: i64` (default 30), `correlation_window_input: String` (UI buffer), `correlated_ids: HashSet<u64>` (pre-computed overlay set). Added `update_correlation()` method that iterates **all** entries (not just filtered) to populate `correlated_ids` with IDs of entries whose timestamps fall within `[anchor - window, anchor + window]`. Entries with no timestamp cannot be anchors and are never included. Fields reset in `clear()`.
+- [x] `ui/panels/timeline.rs` - Each row checks `state.correlated_ids.contains(&entry_id)` and renders a teal (`rgba(20,184,166,28)`) background tint for correlated rows. The tint is drawn before the gold bookmark tint so that bookmarked+correlated rows show the gold colour at higher visual priority. A `correlation_update_needed: bool` flag is collected inside `show_rows` and `state.update_correlation()` is called after the scroll area closes to avoid a `&mut self` conflict with the immutable entry borrow (same deferred-action pattern as the bookmark toggle).
+- [x] `ui/panels/filters.rs` - Added **Correlation** section above the entry-count footer (only shown when entries are loaded). Contains: a toggle button (shows `+/-Ns` in teal when active, `Off` when inactive) that calls `update_correlation()` on toggle; an entry count badge (`N entries` in teal) visible when the overlay is populated; a `Window: [  30  ] sec` text input with Enter-to-commit and clamp to `[MIN, MAX]` bounds, resetting the buffer to the current valid value on bad input.
+- [x] 3 new unit tests in `app/state.rs`:
+  - `test_correlation_window_identifies_nearby_entries` — verifies exact in/out boundary (entries at -35s, -20s, 0s, +20s, +35s with 30s window).
+  - `test_correlation_clears_when_disabled` — verifies `correlated_ids` is empty immediately after disabling.
+  - `test_correlation_no_timestamp_entry_yields_empty_set` — verifies an anchor with no timestamp produces an empty set.
+- [x] E2E test `e2e_correlation_window_highlights_nearby_entries` in `tests/e2e_discovery.rs` — loads the veeam_vbr fixture, parses real entries into `AppState`, activates correlation, verifies anchor is included, all correlated entries have timestamps, and disabling clears the set.
+
+**Test results: 52 unit tests + 10 E2E tests = 62 total, all passing**
+
+---
+
+## Increment 12 — Persistent Sessions
+
+**Goal**: Save and restore the current scan path, filter state, colour assignments, bookmarks, and correlation window across application restarts.
+
+**Design decisions**:
+- Session data stored as JSON in the platform data directory (`%APPDATA%\LogSleuth\session.json` on Windows).
+- Log *entries* are intentionally **not** persisted — files are always re-parsed on restore so the view reflects current file contents.
+- `initial_scan: Option<PathBuf>` field added to `AppState` — set at startup for session restores and consumed by `gui.rs` WITHOUT calling `clear()`, preserving the restored filter/colour/bookmark state during the re-scan. This is distinct from `pending_scan` which always calls `clear()` first (user-initiated scans).
+- `Color32` serialised as `[u8; 4]` (RGBA bytes) since `egui::Color32` does not impl `Serialize`.
+- Atomic write: session written to `.json.tmp` then renamed to `.json` — prevents corrupt state on crash mid-write.
+- `load()` returns `Option<SessionData>` — all errors (missing file, malformed JSON, version mismatch) silently return `None` so app always starts cleanly.
+- `SESSION_VERSION = 1` constant guards forward-compatibility; version mismatches discard the session with a warning log.
+
+**Files changed**:
+- [x] `src/app/session.rs` — **new file**. `SessionData` + `PersistedFilter` serde structs; `session_path()`, `save()`, `load()` public functions; `SESSION_VERSION: pub const u32 = 1`. 5 unit tests.
+- [x] `src/util/constants.rs` — added `SESSION_FILE_NAME: &str = "session.json"`.
+- [x] `src/app/mod.rs` — added `pub mod session;`.
+- [x] `src/app/state.rs` — added `session_path: Option<PathBuf>` and `initial_scan: Option<PathBuf>` fields; initialised to `None` in `new()`; `initial_scan` cleared in `clear()` (session_path is never cleared); added `save_session()` (snapshots state to disk, silently fires-and-forgets errors) and `restore_from_session()` (reinstates scan_path, all filter fields, file_colours, bookmarks, and correlation window from a `SessionData`).
+- [x] `src/main.rs` — after `AppState::new()`: sets `state.session_path` from `platform_paths.data_dir`; loads previous session via `session::load()`; calls `restore_from_session()` if successful; sets `state.initial_scan` when a saved scan_path exists; CLI `--path` argument overrides session path (sets both `scan_path` and `initial_scan`).
+- [x] `src/gui.rs` — added `initial_scan` handler in `update()` loop (no `clear()` call); added `self.state.save_session()` after `ParsingCompleted` (saves state after each scan); added `fn on_exit()` override that calls `save_session()` when the window closes.
+- [x] E2E test `e2e_session_save_restore_round_trip` in `tests/e2e_discovery.rs` — writes a session to a temp dir, reloads it, calls `restore_from_session()`, verifies scan_path / filter / bookmarks / correlation_window; also asserts `load()` returns `None` for a missing path.
+
+**Test results: 57 unit tests + 11 E2E tests = 68 total, all passing**
+
+---
+
 ## Future Enhancements
 
 ### High Priority
-- [ ] **Regex-based severity override** — Allow profiles to define custom severity extraction rules so vendor-specific patterns (e.g. `[WARN]` in plain-text files) are classified correctly rather than defaulting to Unknown.
-- [ ] **Bookmark / annotation** — Mark specific timeline entries for later reference within a session; copy bookmarks to clipboard as a structured report.
-- [ ] **Time correlation window** — Clicking an entry in the timeline highlights all other entries within a configurable ±N seconds window across all loaded files (CMTrace behaviour).
+- [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*
 
 ### Medium Priority
-- [ ] **Persistent sessions** — Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application.
-- [ ] **Column visibility toggles** — Allow the user to show/hide columns in the timeline (e.g. hide the filepath column when viewing a single file).
-- [ ] **Export retains filter** — Optionally export the full entry set (pre-filter) alongside the filtered export.
-- [ ] **Profile editor UI** — In-app wizard to create and test a new TOML profile without leaving LogSleuth.
-- [ ] **Additional built-in profiles** — Windows Event Log XML exports, Apache/nginx access logs, Docker/podman JSON logs, systemd journal exports.
-- [ ] **Configurable max files / max entries** — Surface `DEFAULT_MAX_FILES` and any entry cap as editable config values in the UI rather than compile-time constants only.
+- [ ] **Column visibility toggles** -- Allow the user to show/hide columns in the timeline (e.g. hide the filepath column when viewing a single file).
+- [ ] **Export retains filter** -- Optionally export the full entry set (pre-filter) alongside the filtered export.
+- [ ] **Profile editor UI** -- In-app wizard to create and test a new TOML profile without leaving LogSleuth.
+- [ ] **Additional built-in profiles** -- Windows Event Log XML exports, Apache/nginx access logs, Docker/podman JSON logs, systemd journal exports.
+- [ ] **Configurable max files / max entries** -- Surface `DEFAULT_MAX_FILES` and any entry cap as editable config values in the UI rather than compile-time constants only.
 
 ### Low Priority / Research
-- [ ] **Parallel file parsing** — Use rayon to parse multiple files concurrently on the background thread; the sort step already handles out-of-order results.
-- [ ] **Full-text index** — Build a Tantivy (or similar) in-memory index on scan completion to enable fast regex and phrase searching across millions of entries.
-- [ ] **Plugin / WASM profile extensions** — Allow format profiles to include embedded WASM functions for custom timestamp or severity extraction logic beyond what regex alone can express.
-- [ ] **Network / remote log sources** — Pull logs from a remote host via SSH or HTTP (structured log APIs).
+- [ ] **Parallel file parsing** -- Use rayon to parse multiple files concurrently on the background thread; the sort step already handles out-of-order results.
+- [ ] **Full-text index** -- Build a Tantivy (or similar) in-memory index on scan completion to enable fast regex and phrase searching across millions of entries.
+- [ ] **Plugin / WASM profile extensions** -- Allow format profiles to include embedded WASM functions for custom timestamp or severity extraction logic beyond what regex alone can express.
+- [ ] **Network / remote log sources** -- Pull logs from a remote host via SSH or HTTP (structured log APIs).

@@ -31,3 +31,14 @@ error = ["ERROR", "FAIL", "FAILED", "Exception"]
 warning = ["WARNING", "WARN"]
 info = []
 debug = []
+
+# Regex-based severity override: applied before keyword substring matching.
+# These patterns use regex precision to catch common bracket-style markers
+# (e.g. [ERR], [CRITICAL]) and Java-style exception class names that the
+# plain string mapping might miss or over-broadly match.
+[severity_override]
+critical = ['\[CRIT(ICAL)?\]', '\[FATAL\]', '\bFatalException\b']
+error    = ['\[ERR(OR)?\]', '\bException\b', '\bStackTrace\b', '\bUnhandled\b']
+warning  = ['\[WARN(ING)?\]', '\bDeprecated\b']
+info     = ['\[INFO(RMATION)?\]']
+debug    = ['\[DEBUG\]', '\[VERBOSE\]', '\[TRACE\]']

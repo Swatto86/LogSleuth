@@ -97,6 +97,16 @@ pub const AUTO_DETECT_MIN_CONFIDENCE: f64 = 0.3;
 /// Default time window (seconds) for cross-log correlation.
 pub const DEFAULT_CORRELATION_WINDOW_SECS: i64 = 30;
 
+/// Minimum configurable correlation window (seconds).
+/// Prevents the window from collapsing to zero, which would only ever
+/// match the anchor entry itself and provides no useful context.
+pub const MIN_CORRELATION_WINDOW_SECS: i64 = 1;
+
+/// Maximum configurable correlation window (seconds).
+/// 1 hour is a generous upper bound; beyond this the "context" becomes
+/// too broad to be meaningful for most log correlation workflows.
+pub const MAX_CORRELATION_WINDOW_SECS: i64 = 3_600;
+
 /// Debounce delay in milliseconds for text filter input.
 pub const DEFAULT_FILTER_DEBOUNCE_MS: u64 = 300;
 
@@ -145,6 +155,9 @@ pub const MAX_EXPORT_ENTRIES: usize = 5_000_000;
 
 /// Configuration file name.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
+
+/// Session persistence file name (stored in the platform data directory).
+pub const SESSION_FILE_NAME: &str = "session.json";
 
 /// User profiles subdirectory name.
 pub const PROFILES_DIR_NAME: &str = "profiles";

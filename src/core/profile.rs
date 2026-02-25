@@ -25,6 +25,8 @@ pub struct ProfileDefinition {
     pub parsing: ParsingDef,
     #[serde(default)]
     pub severity_mapping: SeverityMappingDef,
+    #[serde(default)]
+    pub severity_override: SeverityOverrideDef,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +60,28 @@ pub struct ParsingDef {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct SeverityMappingDef {
+    #[serde(default)]
+    pub critical: Vec<String>,
+    #[serde(default)]
+    pub error: Vec<String>,
+    #[serde(default)]
+    pub warning: Vec<String>,
+    #[serde(default)]
+    pub info: Vec<String>,
+    #[serde(default)]
+    pub debug: Vec<String>,
+}
+
+/// Raw TOML representation of the optional `[severity_override]` section.
+///
+/// Each field is a list of **regex** patterns (not plain strings).  When a
+/// parsed entry's severity is Unknown -- or when no `level` capture group is
+/// present in the line pattern -- these regexes are tested against the
+/// message text in severity order (Critical first).  The first match wins.
+///
+/// Compiled into `FormatProfile::severity_override` by `validate_and_compile`.
+#[derive(Debug, Deserialize, Default)]
+pub struct SeverityOverrideDef {
     #[serde(default)]
     pub critical: Vec<String>,
     #[serde(default)]
@@ -170,6 +194,28 @@ pub fn validate_and_compile(
         severity_mapping.insert(Severity::Debug, def.severity_mapping.debug);
     }
 
+    // Compile severity_override regex patterns (optional section).
+    // Each pattern is compiled with the same length limit as other profile
+    // regexes.  An invalid pattern is a hard error so misconfigured profiles
+    // fail loudly at load time rather than silently producing wrong results.
+    let mut severity_override: HashMap<Severity, Vec<Regex>> = HashMap::new();
+    let ovr = &def.severity_override;
+    for (sev, raw_patterns) in &[
+        (Severity::Critical, &ovr.critical),
+        (Severity::Error, &ovr.error),
+        (Severity::Warning, &ovr.warning),
+        (Severity::Info, &ovr.info),
+        (Severity::Debug, &ovr.debug),
+    ] {
+        if !raw_patterns.is_empty() {
+            let compiled: Result<Vec<Regex>, ProfileError> = raw_patterns
+                .iter()
+                .map(|p| compile_regex(id, "severity_override", p))
+                .collect();
+            severity_override.insert(*sev, compiled?);
+        }
+    }
+
     Ok(FormatProfile {
         id: id.clone(),
         name: def.profile.name,
@@ -181,6 +227,7 @@ pub fn validate_and_compile(
         timestamp_format: def.parsing.timestamp_format,
         multiline_mode: def.parsing.multiline_mode,
         severity_mapping,
+        severity_override,
         is_builtin,
     })
 }
@@ -567,5 +614,70 @@ timestamp_format = "%Y"
         );
         // All should be marked as built-in
         assert!(profiles.iter().all(|p| p.is_builtin));
+    }
+
+    const OVERRIDE_PROFILE_TOML: &str = r#"
+[profile]
+id = "override-test"
+name = "Override Test"
+
+[detection]
+content_match = '.'
+
+[parsing]
+line_pattern = '^(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "raw"
+
+[severity_override]
+error   = ['\[ERROR\]', '\bFAILED\b']
+warning = ['\[WARN\]', '\[WARNING\]']
+info    = ['\[INFO\]']
+debug   = ['\[DEBUG\]']
+"#;
+
+    #[test]
+    fn test_severity_override_regex_matching() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(OVERRIDE_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        // Patterns match with full regex precision (brackets required)
+        assert_eq!(
+            profile.apply_severity_override("[ERROR] disk full"),
+            Some(Severity::Error)
+        );
+        assert_eq!(
+            profile.apply_severity_override("Job FAILED to complete"),
+            Some(Severity::Error)
+        );
+        assert_eq!(
+            profile.apply_severity_override("[WARN] disk low"),
+            Some(Severity::Warning)
+        );
+        assert_eq!(
+            profile.apply_severity_override("[INFO] service started"),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            profile.apply_severity_override("[DEBUG] entering loop"),
+            Some(Severity::Debug)
+        );
+        // "ERROR" without brackets does NOT match \[ERROR\] — regex precision
+        assert_eq!(profile.apply_severity_override("ERROR code 123"), None);
+        // No pattern at all
+        assert_eq!(profile.apply_severity_override("everything is fine"), None);
+    }
+
+    #[test]
+    fn test_severity_override_absent_when_not_configured() {
+        // VALID_PROFILE_TOML has no [severity_override] section --
+        // apply_severity_override should always return None.
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        assert_eq!(profile.apply_severity_override("[ERROR] something"), None);
+        assert_eq!(profile.apply_severity_override("[WARN] disk low"), None);
     }
 }

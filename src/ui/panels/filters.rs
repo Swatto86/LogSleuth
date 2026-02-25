@@ -42,6 +42,46 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 state.show_log_summary = true;
             }
         });
+
+        // Bookmarks toggle: shows only bookmarked entries when active.
+        let bm_count = state.bookmark_count();
+        let bm_active = state.filter_state.bookmarks_only;
+        let bm_label = if bm_count > 0 {
+            format!("\u{2605} Bookmarks ({bm_count})")
+        } else {
+            "\u{2606} Bookmarks".to_string()
+        };
+        let bm_colour = if bm_active {
+            egui::Color32::from_rgb(251, 191, 36) // amber when active
+        } else {
+            ui.style().visuals.text_color()
+        };
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new(&bm_label).small().color(bm_colour),
+            ))
+            .on_hover_text("Show only bookmarked entries")
+            .clicked()
+        {
+            state.filter_state.bookmarks_only = !bm_active;
+            state.apply_filters();
+        }
+        // Clear-all bookmarks button (only when bookmarks exist)
+        if bm_count > 0
+            && ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("\u{d7} clear bm")
+                            .small()
+                            .color(egui::Color32::from_rgb(156, 163, 175)),
+                    )
+                    .frame(false),
+                )
+                .on_hover_text("Remove all bookmarks")
+                .clicked()
+        {
+            state.clear_bookmarks();
+        }
     });
 
     ui.add_space(6.0);
@@ -278,18 +318,33 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     for (path, _) in &visible {
                         state.filter_state.source_files.remove(path);
                     }
+                    state.filter_state.hide_all_sources = false;
                     // If the set is now empty every file is included -- "all pass"
                     state.apply_filters();
                 }
                 if ui.small_button("None").clicked() {
-                    // Seed the whitelist with every file, then remove the visible ones
+                    // Deselect every visible file.  Build a whitelist of only the
+                    // non-visible files (those filtered out by the search box) so
+                    // their selection state is preserved.
+                    let visible_paths: std::collections::HashSet<&std::path::PathBuf> =
+                        visible.iter().map(|(p, _)| p).collect();
+                    let non_visible_selected: std::collections::HashSet<std::path::PathBuf> =
+                        file_paths
+                            .iter()
+                            .filter(|(p, _)| !visible_paths.contains(p))
+                            .filter(|(p, _)| {
+                                // Only keep non-visible files that were previously selected.
+                                !state.filter_state.hide_all_sources
+                                    && (state.filter_state.source_files.is_empty()
+                                        || state.filter_state.source_files.contains(p))
+                            })
+                            .map(|(p, _)| p.clone())
+                            .collect();
+                    state.filter_state.source_files = non_visible_selected;
+                    // Set hide_all_sources when no non-visible file holds the
+                    // whitelist open, so the empty set is not misread as "all pass".
                     if state.filter_state.source_files.is_empty() {
-                        for (path, _) in &file_paths {
-                            state.filter_state.source_files.insert(path.clone());
-                        }
-                    }
-                    for (path, _) in &visible {
-                        state.filter_state.source_files.remove(path);
+                        state.filter_state.hide_all_sources = true;
                     }
                     state.apply_filters();
                 }
@@ -309,9 +364,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             .max_height(180.0)
             .show(ui, |ui| {
                 for (path, name) in &visible {
-                    // Empty source_files == all pass, so show as checked
-                    let mut checked = state.filter_state.source_files.is_empty()
-                        || state.filter_state.source_files.contains(path);
+                    // hide_all_sources overrides the whitelist: nothing is checked.
+                    // Otherwise: empty whitelist = all checked; else only those in set.
+                    let mut checked = !state.filter_state.hide_all_sources
+                        && (state.filter_state.source_files.is_empty()
+                            || state.filter_state.source_files.contains(path));
 
                     ui.horizontal(|ui| {
                         // Coloured dot matching timeline file stripe.
@@ -321,20 +378,32 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         ui.painter()
                             .circle_filled(dot_rect.center(), 4.0, dot_colour);
 
-                        if ui
+                        let cb_resp = ui
                             .checkbox(&mut checked, egui::RichText::new(name.as_str()).small())
-                            .changed()
-                        {
+                            .on_hover_text(path.display().to_string());
+                        if cb_resp.changed() {
                             if !checked {
-                                if state.filter_state.source_files.is_empty() {
+                                // Unchecking: seed the whitelist with all currently-selected
+                                // files (if it is empty/all-pass), then remove this one.
+                                if state.filter_state.source_files.is_empty()
+                                    && !state.filter_state.hide_all_sources
+                                {
                                     for (other_path, _) in &file_paths {
                                         state.filter_state.source_files.insert(other_path.clone());
                                     }
                                 }
                                 state.filter_state.source_files.remove(path);
+                                // If removing this file emptied the whitelist, engage
+                                // hide_all_sources so the empty set is not misread as "all pass".
+                                if state.filter_state.source_files.is_empty() {
+                                    state.filter_state.hide_all_sources = true;
+                                }
                             } else {
+                                // Re-checking: add to whitelist, clear hide_all_sources.
+                                state.filter_state.hide_all_sources = false;
                                 state.filter_state.source_files.insert((*path).clone());
                                 if state.filter_state.source_files.len() == total {
+                                    // All files now selected — use the compact all-pass form.
                                     state.filter_state.source_files.clear();
                                 }
                             }
@@ -342,7 +411,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         }
 
                         // Solo button.
-                        let already_solo = state.filter_state.source_files.len() == 1
+                        let already_solo = !state.filter_state.hide_all_sources
+                            && state.filter_state.source_files.len() == 1
                             && state.filter_state.source_files.contains(path);
                         let solo_colour = if already_solo {
                             egui::Color32::from_rgb(96, 165, 250)
@@ -362,8 +432,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         {
                             if already_solo {
                                 state.filter_state.source_files.clear();
+                                state.filter_state.hide_all_sources = false;
                             } else {
                                 state.filter_state.source_files.clear();
+                                state.filter_state.hide_all_sources = false;
                                 state.filter_state.source_files.insert((*path).clone());
                             }
                             state.apply_filters();
@@ -375,6 +447,93 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.label(egui::RichText::new("No files match.").small().weak());
                 }
             });
+    }
+
+    // -------------------------------------------------------------------------
+    // Time correlation overlay controls
+    // -------------------------------------------------------------------------
+    // Only shown once entries are loaded — the feature requires a selection.
+    if !state.entries.is_empty() {
+        ui.add_space(6.0);
+        ui.separator();
+        ui.label("Correlation:");
+
+        let corr_active = state.correlation_active;
+        let has_selection = state.selected_index.is_some();
+        let teal = egui::Color32::from_rgb(20, 184, 166);
+
+        // Toggle button: teal when active, dim when off.
+        ui.horizontal(|ui| {
+            let toggle_text = if corr_active {
+                format!("\u{22c4} +/-{}s", state.correlation_window_secs)
+            } else {
+                "\u{22c4} Off".to_string()
+            };
+            let toggle_colour = if corr_active {
+                teal
+            } else {
+                ui.style().visuals.text_color()
+            };
+            let hover_msg = if corr_active {
+                "Click to disable the correlation highlight"
+            } else if has_selection {
+                "Click to highlight all entries near the selected entry"
+            } else {
+                "Select a timeline entry first, then enable correlation"
+            };
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new(&toggle_text)
+                        .small()
+                        .color(toggle_colour),
+                ))
+                .on_hover_text(hover_msg)
+                .clicked()
+            {
+                state.correlation_active = !corr_active;
+                state.update_correlation();
+            }
+
+            // Entry count badge — only visible when the overlay is populated.
+            if corr_active && !state.correlated_ids.is_empty() {
+                let n = state.correlated_ids.len();
+                ui.label(
+                    egui::RichText::new(format!("{n} entries"))
+                        .small()
+                        .color(teal),
+                );
+            }
+        });
+
+        // Window size input — always editable so the user can set it before
+        // enabling the overlay, matching the relative-time UX pattern.
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Window:").small());
+            let input_resp = ui.add(
+                egui::TextEdit::singleline(&mut state.correlation_window_input)
+                    .desired_width(40.0)
+                    .hint_text("sec"),
+            );
+            ui.label(egui::RichText::new("sec").small());
+
+            // Commit on Enter (same pattern as relative-time custom input).
+            let committed = input_resp.lost_focus()
+                && input_resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
+            if committed {
+                if let Ok(secs) = state.correlation_window_input.trim().parse::<i64>() {
+                    let clamped = secs.clamp(
+                        crate::util::constants::MIN_CORRELATION_WINDOW_SECS,
+                        crate::util::constants::MAX_CORRELATION_WINDOW_SECS,
+                    );
+                    state.correlation_window_secs = clamped;
+                    state.correlation_window_input = clamped.to_string();
+                    state.update_correlation();
+                } else {
+                    // Reset to the current valid value on bad input.
+                    state.correlation_window_input = state.correlation_window_secs.to_string();
+                }
+            }
+        });
     }
 
     // Entry-count summary at the bottom of the filter section

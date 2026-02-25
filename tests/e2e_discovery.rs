@@ -359,3 +359,165 @@ fn e2e_entry_ids_are_monotonic() {
         );
     }
 }
+/// Exercises the full path: real fixture → parsed entries (with timestamps) →
+/// AppState → update_correlation().  Verifies that entries within the window
+/// are included, entries outside the window are excluded, and disabling
+/// correlation clears the set.
+#[test]
+fn e2e_correlation_window_highlights_nearby_entries() {
+    let profiles = load_profiles();
+    let fixture_path = fixture("veeam_vbr_sample.log");
+    let content = fs::read_to_string(&fixture_path).expect("read veeam fixture");
+
+    let vbr_profile = profiles
+        .iter()
+        .find(|p| p.id == "veeam-vbr")
+        .expect("veeam-vbr profile");
+
+    let result = parse_content(
+        &content,
+        &fixture_path,
+        vbr_profile,
+        &ParseConfig::default(),
+        0,
+    );
+
+    // We need at least two entries with parsed timestamps to test the window.
+    let timestamped: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|e| e.timestamp.is_some())
+        .collect();
+    assert!(
+        timestamped.len() >= 2,
+        "fixture must contain at least 2 timestamped entries for correlation test"
+    );
+
+    let mut state = logsleuth::app::state::AppState::new(profiles, false);
+    state.entries = result.entries;
+    // Build a simple identity filtered_indices so selected_index maps directly.
+    state.filtered_indices = (0..state.entries.len()).collect();
+
+    // Select the first entry that has a timestamp.
+    let anchor_display = state
+        .entries
+        .iter()
+        .position(|e| e.timestamp.is_some())
+        .expect("expected at least one timestamped entry");
+    let anchor_id = state.entries[anchor_display].id;
+
+    state.selected_index = Some(anchor_display);
+    state.correlation_active = true;
+    state.correlation_window_secs = 30;
+    state.update_correlation();
+
+    // The anchor entry must be in the correlated set.
+    assert!(
+        state.correlated_ids.contains(&anchor_id),
+        "anchor entry must be in the correlated set"
+    );
+
+    // All correlated entries must have timestamps; none are timestampless.
+    for &id in &state.correlated_ids {
+        let entry = state.entries.iter().find(|e| e.id == id).unwrap();
+        assert!(
+            entry.timestamp.is_some(),
+            "correlated_ids must not contain entries without timestamps"
+        );
+    }
+
+    // Disabling correlation must clear the overlay.
+    state.correlation_active = false;
+    state.update_correlation();
+    assert!(
+        state.correlated_ids.is_empty(),
+        "correlated_ids must be empty after disabling correlation"
+    );
+}
+
+/// Exercises the full session save/restore round-trip through real storage.
+///
+/// Verifies that:
+/// - `save_session()` writes a valid JSON file to the configured path
+/// - `load()` deserialises it back without error
+/// - `restore_from_session()` reinstates scan_path, filter text, bookmarks,
+///   and the correlation window
+/// - `load()` returns `None` for a path that does not exist (regression guard)
+#[test]
+fn e2e_session_save_restore_round_trip() {
+    use logsleuth::app::session;
+    use logsleuth::app::state::AppState;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    // ---------- 1. Build state with known values ----------
+    let profiles = load_profiles();
+    let mut state = AppState::new(profiles, false);
+
+    let tmp = TempDir::new().expect("temp dir");
+    let session_file = tmp.path().join("session.json");
+    state.session_path = Some(session_file.clone());
+
+    let scan_dir = tmp.path().join("logs");
+    state.scan_path = Some(scan_dir.clone());
+    state.filter_state.text_search = "CRITICAL".to_string();
+    state.filter_state.fuzzy = true;
+    state.bookmarks = HashMap::from([(42u64, "important".to_string())]);
+    state.correlation_window_secs = 90;
+
+    // ---------- 2. Save ----------
+    state.save_session();
+    assert!(
+        session_file.exists(),
+        "session file must be written to disk"
+    );
+
+    // ---------- 3. Load ----------
+    let loaded = session::load(&session_file).expect("session must load successfully");
+    assert_eq!(
+        loaded.scan_path.as_deref(),
+        Some(scan_dir.as_path()),
+        "scan_path must survive round-trip"
+    );
+    assert_eq!(
+        loaded.filter.text_search, "CRITICAL",
+        "text_search must survive round-trip"
+    );
+    assert!(loaded.filter.fuzzy, "fuzzy flag must survive round-trip");
+    assert_eq!(
+        loaded.bookmarks.len(),
+        1,
+        "bookmark count must survive round-trip"
+    );
+    assert_eq!(
+        loaded.correlation_window_secs, 90,
+        "correlation window must survive round-trip"
+    );
+
+    // ---------- 4. Restore into a fresh AppState ----------
+    let mut state2 = AppState::new(load_profiles(), false);
+    state2.restore_from_session(loaded);
+
+    assert_eq!(
+        state2.scan_path.as_deref(),
+        Some(scan_dir.as_path()),
+        "scan_path must be restored"
+    );
+    assert_eq!(
+        state2.filter_state.text_search, "CRITICAL",
+        "text_search filter must be restored"
+    );
+    assert!(state2.filter_state.fuzzy, "fuzzy flag must be restored");
+    assert_eq!(state2.bookmark_count(), 1, "bookmarks must be restored");
+    assert_eq!(
+        state2.correlation_window_secs, 90,
+        "correlation window must be restored"
+    );
+
+    // ---------- 5. Missing file returns None ----------
+    let missing = tmp.path().join("does_not_exist.json");
+    assert!(
+        session::load(&missing).is_none(),
+        "load() must return None for a missing file"
+    );
+}

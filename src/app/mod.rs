@@ -6,5 +6,6 @@
 
 pub mod profile_mgr;
 pub mod scan;
+pub mod session;
 pub mod state;
 pub mod tail;

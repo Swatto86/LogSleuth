@@ -220,9 +220,28 @@ fn main() {
     // Create application state
     let mut state = app::state::AppState::new(profiles, cli.debug);
 
-    // If a path was provided on the CLI, set it as the scan target
+    // Set the persistent session file path so save/restore can locate it.
+    let session_file = app::session::session_path(&platform_paths.data_dir);
+    state.session_path = Some(session_file.clone());
+
+    // Try restoring the previous session.  All errors are silently ignored:
+    // a missing or corrupt file simply starts the app in a clean state.
+    if let Some(session) = app::session::load(&session_file) {
+        tracing::info!(path = %session_file.display(), "Restoring previous session");
+        let has_scan = session.scan_path.is_some();
+        state.restore_from_session(session);
+        // Queue the re-scan via initial_scan (not pending_scan) so the
+        // restored filter/colour/bookmark state is NOT cleared before parsing.
+        if has_scan {
+            state.initial_scan = state.scan_path.clone();
+            state.status_message = "Rescanning previous session\u{2026}".to_string();
+        }
+    }
+
+    // A path supplied on the CLI always overrides the session scan path.
     if let Some(ref path) = cli.path {
         state.scan_path = Some(path.clone());
+        state.initial_scan = Some(path.clone());
     }
 
     // Launch the GUI

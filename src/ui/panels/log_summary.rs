@@ -20,6 +20,10 @@ use crate::ui::theme;
 /// Maximum number of message preview rows shown per severity group.
 const MAX_PREVIEW_ROWS: usize = 50;
 
+/// Maximum number of characters shown per message in the preview.
+/// Binary or extremely long lines are truncated to keep the grid layout stable.
+const MAX_MSG_CHARS: usize = 140;
+
 /// Render the log-entry summary window (if `state.show_log_summary` is true).
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
     if !state.show_log_summary {
@@ -61,30 +65,31 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 .timestamp
                 .map(|t| t.format("%H:%M:%S").to_string())
                 .unwrap_or_else(|| "--:--:--".to_string());
-            let file = entry
-                .source_file
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("?")
-                .to_string();
-            let msg = entry
-                .message
-                .lines()
-                .next()
-                .unwrap_or(&entry.message)
-                .to_string();
+            let file = entry.source_file.display().to_string();
+            let msg = sanitise_preview(entry.message.lines().next().unwrap_or(&entry.message));
             rows.push((ts, file, msg));
         }
     }
 
+    // Mirror the open flag so the built-in title-bar × also closes the window.
+    // `open` is borrowed mutably by Window::open(); a separate `close_clicked`
+    // flag carries the body Close button result out of the closure to avoid a
+    // second mutable borrow of `open` inside the same expression.
+    let mut open = state.show_log_summary;
+    let mut close_clicked = false;
+
     egui::Window::new("Log Summary")
+        .open(&mut open)
         .collapsible(false)
         .resizable(true)
-        .min_width(560.0)
-        .min_height(300.0)
-        .default_width(720.0)
-        .default_height(500.0)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .min_width(520.0)
+        .min_height(200.0)
+        .default_width(680.0)
+        .default_height(420.0)
+        .default_pos([
+            ctx.screen_rect().width() * 0.5 - 340.0,
+            48.0, // sit just below the menu bar, never off the top edge
+        ])
         .show(ctx, |ui| {
             // ----------------------------------------------------------------
             // Header: overall counts line
@@ -146,9 +151,14 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             // Actionable severities (Critical, Error, Warning) are expanded
             // by default; Info/Debug/Unknown are collapsed.
             // ----------------------------------------------------------------
+            // Reserve height for the header rows + separator + Close button so
+            // the scroll area never pushes them off the bottom of the window.
+            let reserved_bottom: f32 = 80.0;
+            let scroll_max_height = (ui.available_height() - reserved_bottom).max(120.0);
             egui::ScrollArea::vertical()
                 .id_salt("log_summary_scroll")
-                .auto_shrink([false; 2])
+                .max_height(scroll_max_height)
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for sev in &display_order {
                         let Some(rows) = previews.get(sev) else {
@@ -166,15 +176,31 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             Severity::Critical | Severity::Error | Severity::Warning
                         );
 
-                        let header_text =
-                            egui::RichText::new(format!("{} ({})", sev.label(), count))
-                                .color(colour)
-                                .strong();
+                        // Use CollapsingState directly with a stable plain-string ID.
+                        // CollapsingHeader::new() derives its persistent ID from the
+                        // rendered label text; when the label is RichText the derived ID
+                        // can differ between frames, which prevents the open/close state
+                        // from being found and resets it every render cycle.
+                        // CollapsingState with an explicit stable ID avoids the problem.
+                        let header_id = ui.make_persistent_id(format!(
+                            "log_summary_section_{}",
+                            sev.label()
+                        ));
+                        let section = egui::containers::collapsing_header::CollapsingState::load_with_default_open(
+                            ui.ctx(),
+                            header_id,
+                            default_open,
+                        );
 
-                        egui::CollapsingHeader::new(header_text)
-                            .id_salt(format!("log_summary_{}", sev.label()))
-                            .default_open(default_open)
-                            .show(ui, |ui| {
+                        section
+                            .show_header(ui, |ui| {
+                                ui.colored_label(
+                                    colour,
+                                    egui::RichText::new(format!("{} ({})", sev.label(), count))
+                                        .strong(),
+                                );
+                            })
+                            .body(|ui| {
                                 // Table: timestamp | file | message
                                 egui::Grid::new(format!("log_summary_grid_{}", sev.label()))
                                     .num_columns(3)
@@ -188,14 +214,26 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                                     .size(11.5)
                                                     .weak(),
                                             );
+                                            // Show just the filename; full path in tooltip.
+                                            let display_name =
+                                                std::path::Path::new(file.as_str())
+                                                    .file_name()
+                                                    .and_then(|n| n.to_str())
+                                                    .unwrap_or(file.as_str());
                                             ui.label(
-                                                egui::RichText::new(file)
+                                                egui::RichText::new(display_name)
                                                     .monospace()
                                                     .size(11.5)
                                                     .weak(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(msg).color(colour).size(11.5),
+                                            )
+                                            .on_hover_text(file.as_str());
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(msg)
+                                                        .color(colour)
+                                                        .size(11.5),
+                                                )
+                                                .truncate(),
                                             );
                                             ui.end_row();
                                         }
@@ -225,7 +263,46 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(6.0);
             ui.separator();
             if ui.button("Close").clicked() {
-                state.show_log_summary = false;
+                close_clicked = true;
             }
         });
+
+    // Write back: honour both the title-bar × and the body Close button.
+    state.show_log_summary = open && !close_clicked;
+}
+
+/// Sanitise a raw log message fragment for safe display in the preview grid.
+///
+/// Binary log files (CBS.log, some Windows Update logs) can contain thousands
+/// of non-printable bytes forming a single "line" with no newline characters.
+/// When rendered in an `egui::Grid` these overflow the column width, push the
+/// window wider than the scroll area, and displace the collapsing-header click
+/// region outside egui's clip rect — making the section impossible to collapse.
+///
+/// This function:
+/// 1. Replaces non-printable / control characters (except tab) with \u{FFFD}.
+/// 2. Hard-truncates to MAX_MSG_CHARS, appending `\u{2026}` (ellipsis) if cut.
+///
+/// The result is always valid UTF-8, ASCII-printable safe, and short enough
+/// that `Label::truncate()` in the grid can clip any remainder at column width.
+fn sanitise_preview(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c == '\t' || (!c.is_control() && c != '\r') {
+                c
+            } else {
+                '\u{FFFD}'
+            }
+        })
+        .collect();
+
+    let chars: Vec<char> = cleaned.chars().collect();
+    if chars.len() <= MAX_MSG_CHARS {
+        cleaned
+    } else {
+        let mut s: String = chars[..MAX_MSG_CHARS].iter().collect();
+        s.push('\u{2026}'); // ellipsis
+        s
+    }
 }

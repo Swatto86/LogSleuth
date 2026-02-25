@@ -36,6 +36,12 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         state.tail_scroll_to_bottom = false;
     }
 
+    // Bookmark toggle and correlation refresh are collected here and applied
+    // after show_rows so we do not mutable-borrow `state` while `entry` still
+    // holds an immutable reference into `state.entries`.
+    let mut bookmark_toggle: Option<u64> = None;
+    let mut correlation_update_needed = false;
+
     egui::ScrollArea::vertical()
         .auto_shrink([false; 2])
         .stick_to_bottom(stick)
@@ -51,6 +57,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 let is_selected = state.selected_index == Some(display_idx);
                 let sev_colour = theme::severity_colour(&entry.severity);
                 let file_colour = state.colour_for_file(&entry.source_file);
+                let entry_id = entry.id;
+                let is_bookmarked = state.is_bookmarked(entry_id);
+                let is_correlated = state.correlated_ids.contains(&entry_id);
 
                 // Format: [SEV ] HH:MM:SS | filename.log | first line of message
                 let ts = entry
@@ -77,7 +86,34 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .monospace()
                 .size(12.0);
 
-                // Each row: 4 px coloured file stripe | selectable label
+                // Teal tint on correlated rows (drawn first so that the gold
+                // bookmark tint on bookmarked+correlated rows takes visual priority).
+                if is_correlated {
+                    let tint_rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(ui.available_width(), row_height),
+                    );
+                    ui.painter().rect_filled(
+                        tint_rect,
+                        0.0,
+                        egui::Color32::from_rgba_premultiplied(20, 184, 166, 28),
+                    );
+                }
+
+                // Subtle gold background tint on bookmarked rows.
+                if is_bookmarked {
+                    let tint_rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(ui.available_width(), row_height),
+                    );
+                    ui.painter().rect_filled(
+                        tint_rect,
+                        0.0,
+                        egui::Color32::from_rgba_premultiplied(251, 191, 36, 18),
+                    );
+                }
+
+                // Each row: 4 px coloured file stripe | star button | selectable label
                 let response = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
@@ -85,20 +121,78 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         let (bar_rect, _) = ui
                             .allocate_exact_size(egui::vec2(4.0, row_height), egui::Sense::hover());
                         ui.painter().rect_filled(bar_rect, 0.0, file_colour);
+
+                        // Bookmark star: gold when bookmarked, dim outline when not.
+                        let star_char = if is_bookmarked {
+                            "\u{2605}"
+                        } else {
+                            "\u{2606}"
+                        };
+                        let star_colour = if is_bookmarked {
+                            egui::Color32::from_rgb(251, 191, 36) // amber
+                        } else {
+                            ui.style().visuals.weak_text_color()
+                        };
+                        let star_btn = ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(star_char).color(star_colour).size(11.0),
+                                )
+                                .small()
+                                .frame(false)
+                                .min_size(egui::vec2(14.0, row_height)),
+                            )
+                            .on_hover_text(if is_bookmarked {
+                                "Remove bookmark"
+                            } else {
+                                "Bookmark this entry"
+                            });
+                        if star_btn.clicked() {
+                            bookmark_toggle = Some(entry_id);
+                        }
+
                         ui.selectable_label(is_selected, row_text)
                     })
                     .inner;
 
                 if response.clicked() {
                     state.selected_index = Some(display_idx);
+                    // Flag for correlation recompute; must happen outside show_rows
+                    // because update_correlation() takes &mut self which conflicts
+                    // with the immutable borrow of state.entries (via `entry`).
+                    correlation_update_needed = true;
                 }
 
-                // Show full timestamp as tooltip for entries with date info
-                if let Some(ts_full) = entry.timestamp {
-                    response.on_hover_text(ts_full.format("%Y-%m-%d %H:%M:%S UTC").to_string());
-                }
+                // Show full path + timestamp as tooltip on hover.
+                response.on_hover_ui(|ui| {
+                    if let Some(ts_full) = entry.timestamp {
+                        ui.label(ts_full.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+                    }
+                    ui.label(
+                        egui::RichText::new(entry.source_file.display().to_string())
+                            .monospace()
+                            .small(),
+                    );
+                });
             }
         });
+
+    // Apply any pending bookmark toggle after the scroll area releases `state`.
+    if let Some(id) = bookmark_toggle {
+        state.toggle_bookmark(id);
+        // In bookmarks-only mode, removing a bookmark must refresh the
+        // timeline immediately so the entry disappears from view.
+        if state.filter_state.bookmarks_only {
+            state.apply_filters();
+        }
+    }
+
+    // Recompute the correlation window for the newly selected entry (if any).
+    // This is deferred from the click handler above so the &mut self call does
+    // not conflict with the immutable entry borrow inside show_rows.
+    if correlation_update_needed {
+        state.update_correlation();
+    }
 }
 
 /// Return the last `max` characters of `s`, right-aligned.

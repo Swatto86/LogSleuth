@@ -28,3 +28,13 @@ error = ["ERROR", "ERR", "FAIL", "FAILED", "Exception"]
 warning = ["WARNING", "WARN"]
 info = ["INFO"]
 debug = ["DEBUG", "TRACE", "VERBOSE"]
+
+# Regex-based severity override: applied when the parsed severity is Unknown
+# (no level capture group, or level string not in severity_mapping).
+# Catches bracket-style markers and word-bounded keywords with regex precision.
+[severity_override]
+critical = ['\[CRIT(ICAL)?\]', '\[FATAL\]']
+error    = ['\[ERR(OR)?\]', '\bException\b', '\bStackTrace\b']
+warning  = ['\[WARN(ING)?\]']
+info     = ['\[INFO(RMATION)?\]']
+debug    = ['\[DEBUG\]', '\[TRACE\]', '\[VERBOSE\]']

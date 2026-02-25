@@ -182,6 +182,15 @@ pub struct FormatProfile {
     /// Matching is case-insensitive.
     pub severity_mapping: HashMap<Severity, Vec<String>>,
 
+    /// Optional compiled regex patterns applied to the **message text** when
+    /// the primary severity determination (level capture + severity_mapping)
+    /// returns Unknown, or when there is no level capture group and message
+    /// keyword inference finds nothing.  Checked in Severity order
+    /// (Critical first).  First matching pattern wins.
+    ///
+    /// Populated from the optional `[severity_override]` TOML section.
+    pub severity_override: HashMap<Severity, Vec<regex::Regex>>,
+
     /// Whether this is a built-in profile (true) or user-defined (false).
     pub is_builtin: bool,
 }
@@ -223,6 +232,29 @@ impl FormatProfile {
         }
 
         Severity::Info // Default to Info for unclassified messages
+    }
+
+    /// Apply regex-based severity override patterns against `text`.
+    ///
+    /// Patterns are compiled from the optional `[severity_override]` TOML
+    /// section.  Checked in `Severity::all()` order (most severe first).
+    /// Returns the first matching severity, or `None` if no pattern matches.
+    ///
+    /// Unlike `infer_severity_from_message` (which uses plain substring
+    /// matching against the `severity_mapping` strings), these patterns can
+    /// use full regex syntax — e.g. `\[WARN\]` to require literal brackets,
+    /// or `\bERROR\b` for word-boundary precision.
+    pub fn apply_severity_override(&self, text: &str) -> Option<Severity> {
+        for severity in Severity::all() {
+            if let Some(patterns) = self.severity_override.get(severity) {
+                for pattern in patterns {
+                    if pattern.is_match(text) {
+                        return Some(*severity);
+                    }
+                }
+            }
+        }
+        None
     }
 }
 

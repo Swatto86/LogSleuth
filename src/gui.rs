@@ -86,6 +86,8 @@ impl eframe::App for LogSleuthApp {
                     // Entries were sorted chronologically by the background
                     // thread before streaming, so only filters need applying.
                     self.state.apply_filters();
+                    // Persist the session so the next launch can restore this state.
+                    self.state.save_session();
                 }
                 crate::core::model::ScanProgress::Warning { message } => {
                     self.state.warnings.push(message);
@@ -152,6 +154,16 @@ impl eframe::App for LogSleuthApp {
         if let Some(path) = self.state.pending_scan.take() {
             self.state.clear();
             self.state.scan_path = Some(path.clone());
+            self.scan_manager.start_scan(
+                path,
+                self.state.profiles.clone(),
+                DiscoveryConfig::default(),
+            );
+        }
+        // initial_scan: set at startup when restoring a previous session.
+        // Unlike pending_scan, does NOT call clear() so the restored
+        // filter/colour/bookmark state is preserved during the re-scan.
+        if let Some(path) = self.state.initial_scan.take() {
             self.scan_manager.start_scan(
                 path,
                 self.state.profiles.clone(),
@@ -339,6 +351,23 @@ impl eframe::App for LogSleuthApp {
                             ui.close_menu();
                         }
                     });
+                    ui.separator();
+                    let has_bookmarks = self.state.bookmark_count() > 0;
+                    ui.add_enabled_ui(has_bookmarks, |ui| {
+                        let bm_label = format!(
+                            "Copy Bookmark Report ({} entries)",
+                            self.state.bookmark_count()
+                        );
+                        if ui.button(bm_label).clicked() {
+                            let report = self.state.bookmarks_report();
+                            ctx.copy_text(report);
+                            self.state.status_message = format!(
+                                "Copied bookmark report ({} entries) to clipboard.",
+                                self.state.bookmark_count()
+                            );
+                            ui.close_menu();
+                        }
+                    });
                 });
             });
         });
@@ -415,5 +444,12 @@ impl eframe::App for LogSleuthApp {
         // Summary dialogs (modal-ish)
         ui::panels::summary::render(ctx, &mut self.state);
         ui::panels::log_summary::render(ctx, &mut self.state);
+    }
+
+    /// Called by eframe when the application window is about to close.
+    ///
+    /// Saves the current session so the next launch can restore it.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.state.save_session();
     }
 }

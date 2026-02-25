@@ -153,7 +153,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         ui.painter().circle_filled(dot_rect.center(), 4.0, colour);
                         ui.label(egui::RichText::new(name).small().strong());
                         ui.label(egui::RichText::new(size_text).small().weak());
-                    });
+                    })
+                    .response
+                    .on_hover_text(file.path.display().to_string());
                     ui.label(
                         egui::RichText::new(profile_text)
                             .small()

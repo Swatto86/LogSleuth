@@ -57,6 +57,7 @@ Requirements are tagged where their implementation status is notable:
 | PROF-06 | Auto-detection: LogSleuth reads the first N lines (default: 20) of each file and attempts to match against all loaded profiles by regex hit rate, selecting the highest-confidence match |
 | PROF-07 | Users can manually override the detected profile for any file via the UI |
 | PROF-08 | Files that match no profile are assigned a fallback "plain text" profile (no timestamp/level extraction, full-text only) |
+| PROF-09 | `[IMPL]` A profile may optionally define a `[severity_override]` section containing regex pattern lists per severity level. These patterns are applied: (a) when a `level` capture group is present but `severity_mapping` returns Unknown, as a second-chance lookup; (b) when no `level` capture group exists, before the keyword substring fallback (`infer_severity_from_message`). Override patterns are compiled at profile load time using the same size/complexity guard as `line_pattern`; invalid patterns fail profile validation with an actionable error. |
 
 #### 2.2.1 Profile Schema
 
@@ -149,13 +150,11 @@ critical = ["Critical", "Fatal"]
 
 ### 2.6 Cross-Log Correlation
 
-> **[FUTURE -- Deferred to post-v1.0]** The requirements in this section are planned but not yet implemented.
-
 | ID | Requirement |
 |----|-------------|
-| CORR-01 | Selecting a time window in one log file highlights all entries across all files within that window |
-| CORR-02 | "Show context" action on any entry: display entries from all files within a configurable time window (default: +/- 30 seconds) |
-| CORR-03 | Correlation view is a filtered subset of the unified timeline, not a separate view |
+| CORR-01 | `[IMPL]` Selecting any timeline entry activates a teal-coloured correlation overlay: all entries across all loaded files whose timestamps fall within `[anchor - window, anchor + window]` are highlighted with a teal background tint. The overlay updates immediately on selection and does not affect the active filter (entries are not hidden). |
+| CORR-02 | `[IMPL]` The correlation window size is configurable in the Filters panel via a text input (Enter to commit). The value is clamped to `[MIN_CORRELATION_WINDOW_SECS = 1, MAX_CORRELATION_WINDOW_SECS = 3600]` with the default `DEFAULT_CORRELATION_WINDOW_SECS = 30`. Invalid input resets the buffer to the current valid value. |
+| CORR-03 | `[IMPL]` A toggle button in the Filters panel enables/disables the correlation overlay. When active it shows `+/-Ns` in teal and a badge counting the correlated entries. The overlay is cleared when the correlation is disabled, when the selection changes with correlation off, or when a new scan starts. Entries without a parsed timestamp are excluded from the correlation window (they have no time reference). |
 
 ### 2.7 Export
 
@@ -174,6 +173,33 @@ critical = ["Critical", "Fatal"]
 | SUMM-01 | `[IMPL]` After scanning completes, display a summary: total files scanned, total entries parsed, entries by severity, files with errors, parse error count, scan duration |
 | SUMM-02 | `[IMPL]` Summary includes per-file breakdown: file path, format profile, entry count, error count, time range (earliest/latest timestamp) |
 | SUMM-03 | `[IMPL]` Summary is accessible at any time via **File > Scan Summary** (`Ctrl+S`) after a scan completes |
+
+### 2.9 Bookmarks & Annotations
+
+| ID | Requirement |
+|----|-------------|
+| BM-01 | `[IMPL]` User can bookmark any timeline entry by clicking the star button (★/☆) on the row. A second click removes the bookmark. |
+| BM-02 | `[IMPL]` Bookmarked rows display a gold star (★) and a subtle amber background tint distinguishing them from non-bookmarked entries. |
+| BM-03 | `[IMPL]` A **Bookmarks (N)** toggle button in the filter panel filters the timeline to show only bookmarked entries; toggling it again restores the previous view. |
+| BM-04 | `[IMPL]` A **x clear bm** button in the filter panel removes all bookmarks and resets the bookmarks-only filter in one action. |
+| BM-05 | `[IMPL]` **View > Copy Bookmark Report** generates a plain-text report (timestamp, severity, filename, message preview, annotation label) sorted chronologically and copies it to the clipboard. The menu item is disabled when no bookmarks exist. |
+| BM-06 | `[IMPL]` Bookmarks are cleared when a new scan is started (`clear()` is called). They are preserved across filter changes within a session. |
+| BM-07 | `[FUTURE]` In-place annotation: double-click a bookmarked star to type a short label that appears in the report. |
+
+---
+
+### 2.10 Session Persistence
+
+| ID | Requirement |
+|----|-------------|
+| SP-01 | `[IMPL]` On scan completion and on application exit, LogSleuth saves a session snapshot to `<platform data dir>/session.json` (Windows: `%APPDATA%\LogSleuth\session.json`). |
+| SP-02 | `[IMPL]` The session snapshot contains: last scan directory path, active filter state (severity levels, source file list, text search, regex, fuzzy flag, relative time window, bookmarks-only flag), per-file colour assignments (RGBA), bookmark IDs and labels, and the correlation window size. |
+| SP-03 | `[IMPL]` Log entries are **not** persisted. On restore, the saved scan path is re-parsed so the view always reflects current file contents. |
+| SP-04 | `[IMPL]` On startup, LogSleuth silently loads the previous session. A missing, corrupt, or version-mismatched file is ignored \u2014 the application always starts cleanly. |
+| SP-05 | `[IMPL]` Session restore uses `initial_scan` (not `pending_scan`) so the restored filter/colour/bookmark state is preserved during the re-scan rather than being wiped by `clear()`. |
+| SP-06 | `[IMPL]` A path supplied on the CLI always overrides the session scan path. |
+| SP-07 | `[IMPL]` Session writes are atomic: the file is written to a temporary path (`.json.tmp`) then renamed to the final name. A crash mid-write never corrupts the previous session. |
+| SP-08 | `[IMPL]` The session file uses a `version` field. Mismatched versions discard the session silently. The current version is `1`. |
 
 ---
 
@@ -223,6 +249,7 @@ FormatProfile {
     timestamp_format: String,
     multiline_mode: MultilineMode,     // Continuation | Skip | Raw
     severity_mapping: HashMap<Severity, Vec<String>>,
+    severity_override: HashMap<Severity, Vec<Regex>>,  // optional; compiled at load time
 }
 ```
 
@@ -308,10 +335,10 @@ All cross-thread communication uses `std::sync::mpsc` channels. No shared mutabl
 | `core::discovery` | Recursive file discovery with glob matching | `core::model` |
 | `core::profile` | Profile TOML parsing, validation, auto-detection | `core::model` |
 | `core::parser` | Stream-oriented log parsing using profiles | `core::model`, `core::profile` |
-| `core::filter` | Composable filter engine: severity, text, regex, absolute time bounds, source file whitelist; `FilterState` holds `relative_time_secs` (rolling window) and `relative_time_input` (UI buffer) | `core::model` |
+| `core::filter` | Composable filter engine: severity, text, regex, absolute time bounds, source file whitelist; `FilterState` holds `relative_time_secs`, `relative_time_input`, `hide_all_sources` (explicit none-selected state), `bookmarks_only`, and `bookmarked_ids` (populated by app layer before each call so core stays pure) | `core::model` |
 | `core::export` | CSV/JSON serialisation | `core::model` |
 | `app::scan` | Scan lifecycle management, threading, progress | `core::*` |
-| `app::state` | Application state (`pending_scan`, `request_cancel`, `file_list_search`); `apply_filters()` computes absolute time bound from `relative_time_secs` before delegating to `core::filter` | `core::model` |
+| `app::state` | Application state (`pending_scan`, `request_cancel`, `file_list_search`, `bookmarks: HashMap<u64,String>`, `correlation_active`, `correlation_window_secs`, `correlated_ids: HashSet<u64>`); `apply_filters()` computes absolute time bound and populates `bookmarked_ids`; `update_correlation()` recomputes the correlation overlay from the selected entry; bookmark helpers: `toggle_bookmark`, `is_bookmarked`, `bookmark_count`, `clear_bookmarks`, `bookmarks_report` | `core::model` |
 | `app::profile_mgr` | Load built-in + user profiles, handle overrides | `core::profile` |
 | `ui::panels` | UI panels (discovery, timeline, detail, summary, filters); filters panel includes relative time quick-buttons and source file checklist with search | `app::*` |
 | `ui::theme` | Colour scheme, severity colours, layout constants | None |
@@ -491,9 +518,8 @@ GitHub Actions workflow triggered by version tag push:
 ## 11. Future Considerations (Post v1.0)
 
 - Compressed log support (`.gz`, `.zip`)
-- Real-time log tailing with configurable poll interval
 - Remote log sources (SSH, SMB)
-- Bookmarks and annotations on log entries
+- In-place bookmark annotations (typed labels on bookmarked entries)
 - Saved filter presets
 - Log diff: compare two time windows or two scan sessions
 - Plugin system for custom analysers

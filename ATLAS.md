@@ -1,6 +1,6 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 8 complete -- log-entry summarisation, UI layout improvements, font upgrade (Consolas primary monospace)
+> **Status**: Increment 12 complete -- persistent sessions
 > **Last updated**: 2026-02-25
 
 ---
@@ -64,28 +64,29 @@ LogSleuth/
 |   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring; sidebar split into two independent ScrollAreas (discovery top ~45%, filters bottom)
 |   +-- app/
 |   |   +-- mod.rs
-|   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
-|   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo
-|   |   +-- state.rs             # Application state; tail_active, tail_auto_scroll, tail_scroll_to_bottom, request_start/stop_tail flags; show_log_summary flag; next_entry_id() helper
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
+|   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
+|   |   +-- session.rs           # Session persistence: SessionData + PersistedFilter structs (serde JSON); session_path(), save() (atomic write via .json.tmp rename), load() (returns None on missing/corrupt/version-mismatch — never errors to user); SESSION_VERSION const for forward-compat
+|   |   +-- state.rs             # Application state; tail flags; show_log_summary; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), update_correlation(), next_entry_id(), save_session(), restore_from_session()
+|   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo
 |   +-- core/
 |   |   +-- mod.rs
-|   |   +-- model.rs             # LogEntry, Severity, FormatProfile structs
+|   |   +-- model.rs             # LogEntry, Severity, FormatProfile structs; FormatProfile includes severity_override: HashMap<Severity,Vec<Regex>> + apply_severity_override() method
 |   |   +-- discovery.rs         # Recursive traversal (walkdir), glob include/exclude, filter_entry dir exclusion, metadata
-|   |   +-- profile.rs           # TOML profile parsing, validation, auto-detection scoring
-|   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing
-|   |   +-- filter.rs            # Composable filter engine: severity, text (exact or fuzzy subsequence), regex, absolute/relative time window, source file whitelist; fuzzy bool field on FilterState
 |   |   +-- export.rs            # CSV/JSON serialisation
+|   |   +-- filter.rs            # Composable filter engine: severity, text (exact or fuzzy subsequence), regex, absolute/relative time window, source file whitelist (hide_all_sources flag for explicit "none" state); bookmark filter (bookmarks_only + bookmarked_ids populated by app layer)
+|   |   +-- profile.rs           # TOML profile parsing, validation, auto-detection scoring; SeverityOverrideDef TOML struct; override patterns compiled via compile_regex in validate_and_compile
+|   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing
 |   +-- ui/
 |   |   +-- mod.rs
 |   |   +-- panels/
 |   |   |   +-- mod.rs
 |   |   |   +-- discovery.rs     # Directory picker, scan controls, file list (max_height 360 px)
-|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row indicates source file via FILE_COLOUR_PALETTE
+|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
 |   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
-|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset; "Summary" quick-button opens log_summary panel
+|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset; "Summary" quick-button; "Bookmarks (N)" toggle + "clear bm" button
 |   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=290
 |   +-- platform/
 |   |   +-- mod.rs

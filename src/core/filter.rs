@@ -17,8 +17,13 @@ pub struct FilterState {
     /// Severity levels to include (empty = all).
     pub severity_levels: HashSet<Severity>,
 
-    /// Source files to include (empty = all).
+    /// Source files to include (empty = all, unless `hide_all_sources` is true).
     pub source_files: HashSet<PathBuf>,
+
+    /// When true, no source file passes the filter — representing the "none
+    /// selected" state.  An empty `source_files` set alone cannot represent
+    /// this because empty is interpreted as "all pass".
+    pub hide_all_sources: bool,
 
     /// Start of time range (inclusive). None = no lower bound.
     pub time_start: Option<DateTime<Utc>>,
@@ -51,6 +56,15 @@ pub struct FilterState {
     /// UI text buffer for the custom relative-time input (stores minutes typed
     /// by the user before parsing).  Not used by the filter logic itself.
     pub relative_time_input: String,
+
+    /// When true, only entries whose IDs appear in `bookmarked_ids` pass
+    /// the filter.  The set is populated by the app layer before each filter
+    /// application so that core remains a pure, state-free function.
+    pub bookmarks_only: bool,
+
+    /// The set of bookmarked entry IDs used when `bookmarks_only` is true.
+    /// Populated from `AppState::bookmarks` by `apply_filters()` in the app layer.
+    pub bookmarked_ids: HashSet<u64>,
 }
 
 impl FilterState {
@@ -59,11 +73,13 @@ impl FilterState {
     pub fn is_empty(&self) -> bool {
         self.severity_levels.is_empty()
             && self.source_files.is_empty()
+            && !self.hide_all_sources
             && self.time_start.is_none()
             && self.time_end.is_none()
             && self.text_search.is_empty()
             && self.regex_search.is_none()
             && self.relative_time_secs.is_none()
+            && !self.bookmarks_only
     }
 
     /// Set the regex search pattern, compiling it.
@@ -174,6 +190,9 @@ fn matches_all(entry: &LogEntry, filter: &FilterState, text_lower: &str) -> bool
     }
 
     // Source file filter
+    if filter.hide_all_sources {
+        return false;
+    }
     if !filter.source_files.is_empty() && !filter.source_files.contains(&entry.source_file) {
         return false;
     }
@@ -212,6 +231,11 @@ fn matches_all(entry: &LogEntry, filter: &FilterState, text_lower: &str) -> bool
         if !regex.is_match(&entry.message) {
             return false;
         }
+    }
+
+    // Bookmark filter
+    if filter.bookmarks_only && !filter.bookmarked_ids.contains(&entry.id) {
+        return false;
     }
 
     true
@@ -423,6 +447,35 @@ mod tests {
         filter.relative_time_secs = Some(900);
         assert!(!filter.is_empty());
         filter.relative_time_secs = None;
+        assert!(filter.is_empty());
+    }
+
+    #[test]
+    fn test_bookmark_filter_returns_only_bookmarked_entries() {
+        let entries = vec![
+            make_entry(0, Severity::Info, "entry zero"),
+            make_entry(1, Severity::Error, "entry one"),
+            make_entry(2, Severity::Info, "entry two"),
+        ];
+        let mut bookmarked_ids = HashSet::new();
+        bookmarked_ids.insert(0u64);
+        bookmarked_ids.insert(2u64);
+        let filter = FilterState {
+            bookmarks_only: true,
+            bookmarked_ids,
+            ..Default::default()
+        };
+        let result = apply_filters(&entries, &filter);
+        assert_eq!(result, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_bookmark_filter_tracked_in_is_empty() {
+        let mut filter = FilterState::default();
+        assert!(filter.is_empty());
+        filter.bookmarks_only = true;
+        assert!(!filter.is_empty());
+        filter.bookmarks_only = false;
         assert!(filter.is_empty());
     }
 }

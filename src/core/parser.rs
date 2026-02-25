@@ -85,11 +85,34 @@ pub fn parse_content(
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_else(|| line.to_string());
 
-            // Extract severity: from explicit 'level' field or infer from message
+            // Extract severity:
+            //   1. If the profile captured a `level` field, map it via
+            //      severity_mapping (case-insensitive exact match).
+            //   2. If step 1 returns Unknown (unrecognised level string),
+            //      fall back to regex override patterns on the message.
+            //   3. If there is no `level` capture group, try regex override
+            //      patterns first, then plain-keyword message inference.
+            // This layered approach means: structured profiles get precise
+            // level-based classification; plain-text and fallback profiles can
+            // classify entries via [WARN]-style embedded markers.
             let severity = if let Some(level_match) = caps.name("level") {
-                profile.map_severity(level_match.as_str())
+                let mapped = profile.map_severity(level_match.as_str());
+                if mapped == crate::core::model::Severity::Unknown {
+                    // Level field present but value not in severity_mapping --
+                    // try regex override on the message as a second chance.
+                    profile
+                        .apply_severity_override(&message)
+                        .unwrap_or(crate::core::model::Severity::Unknown)
+                } else {
+                    mapped
+                }
             } else {
-                profile.infer_severity_from_message(&message)
+                // No level capture -- regex override takes priority over
+                // keyword substring matching so patterns like \[WARN\] win
+                // before the generic substring fallback fires.
+                profile
+                    .apply_severity_override(&message)
+                    .unwrap_or_else(|| profile.infer_severity_from_message(&message))
             };
 
             // Parse timestamp using the profile's format string.
