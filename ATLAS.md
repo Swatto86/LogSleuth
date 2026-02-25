@@ -1,6 +1,6 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 4a complete — UI Polish, Virtual Scrolling, Export, Scan Summary, Relative Time Filter, Source File Filter with search
+> **Status**: Increment 5 complete — NSIS installer, macOS DMG builder, Linux AppImage builder, GitHub Actions CI + Release workflows
 > **Last updated**: 2026-07-10
 
 ---

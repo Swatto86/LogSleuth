@@ -86,12 +86,14 @@
 **Test results: 40 unit tests + 9 E2E tests = 49 total, all passing**
 
 ## Increment 5: Release Pipeline
-**Status: NOT STARTED**
+**Status: COMPLETE**
 
-- [ ] NSIS installer script (Windows)
-- [ ] GitHub Actions CI workflow
-- [ ] GitHub Actions release workflow
-- [x] update-application.ps1 release script
+- [x] `installer/windows/logsleuth.nsi` - NSIS installer with MultiUser.nsh support (per-user and per-machine), Start Menu shortcuts, Add/Remove Programs registry entry, clean uninstaller; version string updated automatically by `update-application.ps1`
+- [x] `installer/macos/create-dmg.sh` - Builds a macOS .app bundle (Info.plist, binary, .icns via sips/iconutil) then produces a DMG with `create-dmg` (falls back to plain `hdiutil` if unavailable)
+- [x] `installer/linux/create-appimage.sh` - Builds a portable Linux AppImage: constructs AppDir (AppRun, .desktop, icon, binary), downloads `appimagetool` automatically if not in PATH
+- [x] `.github/workflows/ci.yml` - Triggered on push/PR to main; matrix build (ubuntu-latest, windows-latest, macos-latest); steps: `cargo build --release`, `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo test`; Linux apt deps for eframe/rfd
+- [x] `.github/workflows/release.yml` - Triggered on `v*.*.*` tag push; three parallel build jobs (Windows: NSIS, macOS: DMG via `create-dmg`, Linux: AppImage via `appimagetool`); `create-release` job downloads all artefacts and publishes GitHub Release with `softprops/action-gh-release@v2`
+- [x] `update-application.ps1` release script (previously complete)
 - [x] Application icon embedding (ICO for Windows, via winres build.rs; runtime PNG via eframe viewport `with_icon`)
-- [ ] DMG builder (macOS)
-- [ ] AppImage builder (Linux)
+
+**Test results: 40 unit tests + 9 E2E tests = 49 total, all passing**

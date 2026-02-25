@@ -1,0 +1,168 @@
+name: Release
+
+# Triggered when a version tag (e.g. v1.2.3) is pushed.
+# update-application.ps1 creates this tag as part of the release workflow.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# ---------------------------------------------------------------------------
+# Windows: build binary + NSIS installer
+# ---------------------------------------------------------------------------
+
+jobs:
+  build-windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Install NSIS
+        run: choco install nsis --yes --no-progress
+
+      - name: Build NSIS installer
+        # makensis is installed to C:\Program Files (x86)\NSIS\makensis.exe
+        # which choco adds to PATH.
+        run: makensis installer\windows\logsleuth.nsi
+        shell: cmd
+
+      - name: Upload Windows installer artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: LogSleuth-Setup-*.exe
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# macOS: build binary + DMG
+# ---------------------------------------------------------------------------
+
+  build-macos:
+    name: Build macOS DMG
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build DMG
+        run: |
+          chmod +x installer/macos/create-dmg.sh
+          VERSION="${GITHUB_REF_NAME#v}"
+          installer/macos/create-dmg.sh "$VERSION"
+
+      - name: Upload macOS DMG artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: LogSleuth-*.dmg
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# Linux: build binary + AppImage
+# ---------------------------------------------------------------------------
+
+  build-linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system libraries (eframe / egui / rfd)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev \
+            pkg-config \
+            wget \
+            fuse
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Build AppImage
+        run: |
+          chmod +x installer/linux/create-appimage.sh
+          VERSION="${GITHUB_REF_NAME#v}"
+          installer/linux/create-appimage.sh "$VERSION"
+
+      - name: Upload Linux AppImage artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: LogSleuth-*.AppImage
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# Create GitHub Release and attach all artefacts
+# ---------------------------------------------------------------------------
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create releases and upload assets
+
+    steps:
+      - name: Download all build artefacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true   # all artefacts land in the working directory
+
+      - name: List downloaded artefacts (diagnostic)
+        run: ls -lh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: LogSleuth ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            LogSleuth-Setup-*.exe
+            LogSleuth-*.dmg
+            LogSleuth-*.AppImage
