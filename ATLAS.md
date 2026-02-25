@@ -107,6 +107,7 @@ LogSleuth/
 |   +-- apache_combined.toml     # Apache / nginx Combined Access log
 |   +-- nginx_error.toml         # nginx error log
 |   +-- windows_dhcp.toml        # Windows DHCP Server daily logs
+|   +-- intune_ime.toml          # Microsoft Intune Management Extension (CMTrace format)
 |   +-- syslog_rfc3164.toml      # BSD syslog
 |   +-- syslog_rfc5424.toml      # IETF syslog
 |   +-- json_lines.toml          # JSON Lines (generic)
