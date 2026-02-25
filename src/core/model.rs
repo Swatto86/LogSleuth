@@ -362,3 +362,23 @@ pub enum ScanProgress {
     /// finishes.
     EntriesBatch { entries: Vec<LogEntry> },
 }
+
+// =============================================================================
+// Tail Progress (for live tail UI updates)
+// =============================================================================
+
+/// Progress messages sent from the tail watcher thread to the UI thread.
+#[derive(Debug, Clone)]
+pub enum TailProgress {
+    /// Tail watcher started successfully; watching this many files.
+    Started { file_count: usize },
+
+    /// One or more new entries were parsed from a watched file.
+    NewEntries { entries: Vec<LogEntry> },
+
+    /// Tail was stopped (either by user request or a fatal error).
+    Stopped,
+
+    /// A non-fatal per-file error occurred (file temporarily inaccessible etc).
+    FileError { path: PathBuf, message: String },
+}

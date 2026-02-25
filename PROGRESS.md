@@ -134,12 +134,34 @@
 
 **Test results: 45 unit tests + 9 E2E tests = 54 total, all passing**
 
+## Increment 7: Live Tail
+**Status: COMPLETE**
+
+- [x] `src/core/model.rs` - Added `TailProgress` enum: `Started { file_count }`, `NewEntries { entries }`, `Stopped`, `FileError { path, message }`.
+- [x] `src/util/constants.rs` - Added named constants: `TAIL_POLL_INTERVAL_MS = 500`, `TAIL_CANCEL_CHECK_INTERVAL_MS = 100`, `MAX_TAIL_READ_BYTES_PER_TICK = 512 KiB`.
+- [x] `src/app/tail.rs` (NEW) - `TailManager` with `start_tail()`, `stop_tail()`, `is_active()`, `poll_progress()`. Background `run_tail_watcher` poll loop:
+  - Seeds each file's byte offset to the **current file end** at start — only lines written *after* tail is activated are surfaced.
+  - Polls every 500 ms; cancel flag checked every 100 ms within the sleep.
+  - Per-file `partial` buffer carries incomplete lines across poll ticks so entries split across reads are assembled correctly.
+  - Offset advances by the number of raw bytes read unconditionally — no re-read of carry-over bytes.
+  - Detects file rotation/truncation (current size < offset) and resets offset to 0.
+  - Reads capped at `MAX_TAIL_READ_BYTES_PER_TICK` per file per tick.
+  - Decodes new bytes as lossy UTF-8. UTF-16 files (Windows system logs that are not line-appended) are a known out-of-scope limitation.
+  - Calls `parser::parse_content` on complete lines using the file's resolved profile — full profile support including regex, severity, timestamp, multiline.
+  - Per-file read/stat errors are non-fatal: sends `TailProgress::FileError` and continues to the next file.
+- [x] `src/app/mod.rs` - Exported `pub mod tail`.
+- [x] `src/app/state.rs` - Added: `tail_active`, `tail_auto_scroll` (default `true`), `tail_scroll_to_bottom` (one-shot scroll flag), `request_start_tail`, `request_stop_tail`. Added `next_entry_id() -> u64` helper. `clear()` resets tail flags (preserves `tail_auto_scroll` preference).
+- [x] `src/gui.rs` - Added `tail_manager: TailManager` field. Each frame: polls `tail_manager.poll_progress()`, appends `NewEntries` to `state.entries`, calls `apply_filters()`, sets `tail_scroll_to_bottom` flag. Handles `request_start_tail` (builds `TailFileInfo` list from discovered files, calls `tail_manager.start_tail`) and `request_stop_tail`. Schedules `request_repaint_after(500ms)` while tail is active. Green `● LIVE` badge in status bar when tail is active.
+- [x] `src/ui/panels/discovery.rs` - Live Tail controls shown after a scan when entries are loaded: **● Live Tail** button (green, starts tail) / **■ Stop Tail** button (red, stops tail) + **↓ Auto** toggle (green when active, grey when off).
+- [x] `src/ui/panels/timeline.rs` - `ScrollArea::stick_to_bottom(tail_active && tail_auto_scroll)` keeps the view pinned to newest entries while tail runs; user can scroll up freely and re-enable auto-scroll via the toggle.
+
+**Test results: 45 unit tests + 9 E2E tests = 54 total, all passing**
+
 ---
 
 ## Future Enhancements
 
 ### High Priority
-- [ ] **Live tail mode** — Watch one or more files for new lines appended after the initial parse and append them to the timeline in real time (inotify/ReadDirectoryChangesW).
 - [ ] **Regex-based severity override** — Allow profiles to define custom severity extraction rules so vendor-specific patterns (e.g. `[WARN]` in plain-text files) are classified correctly rather than defaulting to Unknown.
 - [ ] **Bookmark / annotation** — Mark specific timeline entries for later reference within a session; copy bookmarks to clipboard as a structured report.
 - [ ] **Time correlation window** — Clicking an entry in the timeline highlights all other entries within a configurable ±N seconds window across all loaded files (CMTrace behaviour).

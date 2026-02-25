@@ -28,8 +28,17 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     let row_height = theme::ROW_HEIGHT;
 
+    // Stick to the bottom while live tail + auto-scroll are both active so
+    // new entries scroll into view immediately as they arrive.
+    let stick = state.tail_active && state.tail_auto_scroll;
+    // After one frame of sticking, clear the one-shot flag.
+    if state.tail_scroll_to_bottom {
+        state.tail_scroll_to_bottom = false;
+    }
+
     egui::ScrollArea::vertical()
         .auto_shrink([false; 2])
+        .stick_to_bottom(stick)
         .show_rows(ui, row_height, filtered, |ui, row_range| {
             for display_idx in row_range {
                 let Some(&entry_idx) = state.filtered_indices.get(display_idx) else {

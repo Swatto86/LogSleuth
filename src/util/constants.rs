@@ -60,6 +60,21 @@ pub const MAX_PARSE_ERRORS_PER_FILE: usize = 1_000;
 pub const MAX_TOTAL_PARSE_ERRORS: usize = 10_000;
 
 // =============================================================================
+// Live tail limits
+// =============================================================================
+
+/// How often the tail watcher polls each watched file for new content (ms).
+pub const TAIL_POLL_INTERVAL_MS: u64 = 500;
+
+/// How often the cancel flag is checked within each poll sleep interval (ms).
+/// The background thread wakes every this many ms to check for cancellation.
+pub const TAIL_CANCEL_CHECK_INTERVAL_MS: u64 = 100;
+
+/// Maximum bytes read from a single file in one poll tick.
+/// Prevents a large burst of new content from stalling the entire poll loop.
+pub const MAX_TAIL_READ_BYTES_PER_TICK: usize = 512 * 1_024; // 512 KiB
+
+// =============================================================================
 // Profile limits
 // =============================================================================
 

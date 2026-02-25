@@ -57,9 +57,68 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .strong(),
         );
 
+        // Live Tail controls — available once files are loaded and no scan running.
+        if !state.scan_in_progress && !state.entries.is_empty() {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if state.tail_active {
+                    // Active: red stop button.
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("\u{25a0} Stop Tail")
+                                    .color(egui::Color32::from_rgb(239, 68, 68)),
+                            )
+                            .small(),
+                        )
+                        .on_hover_text("Stop watching files for new log lines")
+                        .clicked()
+                    {
+                        state.request_stop_tail = true;
+                    }
+                    // Auto-scroll toggle.
+                    let scroll_colour = if state.tail_auto_scroll {
+                        egui::Color32::from_rgb(34, 197, 94)
+                    } else {
+                        egui::Color32::from_rgb(107, 114, 128)
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("\u{2193} Auto")
+                                    .small()
+                                    .color(scroll_colour),
+                            )
+                            .small()
+                            .frame(false),
+                        )
+                        .on_hover_text("Toggle auto-scroll to newest entry")
+                        .clicked()
+                    {
+                        state.tail_auto_scroll = !state.tail_auto_scroll;
+                    }
+                } else {
+                    // Inactive: green start button.
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("\u{25cf} Live Tail")
+                                    .color(egui::Color32::from_rgb(34, 197, 94)),
+                            )
+                            .small(),
+                        )
+                        .on_hover_text("Watch loaded files for new log lines written in real time")
+                        .clicked()
+                    {
+                        state.request_start_tail = true;
+                    }
+                }
+            });
+        }
+
         egui::ScrollArea::vertical()
             .id_salt("discovery_files")
-            .max_height(200.0)
+            .max_height(360.0)
             .show(ui, |ui| {
                 for file in &state.discovered_files {
                     let name = file

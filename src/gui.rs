@@ -5,6 +5,7 @@
 
 use crate::app::scan::ScanManager;
 use crate::app::state::AppState;
+use crate::app::tail::TailManager;
 use crate::core::discovery::DiscoveryConfig;
 use crate::ui;
 
@@ -12,6 +13,7 @@ use crate::ui;
 pub struct LogSleuthApp {
     pub state: AppState,
     pub scan_manager: ScanManager,
+    pub tail_manager: TailManager,
 }
 
 impl LogSleuthApp {
@@ -20,6 +22,7 @@ impl LogSleuthApp {
         Self {
             state,
             scan_manager: ScanManager::new(),
+            tail_manager: TailManager::new(),
         }
     }
 }
@@ -102,6 +105,40 @@ impl eframe::App for LogSleuthApp {
             ctx.request_repaint();
         }
 
+        // Poll live tail progress.
+        let tail_messages = self.tail_manager.poll_progress();
+        let had_tail = !tail_messages.is_empty();
+        for msg in tail_messages {
+            match msg {
+                crate::core::model::TailProgress::Started { file_count } => {
+                    tracing::info!(files = file_count, "Live tail active");
+                }
+                crate::core::model::TailProgress::NewEntries { entries } => {
+                    self.state.entries.extend(entries);
+                    self.state.apply_filters();
+                    if self.state.tail_auto_scroll {
+                        self.state.tail_scroll_to_bottom = true;
+                    }
+                }
+                crate::core::model::TailProgress::FileError { path, message } => {
+                    let msg = format!("Tail warning — {}: {}", path.display(), message);
+                    tracing::warn!("{}", msg);
+                    self.state.warnings.push(msg);
+                }
+                crate::core::model::TailProgress::Stopped => {
+                    self.state.tail_active = false;
+                    self.state.status_message = "Live tail stopped.".to_string();
+                    tracing::info!("Live tail stopped");
+                }
+            }
+        }
+        // Keep repainting while tail is active so new entries appear promptly.
+        if had_tail || self.state.tail_active {
+            ctx.request_repaint_after(std::time::Duration::from_millis(
+                crate::util::constants::TAIL_POLL_INTERVAL_MS,
+            ));
+        }
+
         // If a relative time filter is active, refresh the time window each frame
         // and schedule a 1-second repaint so the rolling boundary stays current
         // as the clock advances even when nothing else is happening.
@@ -132,6 +169,49 @@ impl eframe::App for LogSleuthApp {
         if self.state.request_cancel {
             self.state.request_cancel = false;
             self.scan_manager.cancel_scan();
+        }
+
+        // request_start_tail: a panel wants to activate live tail.
+        if self.state.request_start_tail {
+            self.state.request_start_tail = false;
+            // Build TailFileInfo list from discovered files that have a resolved profile.
+            let files: Vec<crate::app::tail::TailFileInfo> = self
+                .state
+                .discovered_files
+                .iter()
+                .filter_map(|f| {
+                    let profile_id = f.profile_id.as_ref()?;
+                    let profile = self
+                        .state
+                        .profiles
+                        .iter()
+                        .find(|p| &p.id == profile_id)?
+                        .clone();
+                    Some(crate::app::tail::TailFileInfo {
+                        path: f.path.clone(),
+                        profile,
+                    })
+                })
+                .collect();
+            if files.is_empty() {
+                self.state.status_message = "No watchable files — run a scan first.".to_string();
+            } else {
+                let start_id = self.state.next_entry_id();
+                self.tail_manager.start_tail(files, start_id);
+                self.state.tail_active = true;
+                self.state.status_message = format!(
+                    "Live tail active — watching {} file(s).",
+                    self.state.discovered_files.len()
+                );
+            }
+        }
+
+        // request_stop_tail: a panel wants to stop live tail.
+        if self.state.request_stop_tail {
+            self.state.request_stop_tail = false;
+            self.tail_manager.stop_tail();
+            self.state.tail_active = false;
+            self.state.status_message = "Live tail stopped.".to_string();
         }
 
         // Top menu bar
@@ -252,6 +332,13 @@ impl eframe::App for LogSleuthApp {
                         self.state.show_summary = true;
                         ui.close_menu();
                     }
+                    let has_entries = !self.state.filtered_indices.is_empty();
+                    ui.add_enabled_ui(has_entries, |ui| {
+                        if ui.button("Log Summary").clicked() {
+                            self.state.show_log_summary = true;
+                            ui.close_menu();
+                        }
+                    });
                 });
             });
         });
@@ -259,6 +346,18 @@ impl eframe::App for LogSleuthApp {
         // Status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // LIVE badge — shown while tail is active.
+                if self.state.tail_active {
+                    ui.label(
+                        egui::RichText::new(" \u{25cf} LIVE ")
+                            .strong()
+                            .color(egui::Color32::from_rgb(34, 197, 94)) // Green 500
+                            .background_color(egui::Color32::from_rgba_premultiplied(
+                                34, 197, 94, 30,
+                            )),
+                    );
+                    ui.separator();
+                }
                 ui.label(&self.state.status_message);
                 // Cancel button visible only while a scan is running
                 if self.state.scan_in_progress && ui.small_button("Cancel").clicked() {
@@ -282,16 +381,30 @@ impl eframe::App for LogSleuthApp {
                 ui::panels::detail::render(ui, &self.state);
             });
 
-        // Left sidebar (discovery + filters)
+        // Left sidebar — two independent scroll areas so the file list and
+        // filter controls each get proportional room and scroll independently.
         egui::SidePanel::left("sidebar")
             .default_width(ui::theme::SIDEBAR_WIDTH)
             .resizable(true)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui::panels::discovery::render(ui, &mut self.state);
-                    ui.add_space(16.0);
-                    ui::panels::filters::render(ui, &mut self.state);
-                });
+                let available = ui.available_height();
+                // Discovery section: top ~45 % of the sidebar.
+                egui::ScrollArea::vertical()
+                    .id_salt("sidebar_discovery")
+                    .max_height(available * 0.45)
+                    .show(ui, |ui| {
+                        ui::panels::discovery::render(ui, &mut self.state);
+                    });
+
+                ui.separator();
+
+                // Filters section: remaining space.
+                egui::ScrollArea::vertical()
+                    .id_salt("sidebar_filters")
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui::panels::filters::render(ui, &mut self.state);
+                    });
             });
 
         // Central panel (timeline)
@@ -299,7 +412,8 @@ impl eframe::App for LogSleuthApp {
             ui::panels::timeline::render(ui, &mut self.state);
         });
 
-        // Summary dialog (modal-ish)
+        // Summary dialogs (modal-ish)
         ui::panels::summary::render(ctx, &mut self.state);
+        ui::panels::log_summary::render(ctx, &mut self.state);
     }
 }

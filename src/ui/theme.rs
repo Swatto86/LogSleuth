@@ -70,7 +70,7 @@ pub const STATUS_BG: Color32 = Color32::from_rgb(31, 41, 55); // Gray 800
 pub const STATUS_TEXT: Color32 = Color32::from_rgb(209, 213, 219); // Gray 300
 
 /// Layout constants.
-pub const SIDEBAR_WIDTH: f32 = 250.0;
+pub const SIDEBAR_WIDTH: f32 = 290.0;
 pub const DETAIL_PANE_HEIGHT: f32 = 200.0;
 pub const ROW_HEIGHT: f32 = 20.0;
 pub const STATUS_BAR_HEIGHT: f32 = 28.0;

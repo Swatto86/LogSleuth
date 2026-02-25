@@ -48,6 +48,9 @@ pub struct AppState {
     /// Whether to show the scan summary dialog.
     pub show_summary: bool,
 
+    /// Whether to show the log-entry summary panel.
+    pub show_log_summary: bool,
+
     /// Whether debug mode is enabled.
     pub debug_mode: bool,
 
@@ -73,6 +76,29 @@ pub struct AppState {
     /// mode (adds to the current session without clearing existing entries).
     /// Consumed and cleared by `gui.rs` in the update loop each frame.
     pub pending_single_files: Option<Vec<PathBuf>>,
+
+    // -------------------------------------------------------------------------
+    // Live tail state
+    // -------------------------------------------------------------------------
+    /// Whether the live tail watcher is currently running.
+    pub tail_active: bool,
+
+    /// When true, the timeline auto-scrolls to the bottom whenever new tail
+    /// entries arrive. The user can toggle this off to scroll back through history.
+    pub tail_auto_scroll: bool,
+
+    /// Set to `true` by the gui.rs tail message handler whenever new entries
+    /// arrive. Consumed and cleared by `timeline.rs` after it triggers the
+    /// scroll-to-bottom, so scroll only fires on the frame new entries appear.
+    pub tail_scroll_to_bottom: bool,
+
+    /// Set by a UI panel to request starting the live tail watcher.
+    /// Consumed and cleared by `gui.rs` in the update loop each frame.
+    pub request_start_tail: bool,
+
+    /// Set by a UI panel to request stopping the live tail watcher.
+    /// Consumed and cleared by `gui.rs` in the update loop each frame.
+    pub request_stop_tail: bool,
 }
 
 impl AppState {
@@ -91,12 +117,18 @@ impl AppState {
             status_message: "Ready. Open a directory to begin scanning.".to_string(),
             warnings: Vec::new(),
             show_summary: false,
+            show_log_summary: false,
             debug_mode,
             pending_scan: None,
             request_cancel: false,
             file_list_search: String::new(),
             file_colours: HashMap::new(),
             pending_single_files: None,
+            tail_active: false,
+            tail_auto_scroll: true,
+            tail_scroll_to_bottom: false,
+            request_start_tail: false,
+            request_stop_tail: false,
         }
     }
 
@@ -130,6 +162,14 @@ impl AppState {
         self.selected_index
             .and_then(|idx| self.filtered_indices.get(idx))
             .and_then(|&entry_idx| self.entries.get(entry_idx))
+    }
+
+    /// Return the next available monotonic entry ID.
+    ///
+    /// Used when starting the live tail watcher so tail entry IDs continue
+    /// from where the scan left off and do not collide with existing IDs.
+    pub fn next_entry_id(&self) -> u64 {
+        self.entries.last().map(|e| e.id + 1).unwrap_or(0)
     }
 
     /// Assign a palette colour to `path` if it does not already have one.
@@ -179,11 +219,18 @@ impl AppState {
         self.scan_summary = None;
         self.warnings.clear();
         self.show_summary = false;
+        self.show_log_summary = false;
         self.status_message = "Ready.".to_string();
         self.pending_scan = None;
         self.request_cancel = false;
         self.file_list_search.clear();
         self.file_colours.clear();
         self.pending_single_files = None;
+        // Stop tail on clear — a new scan starts fresh.
+        self.tail_active = false;
+        self.tail_scroll_to_bottom = false;
+        self.request_start_tail = false;
+        self.request_stop_tail = false;
+        // tail_auto_scroll preference is intentionally preserved across clears.
     }
 }

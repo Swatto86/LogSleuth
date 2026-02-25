@@ -35,6 +35,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             };
             state.apply_filters();
         }
+        // Log Summary shortcut (disabled when no filtered entries yet)
+        let has_entries = !state.filtered_indices.is_empty();
+        ui.add_enabled_ui(has_entries, |ui| {
+            if ui.small_button("Summary").clicked() {
+                state.show_log_summary = true;
+            }
+        });
     });
 
     ui.add_space(6.0);

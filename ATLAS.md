@@ -1,6 +1,6 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 6 complete — multi-file merged CMTrace-style timeline, fuzzy search, UTF-16 support, background-thread sort, 24-colour file palette, Segoe UI font, Show in folder, Add File(s) append mode
+> **Status**: Increment 8 complete -- log-entry summarisation, UI layout improvements, font upgrade (Consolas primary monospace)
 > **Last updated**: 2026-02-25
 
 ---
@@ -59,13 +59,14 @@ LogSleuth is a cross-platform log file viewer and analyser that discovers, parse
 ```
 LogSleuth/
 +-- src/
-|   +-- main.rs                  # Entry point, CLI parsing, logging init, GUI launch
+|   +-- main.rs                  # Entry point, CLI parsing, logging init, GUI launch; configure_fonts() loads Consolas (primary monospace), Segoe UI (primary proportional), Segoe UI Symbol + Emoji (Unicode fallbacks) on Windows
 |   +-- lib.rs                   # Library crate entry point (exposes modules for integration tests)
-|   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring
+|   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring; sidebar split into two independent ScrollAreas (discovery top ~45%, filters bottom)
 |   +-- app/
 |   |   +-- mod.rs
 |   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
-|   |   +-- state.rs             # Application state (pending_scan, request_cancel, file_list_search, file_colours, pending_single_files); apply_filters() computes rolling time window from wall clock; assign_file_colour() round-robins 24-colour palette
+|   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo
+|   |   +-- state.rs             # Application state; tail_active, tail_auto_scroll, tail_scroll_to_bottom, request_start/stop_tail flags; show_log_summary flag; next_entry_id() helper
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   +-- core/
 |   |   +-- mod.rs
@@ -79,12 +80,13 @@ LogSleuth/
 |   |   +-- mod.rs
 |   |   +-- panels/
 |   |   |   +-- mod.rs
-|   |   |   +-- discovery.rs     # Directory picker, scan controls, file list
+|   |   |   +-- discovery.rs     # Directory picker, scan controls, file list (max_height 360 px)
 |   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row indicates source file via FILE_COLOUR_PALETTE
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
-|   |   |   +-- summary.rs       # Scan summary dialog
-|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset
-|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes
+|   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
+|   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
+|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset; "Summary" quick-button opens log_summary panel
+|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=290
 |   +-- platform/
 |   |   +-- mod.rs
 |   |   +-- fs.rs                # FileReader trait + OS implementations
@@ -160,6 +162,10 @@ LogSleuth/
 | `ScanManager::start_scan(root, profiles, config)` | `app::scan` | UI layer (`gui.rs`) |
 | `ScanManager::cancel_scan()` | `app::scan` | UI layer |
 | `ScanManager::poll_progress() -> Vec<ScanProgress>` | `app::scan` | UI layer (called from `eframe::App::update`) |
+| `TailManager::start_tail(files, entry_id_start)` | `app::tail` | UI layer (`gui.rs`) |
+| `TailManager::stop_tail()` | `app::tail` | UI layer |
+| `TailManager::is_active() -> bool` | `app::tail` | UI layer |
+| `TailManager::poll_progress() -> Vec<TailProgress>` | `app::tail` | UI layer (called from `eframe::App::update`) |
 | `discover_files(root, config, on_file_found) -> Result<(Vec<DiscoveredFile>, Vec<String>)>` | `core::discovery` | `app::scan` background thread |
 | `parse_content(content, path, profile, config, id_start) -> ParseResult` | `core::parser` | `app::scan` background thread |
 | `profile::auto_detect(file_name, sample_lines, profiles) -> Option<DetectionResult>` | `core::profile` | `app::scan` background thread |
@@ -258,7 +264,7 @@ These invariants MUST hold at all times. Violation is a defect.
 | INV-02 | No panics in library code; all errors propagated via `Result` |
 | INV-03 | Source log files are never modified, deleted, or locked exclusively |
 | INV-04 | UI thread never blocks on file I/O, parsing, or sorting operations; chronological sort runs on the background scan thread before entries are streamed |
-| INV-05 | All cross-thread communication uses channels; no shared mutable state |
+| INV-05 | All cross-thread communication uses channels; no shared mutable state. Applies equally to scan and tail managers. |
 | INV-06 | User-provided regex patterns are compiled with size/complexity limits |
 | INV-07 | Memory usage is bounded: streaming parser, bounded collections with MAX_SIZE constants |
 | INV-08 | All named constants (limits, defaults) are defined in `util::constants` |

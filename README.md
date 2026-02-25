@@ -14,6 +14,7 @@ Point LogSleuth at a directory and it will:
 6. **Export** filtered results to CSV or JSON
 7. **Summarise** each scan with a per-file breakdown (entries, errors, time range)
 8. **Merge** multiple files or directories into one chronological timeline (CMTrace-style)
+9. **Live tail** newly written log lines in real time as you reproduce an issue
 
 ## Filtering
 
@@ -29,6 +30,18 @@ The filter sidebar provides:
 | Source file | Per-file checklist with a coloured dot matching the file's timeline stripe. When more than 8 files are loaded a live search box appears. **Select All / None** operate on the currently visible (filtered) subset. **Solo** instantly isolates a single file. |
 
 The entry count badge in the filter panel always reflects the current filtered vs. total count.
+
+## Live Tail
+
+After a scan completes, click **● Live Tail** in the sidebar to watch all loaded files for new content in real time. This is ideal for reproducing a product issue: scan the log directory first to establish baseline state, then activate Live Tail and re-trigger the problem to see the relevant log lines appear as they are written.
+
+- Only lines written *after* Live Tail is activated are shown (the tool does not re-replay existing content).
+- A green **● LIVE** badge appears in the status bar while tail is active.
+- **↓ Auto** toggle (next to the stop button) pins the timeline to the bottom so new entries scroll into view automatically. Turn it off to scroll back through history, then back on to re-pin.
+- File rotation and truncation are handled automatically: if a file is replaced or cleared, the offset resets to the beginning of the new file.
+- Click **■ Stop Tail** to stop watching. The captured entries remain in the timeline for filtering and export.
+
+> **Note**: Live tail decodes new bytes as UTF-8. UTF-16 log files (rare Windows system logs) are not supported for incremental tail; load them via a normal scan instead.
 
 ## Multi-File Merged Timeline
 

@@ -72,11 +72,16 @@ fn placeholder_icon() -> egui::IconData {
 
 /// Configure fonts for the egui context.
 ///
-/// On Windows, loads Segoe UI, Segoe UI Emoji, and Segoe UI Symbol from the
-/// system font directory and sets them as the primary proportional fonts.
-/// These fonts have much broader Unicode coverage than the egui built-ins,
-/// preventing square-glyph rendering for arrows, box-drawing, and other symbols.
-/// The built-in egui fonts are kept as final fallbacks so no glyph is ever lost.
+/// On Windows, loads:
+///   - Consolas as the primary monospace font (excellent log-file readability,
+///     ships with every Windows install since Vista).
+///   - Segoe UI as the primary proportional font (native Windows UI feel).
+///   - Segoe UI Symbol and Segoe UI Emoji as Unicode-coverage fallbacks for
+///     both families, preventing square-glyph rendering for box-drawing,
+///     arrows, mathematical, and emoji code points.
+///
+/// The built-in egui fonts (Hack, NotoSans) are retained as final fallbacks
+/// so no glyph is ever permanently lost regardless of what is installed.
 ///
 /// On non-Windows platforms the egui defaults are used unchanged.
 fn configure_fonts(ctx: &egui::Context) {
@@ -84,57 +89,72 @@ fn configure_fonts(ctx: &egui::Context) {
     {
         let mut fonts = egui::FontDefinitions::default();
 
-        // Load Windows system fonts in priority order.
-        // Segoe UI covers most Latin and common UI symbols.
-        // Segoe UI Emoji adds Unicode emoji and many pictographic symbols.
-        // Segoe UI Symbol covers Mathematical, Braille, and other specialist blocks.
+        // Candidate fonts: (family-tag, path-on-disk).
+        // Loaded in order; missing files are skipped with a warning.
         let candidates: &[(&str, &str)] = &[
             ("Segoe UI", r"C:\Windows\Fonts\segoeui.ttf"),
-            ("Segoe UI Emoji", r"C:\Windows\Fonts\seguiemj.ttf"),
             ("Segoe UI Symbol", r"C:\Windows\Fonts\seguisym.ttf"),
+            ("Segoe UI Emoji", r"C:\Windows\Fonts\seguiemj.ttf"),
+            ("Consolas", r"C:\Windows\Fonts\consola.ttf"),
         ];
 
-        let mut loaded_names: Vec<&str> = Vec::new();
+        let mut loaded: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (name, path) in candidates {
             match std::fs::read(path) {
                 Ok(data) => {
                     fonts
                         .font_data
                         .insert((*name).to_owned(), egui::FontData::from_owned(data).into());
-                    loaded_names.push(name);
+                    loaded.insert(name);
                     tracing::debug!(font = name, "Loaded Windows system font");
                 }
                 Err(e) => {
                     tracing::warn!(
                         font = name,
                         error = %e,
-                        "Failed to load Windows system font; some symbols may render as squares"
+                        "Failed to load Windows system font; some glyphs may render as squares"
                     );
                 }
             }
         }
 
-        if !loaded_names.is_empty() {
-            // Proportional: place Windows fonts first so they take priority over
-            // the egui default (NotoSans), while keeping it as a final fallback.
-            if let Some(proportional) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                for (i, name) in loaded_names.iter().enumerate() {
-                    proportional.insert(i, (*name).to_owned());
+        // ----------------------------------------------------------------
+        // Proportional family
+        // Place Windows fonts at the front so Segoe UI is chosen for
+        // regular UI text, then keep the egui built-ins as last resorts.
+        // ----------------------------------------------------------------
+        if let Some(proportional) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            let mut insert_at = 0usize;
+            for name in &["Segoe UI", "Segoe UI Symbol", "Segoe UI Emoji"] {
+                if loaded.contains(name) {
+                    proportional.insert(insert_at, (*name).to_owned());
+                    insert_at += 1;
                 }
             }
-
-            // Monospace: append Windows fonts as symbol fallbacks after the primary
-            // monospace font (Hack) so log-line column alignment is preserved while
-            // Unicode symbols outside the monospace range still render correctly.
-            if let Some(monospace) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                for name in &loaded_names {
-                    monospace.push((*name).to_owned());
-                }
-            }
-
-            ctx.set_fonts(fonts);
-            tracing::info!(fonts = ?loaded_names, "Windows system fonts configured");
         }
+
+        // ----------------------------------------------------------------
+        // Monospace family
+        // Consolas first — clear grid-aligned log-file rendering.
+        // Segoe UI Symbol second — Unicode box-drawing, arrows, etc.
+        // Segoe UI Emoji third — catchall emoji/symbol fallback.
+        // The egui built-in (Hack) and NotoSans are kept at the end.
+        // ----------------------------------------------------------------
+        if let Some(monospace) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            let mut insert_at = 0usize;
+            for name in &["Consolas", "Segoe UI Symbol", "Segoe UI Emoji"] {
+                if loaded.contains(name) {
+                    monospace.insert(insert_at, (*name).to_owned());
+                    insert_at += 1;
+                }
+            }
+        }
+
+        ctx.set_fonts(fonts);
+        tracing::info!(
+            loaded = ?loaded.iter().collect::<Vec<_>>(),
+            "Windows system fonts configured"
+        );
     }
 
     // On non-Windows platforms the egui built-in fonts are used unchanged.
