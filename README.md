@@ -9,10 +9,11 @@ Point LogSleuth at a directory and it will:
 1. **Discover** all log files recursively, regardless of vendor or format
 2. **Auto-detect** the log format using extensible TOML-based profiles
 3. **Parse** entries into a normalised model (timestamp, severity, message, source)
-4. **Display** everything in a unified, colour-coded, virtual-scrolling timeline
-5. **Filter** by severity, text, regex, time range, and source file
+4. **Display** everything in a unified, colour-coded, virtual-scrolling timeline with per-file colour stripes
+5. **Filter** by severity, text (exact or fuzzy), regex, time range, and source file
 6. **Export** filtered results to CSV or JSON
 7. **Summarise** each scan with a per-file breakdown (entries, errors, time range)
+8. **Merge** multiple files or directories into one chronological timeline (CMTrace-style)
 
 ## Filtering
 
@@ -22,11 +23,29 @@ The filter sidebar provides:
 |--------|-------------|
 | Severity | Checkboxes for Critical / Error / Warning / Info / Debug / Unknown |
 | Text search | Case-insensitive substring match across message + metadata |
+| Fuzzy search | Toggle the **~** button next to the text input to enable fuzzy (subsequence) matching — e.g. `vcancl` matches `VssCancelAll` |
 | Regex search | Full regex with live compile-error feedback |
 | Relative time window | Quick-select **15 min / 1 h / 6 h / 24 h** buttons or type a custom number of minutes; LogSleuth automatically advances the window as the clock ticks |
-| Source file | Per-file checklist; when more than 8 files are loaded a live search box appears. **Select All / None** operate on the currently visible (filtered) subset |
+| Source file | Per-file checklist with a coloured dot matching the file's timeline stripe. When more than 8 files are loaded a live search box appears. **Select All / None** operate on the currently visible (filtered) subset. **Solo** instantly isolates a single file. |
 
 The entry count badge in the filter panel always reflects the current filtered vs. total count.
+
+## Multi-File Merged Timeline
+
+Use **File > Add File(s)…** to append individual log files to the current session without clearing existing entries. All files — whether from an initial directory scan or added one-by-one — are merged into a single chronological timeline.
+
+Each source file is assigned a unique colour from a 24-entry palette:
+- A **4 px coloured stripe** on the left edge of every timeline row identifies which file the entry came from.
+- A matching **coloured dot** appears next to each file name in the discovery panel and the source-file filter list.
+- The **Solo** button in the filter list isolates one file instantly.
+
+> Entries are sorted chronologically on the background scan thread (not the UI thread), so opening hundreds of files does not freeze the interface.
+
+## Detail Pane
+
+Selecting any timeline entry shows it in the detail pane at the bottom. From there you can:
+- **Copy** the full message to the clipboard.
+- **Show in Folder** — opens the OS file manager with the source log file pre-selected.
 
 ## Exporting Results
 

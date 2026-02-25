@@ -97,3 +97,63 @@
 - [x] Application icon embedding (ICO for Windows, via winres build.rs; runtime PNG via eframe viewport `with_icon`)
 
 **Test results: 40 unit tests + 9 E2E tests = 49 total, all passing**
+
+## Increment 6: Multi-File Merged Timeline, Fuzzy Search & Scalability
+**Status: COMPLETE**
+
+### Font & Encoding
+- [x] `main.rs` - `configure_fonts()` on Windows loads `segoeui.ttf`, `seguiemj.ttf`, `seguisym.ttf` from `C:\Windows\Fonts\` and inserts them at the front of the Proportional family, eliminating □ glyph substitution. Called from the `eframe::run_native` creation callback (`cc`).
+- [x] `app::scan` - `decode_bytes()` detects UTF-16 LE/BE BOMs (`[0xFF,0xFE]` / `[0xFE,0xFF]`) and decodes via `u16::from_le/be_bytes` before parsing; falls back to lossy UTF-8. Enables reading `C:\Windows\Logs` and other Windows system log directories.
+- [x] `app::scan` - `read_small_file_with_retry` and `read_sample_lines` both tolerate UTF-16 encoded files without failing.
+
+### Plain-Text Fallback
+- [x] `app::scan` Phase 2 assigns the `plain-text` profile when no structured profile matches, ensuring all files produce entries rather than being silently skipped. Files with fallback assignment are shown as "plain-text (fallback)" in the discovery panel.
+
+### Detail Pane Improvements
+- [x] `ui::panels::detail` - Removed 80 px `max_height` cap; message scroll area now fills available panel height.
+- [x] `ui::panels::detail` - **Show in Folder** button: opens the OS file manager with the source file selected (Windows: `explorer /select,<path>`; macOS: `open -R <path>`; Linux: `xdg-open <dir>`).
+
+### Fuzzy Text Search
+- [x] `core::filter` - Added `fuzzy: bool` field to `FilterState`. `fuzzy_match()` implements a case-insensitive subsequence algorithm (each character of the query must appear in order in the target, but not necessarily contiguously).
+- [x] `core::filter` - `matches_all()` branches on `fuzzy` vs exact substring. `errors_only_from(fuzzy)` and `errors_and_warnings_from(fuzzy)` preserve the fuzzy mode across quick-filter clicks.
+- [x] `ui::panels::filters` - Added `~` toggle button next to the text search input; button turns blue when fuzzy mode is active. 5 new unit tests for fuzzy matching (54 total).
+
+### CMTrace-Style Multi-File Merged Timeline
+- [x] `ui::theme` - `FILE_COLOUR_PALETTE`: 24 visually distinct `Color32` values. Extended from 12 to 24 so files 1–24 all receive unique colours before any wrapping. `file_colour(index)` wraps with `% 24`.
+- [x] `core::model` - Added `AdditionalFilesDiscovered { files: Vec<DiscoveredFile> }` `ScanProgress` variant for append mode (extends the UI file list rather than replacing it).
+- [x] `app::state` - Added `file_colours: HashMap<PathBuf, egui::Color32>` and `pending_single_files: Option<Vec<PathBuf>>`. New methods: `assign_file_colour()` (round-robin over 24-colour palette), `colour_for_file()` (returns assigned colour or neutral grey), `sort_entries_chronologically()` (kept as utility; sort itself moved to background thread).
+- [x] `app::scan` - `run_parse_pipeline`: entries are now collected into a `Vec`, sorted chronologically on the background thread, then streamed in batches via `EntriesBatch` before `ParsingCompleted` is sent. The UI thread never blocks on a large sort.
+- [x] `app::scan` - Added `start_scan_files()` to `ScanManager` and `run_files_scan()` pipeline entry for individual-file append scanning. Shares `run_parse_pipeline(append=true)` with directory scans.
+- [x] `ui::panels::timeline` - Each row renders a 4 px coloured left stripe using `state.colour_for_file()` before the selectable label row.
+- [x] `ui::panels::discovery` - Each file in the discovery list shows an 8×8 coloured dot matching its assigned timeline stripe colour.
+- [x] `ui::panels::filters` - Each file in the source-file checklist shows a coloured dot matching its timeline stripe colour.
+- [x] `ui::panels::filters` - Added **Solo** button per file: clicking it filters the timeline to that file exclusively; clicking again returns to all files.
+- [x] `gui.rs` - **File > Add File(s)…** menu item opens a multi-file picker (`.log`/`.txt` filter); selected files are appended to the current session without clearing existing entries.
+- [x] `gui.rs` - `AdditionalFilesDiscovered` handler extends `discovered_files` and assigns colours; `FilesDiscovered` handler assigns colours then replaces the list.
+- [x] `gui.rs` - `ParsingCompleted` handler calls `apply_filters()` only (sort already done on background thread).
+
+**Test results: 45 unit tests + 9 E2E tests = 54 total, all passing**
+
+---
+
+## Future Enhancements
+
+### High Priority
+- [ ] **Live tail mode** — Watch one or more files for new lines appended after the initial parse and append them to the timeline in real time (inotify/ReadDirectoryChangesW).
+- [ ] **Regex-based severity override** — Allow profiles to define custom severity extraction rules so vendor-specific patterns (e.g. `[WARN]` in plain-text files) are classified correctly rather than defaulting to Unknown.
+- [ ] **Bookmark / annotation** — Mark specific timeline entries for later reference within a session; copy bookmarks to clipboard as a structured report.
+- [ ] **Time correlation window** — Clicking an entry in the timeline highlights all other entries within a configurable ±N seconds window across all loaded files (CMTrace behaviour).
+
+### Medium Priority
+- [ ] **Persistent sessions** — Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application.
+- [ ] **Column visibility toggles** — Allow the user to show/hide columns in the timeline (e.g. hide the filepath column when viewing a single file).
+- [ ] **Export retains filter** — Optionally export the full entry set (pre-filter) alongside the filtered export.
+- [ ] **Profile editor UI** — In-app wizard to create and test a new TOML profile without leaving LogSleuth.
+- [ ] **Additional built-in profiles** — Windows Event Log XML exports, Apache/nginx access logs, Docker/podman JSON logs, systemd journal exports.
+- [ ] **Configurable max files / max entries** — Surface `DEFAULT_MAX_FILES` and any entry cap as editable config values in the UI rather than compile-time constants only.
+
+### Low Priority / Research
+- [ ] **Parallel file parsing** — Use rayon to parse multiple files concurrently on the background thread; the sort step already handles out-of-order results.
+- [ ] **Full-text index** — Build a Tantivy (or similar) in-memory index on scan completion to enable fast regex and phrase searching across millions of entries.
+- [ ] **Plugin / WASM profile extensions** — Allow format profiles to include embedded WASM functions for custom timestamp or severity extraction logic beyond what regex alone can express.
+- [ ] **Network / remote log sources** — Pull logs from a remote host via SSH or HTTP (structured log APIs).

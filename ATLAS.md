@@ -1,7 +1,7 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 5 complete — NSIS installer, macOS DMG builder, Linux AppImage builder, GitHub Actions CI + Release workflows
-> **Last updated**: 2026-07-10
+> **Status**: Increment 6 complete — multi-file merged CMTrace-style timeline, fuzzy search, UTF-16 support, background-thread sort, 24-colour file palette, Segoe UI font, Show in folder, Add File(s) append mode
+> **Last updated**: 2026-02-25
 
 ---
 
@@ -24,7 +24,8 @@ LogSleuth is a cross-platform log file viewer and analyser that discovers, parse
 | **Discovery** | Recursive scan of a directory tree to find candidate log files using glob patterns |
 | **Auto-detection** | Matching discovered files to format profiles by sampling the first N lines against each profile's content regex |
 | **Severity** | Normalised enum: Critical, Error, Warning, Info, Debug, Unknown |
-| **Unified Timeline** | Merged, chronologically sorted view of all parsed entries across all discovered files |
+| **Unified Timeline** | Merged, chronologically sorted view of all parsed entries across all discovered files. Sort is performed on the background scan thread before entries are streamed to the UI. |
+| **File Colour** | Each source file is assigned a unique colour from a 24-entry palette; a coloured stripe on every timeline row and a coloured dot in the file list identify the origin file visually (CMTrace-style) |
 | **Correlation** | Viewing entries across multiple log files within a time window centred on a selected entry |
 | **Scan** | A complete discovery + parse operation on a target directory |
 
@@ -63,8 +64,8 @@ LogSleuth/
 |   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring
 |   +-- app/
 |   |   +-- mod.rs
-|   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, entry batching
-|   |   +-- state.rs             # Application state (pending_scan, request_cancel, file_list_search), filter state (relative_time_secs, source file whitelist), selection; apply_filters() computes rolling time window from wall clock
+|   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
+|   |   +-- state.rs             # Application state (pending_scan, request_cancel, file_list_search, file_colours, pending_single_files); apply_filters() computes rolling time window from wall clock; assign_file_colour() round-robins 24-colour palette
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   +-- core/
 |   |   +-- mod.rs
@@ -72,18 +73,18 @@ LogSleuth/
 |   |   +-- discovery.rs         # Recursive traversal (walkdir), glob include/exclude, filter_entry dir exclusion, metadata
 |   |   +-- profile.rs           # TOML profile parsing, validation, auto-detection scoring
 |   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing
-|   |   +-- filter.rs            # Composable filter engine: severity, text, regex, absolute/relative time window, source file whitelist
+|   |   +-- filter.rs            # Composable filter engine: severity, text (exact or fuzzy subsequence), regex, absolute/relative time window, source file whitelist; fuzzy bool field on FilterState
 |   |   +-- export.rs            # CSV/JSON serialisation
 |   +-- ui/
 |   |   +-- mod.rs
 |   |   +-- panels/
 |   |   |   +-- mod.rs
 |   |   |   +-- discovery.rs     # Directory picker, scan controls, file list
-|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline
-|   |   |   +-- detail.rs        # Entry detail pane
+|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row indicates source file via FILE_COLOUR_PALETTE
+|   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog
-|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with real-time search box (shown at >8 files), Select All/None on visible subset, N/total counter
-|   |   +-- theme.rs             # Colours, severity mapping, layout constants
+|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset
+|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes
 |   +-- platform/
 |   |   +-- mod.rs
 |   |   +-- fs.rs                # FileReader trait + OS implementations
@@ -256,7 +257,7 @@ These invariants MUST hold at all times. Violation is a defect.
 | INV-01 | Core layer has zero dependencies on UI, platform, or I/O |
 | INV-02 | No panics in library code; all errors propagated via `Result` |
 | INV-03 | Source log files are never modified, deleted, or locked exclusively |
-| INV-04 | UI thread never blocks on file I/O or parsing operations |
+| INV-04 | UI thread never blocks on file I/O, parsing, or sorting operations; chronological sort runs on the background scan thread before entries are streamed |
 | INV-05 | All cross-thread communication uses channels; no shared mutable state |
 | INV-06 | User-provided regex patterns are compiled with size/complexity limits |
 | INV-07 | Memory usage is bounded: streaming parser, bounded collections with MAX_SIZE constants |
