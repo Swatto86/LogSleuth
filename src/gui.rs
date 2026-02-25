@@ -186,11 +186,29 @@ impl eframe::App for LogSleuthApp {
         // request_start_tail: a panel wants to activate live tail.
         if self.state.request_start_tail {
             self.state.request_start_tail = false;
-            // Build TailFileInfo list from discovered files that have a resolved profile.
+            // Build TailFileInfo list from discovered files that have a resolved profile,
+            // *respecting the current source-file filter* so Live Tail only watches the
+            // files the user has selected.
+            //
+            // Source-file filter semantics (mirrors apply_filters / filters.rs):
+            //   hide_all_sources = true  => nothing passes ("None" was pressed)
+            //   source_files empty       => all files pass (no filter set)
+            //   source_files non-empty   => only listed paths pass
+            let hide_all = self.state.filter_state.hide_all_sources;
+            let source_filter = self.state.filter_state.source_files.clone();
             let files: Vec<crate::app::tail::TailFileInfo> = self
                 .state
                 .discovered_files
                 .iter()
+                .filter(|f| {
+                    if hide_all {
+                        return false;
+                    }
+                    if !source_filter.is_empty() && !source_filter.contains(&f.path) {
+                        return false;
+                    }
+                    true
+                })
                 .filter_map(|f| {
                     let profile_id = f.profile_id.as_ref()?;
                     let profile = self
@@ -206,15 +224,15 @@ impl eframe::App for LogSleuthApp {
                 })
                 .collect();
             if files.is_empty() {
-                self.state.status_message = "No watchable files — run a scan first.".to_string();
+                self.state.status_message =
+                    "No watchable files — run a scan first, or check your file filter.".to_string();
             } else {
+                let watching = files.len();
                 let start_id = self.state.next_entry_id();
                 self.tail_manager.start_tail(files, start_id);
                 self.state.tail_active = true;
-                self.state.status_message = format!(
-                    "Live tail active — watching {} file(s).",
-                    self.state.discovered_files.len()
-                );
+                self.state.status_message =
+                    format!("Live tail active — watching {watching} file(s).");
             }
         }
 
