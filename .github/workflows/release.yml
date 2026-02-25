@@ -44,10 +44,10 @@ jobs:
         run: choco install nsis --yes --no-progress
 
       - name: Build NSIS installer
-        # makensis is installed to C:\Program Files (x86)\NSIS\makensis.exe
-        # which choco adds to PATH.
-        run: makensis installer\windows\logsleuth.nsi
-        shell: cmd
+        # Use the absolute path because choco's PATH update is not visible
+        # across step boundaries on GitHub-hosted Windows runners.
+        run: '&"C:\Program Files (x86)\NSIS\makensis.exe" installer\windows\logsleuth.nsi'
+        shell: pwsh
 
       - name: Upload Windows installer artefact
         uses: actions/upload-artifact@v4
