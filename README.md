@@ -1,6 +1,6 @@
 # LogSleuth
 
-A fast, cross-platform log file viewer and analyser built with Rust and egui. Part of the Sleuth Tools collection alongside [EventSleuth](https://github.com/swatto86/EventSleuth) and DiskSleuth.
+A fast, cross-platform log file viewer and analyser built with Rust and egui. Part of the Sleuth Tools collection alongside [EventSleuth](https://github.com/swatto86/EventSleuth) and [DiskSleuth](https://github.com/swatto86/DiskSleuth).
 
 ## What It Does
 
