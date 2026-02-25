@@ -268,6 +268,40 @@
 
 ---
 
+---
+
+## Increment 13: Troubleshoot Presets, Copy Filtered Results & Rolling Window Indicator
+**Status: COMPLETE**
+
+- [x] `src/util/constants.rs` - Added `MAX_CLIPBOARD_ENTRIES: usize = 10_000` — named bound for clipboard export operations (Rule 11 resource bounds compliance).
+- [x] `src/app/state.rs` - Added `filtered_results_report() -> String` method: generates a plain-text clipboard report of all currently-filtered entries. Header includes generated timestamp and a human-readable filter description (severity, time window, text/regex terms). Each entry is rendered as `[timestamp] Severity  source\n  message`. Bounded to `MAX_CLIPBOARD_ENTRIES` with a truncation notice appended when the limit is reached.
+- [x] `src/ui/panels/filters.rs` - Added **Err+Warn+15m** quick-preset button between "Errors + Warn" and "Clear". A single click sets severity to Critical+Error+Warning AND activates the 15-minute rolling relative-time window. Hover text explains that the window auto-advances during Live Tail.
+- [x] `src/ui/panels/filters.rs` - Added green **● Rolling window (live)** label in the Time Range section, visible only when Live Tail is active and a relative-time window is set. Confirms to the user that new tail entries entering the window will appear automatically.
+- [x] `src/ui/panels/filters.rs` - Added **📋 Copy** button in the entry-count footer row (next to the N/total label). Disabled when no filtered entries exist (Rule 16). Calls `filtered_results_report()`, copies to clipboard via `ctx.copy_text()`, sets status bar confirmation.
+- [x] `src/gui.rs` - Added **View → Copy Filtered Results (N entries)** menu item. Disabled when filtered set is empty (Rule 16). Same report + clipboard + status pattern as the sidebar button.
+- [x] `tests/e2e_discovery.rs` - 3 new tests:
+  - `filtered_results_report_empty_state`: verifies empty state produces a well-formed report header with 0 entries.
+  - `filtered_results_report_populated`: verifies Error+Warning entries appear, Info entries are excluded, count is correct, filter description mentions severity.
+  - `filtered_results_report_truncation`: verifies `MAX_CLIPBOARD_ENTRIES + 1` entries produces a truncation notice citing the limit.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing**
+
+---
+
+## Increment 14: Portable Windows EXE in Release Pipeline
+**Status: COMPLETE**
+
+- [x] `.github/workflows/release.yml` - Added `build-windows-portable` parallel job alongside the existing `build-windows` installer job:
+  - Builds with `RUSTFLAGS="-C target-feature=+crt-static"` so the MSVC CRT is statically embedded in the binary — no Visual C++ Redistributable required on the target machine.
+  - Renames output to `LogSleuth-{VERSION}-windows-portable.exe` (strips `v` prefix to match installer naming convention using PowerShell string replace).
+  - Uploads as the `windows-portable` artifact.
+- [x] `.github/workflows/release.yml` - `create-release` job updated: `needs` now includes `build-windows-portable`; `files` glob adds `LogSleuth-*-windows-portable.exe` so each GitHub Release publishes 4 artefacts: installer, portable EXE, macOS DMG, Linux AppImage.
+- [x] `ATLAS.md` - Updated release.yml description to document the portable job and its static CRT rationale. Updated status to Increment 14.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (no new tests; pipeline change only)**
+
+---
+
 ## Future Enhancements
 
 ### High Priority

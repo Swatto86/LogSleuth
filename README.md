@@ -2,6 +2,19 @@
 
 A fast, cross-platform log file viewer and analyser built with Rust and egui. Part of the Sleuth Tools collection alongside [EventSleuth](https://github.com/swatto86/EventSleuth) and [DiskSleuth](https://github.com/swatto86/DiskSleuth).
 
+## Download
+
+Grab the latest release from the [Releases page](https://github.com/swatto86/LogSleuth/releases):
+
+| File | Description |
+|------|-------------|
+| `LogSleuth-Setup-{version}.exe` | Windows installer — Start Menu shortcut, per-user or per-machine |
+| `LogSleuth-{version}-windows-portable.exe` | Windows portable — single EXE, no installation required, no runtime dependencies |
+| `LogSleuth-{version}.dmg` | macOS disk image |
+| `LogSleuth-{version}.AppImage` | Linux AppImage (no installation required) |
+
+> The portable Windows EXE has the MSVC CRT statically linked and runs on any Windows 10/11 machine without the Visual C++ Redistributable.
+
 ## What It Does
 
 Point LogSleuth at a directory and it will:
@@ -29,6 +42,19 @@ The filter sidebar provides:
 | Relative time window | Quick-select **15 min / 1 h / 6 h / 24 h** buttons or type a custom number of minutes; LogSleuth automatically advances the window as the clock ticks |
 | Source file | Per-file checklist with a coloured dot matching the file's timeline stripe. When more than 8 files are loaded a live search box appears. **Select All / None** operate on the currently visible (filtered) subset. **Solo** instantly isolates a single file. |
 
+### Quick-Filter Presets
+
+| Button | What it sets |
+|--------|-------------|
+| **Errors only** | Severity: Critical + Error |
+| **Errors + Warn** | Severity: Critical + Error + Warning |
+| **Err+Warn+15m** | Severity: Critical + Error + Warning, plus a 15-minute rolling time window. Ideal for immediate troubleshooting: shows only recent error-level activity. When Live Tail is running the window advances automatically so new entries flow in and old ones drop off. |
+| **Clear** | Resets all filters |
+
+### Copying Filtered Results
+
+A **📋 Copy** button sits next to the entry-count footer at the bottom of the filter sidebar (also accessible via **View → Copy Filtered Results**). It copies all currently-filtered entries to the clipboard as a plain-text report including a filter summary header, timestamp, severity, source filename, and message for each entry. The copy is bounded at 10,000 entries; a truncation notice is appended if the limit is reached.
+
 The entry count badge in the filter panel always reflects the current filtered vs. total count.
 
 ## Live Tail
@@ -40,8 +66,41 @@ After a scan completes, click **● Live Tail** in the sidebar to watch all load
 - **↓ Auto** toggle (next to the stop button) pins the timeline to the bottom so new entries scroll into view automatically. Turn it off to scroll back through history, then back on to re-pin.
 - File rotation and truncation are handled automatically: if a file is replaced or cleared, the offset resets to the beginning of the new file.
 - Click **■ Stop Tail** to stop watching. The captured entries remain in the timeline for filtering and export.
+- When a relative-time window is active during Live Tail, a green **● Rolling window (live)** indicator appears under the time-range control to confirm the window is continuously advancing.
+
+> **Tip**: Click **Err+Warn+15m**, then **● Live Tail** to instantly monitor only recent errors and warnings across all loaded files in real time.
 
 > **Note**: Live tail decodes new bytes as UTF-8. UTF-16 log files (rare Windows system logs) are not supported for incremental tail; load them via a normal scan instead.
+
+## Bookmarks
+
+Star any timeline entry with the **★/☆** button on the left of every row to bookmark it:
+
+- Bookmarked rows are highlighted with a gold background tint.
+- The **★ Bookmarks (N)** toggle in the filter sidebar shows only bookmarked entries.
+- Use **× clear bm** to remove all bookmarks.
+- Use **View → Copy Bookmark Report** to export all bookmarked entries to the clipboard as a structured report showing timestamp, severity, source file, and message for each bookmarked entry.
+
+## Time Correlation
+
+Select any timeline entry and enable the **◆ Correlation** overlay in the filter sidebar to highlight all entries across all loaded files whose timestamps fall within a configurable window (default ±30 seconds) of the selected entry:
+
+- Correlated entries are highlighted with a teal background tint.
+- The window size is configurable in the **Window: [ ] sec** input (1–3600 seconds).
+- The overlay searches all entries, including those hidden by the current filter, so contextual events are never silently excluded.
+- Useful for correlating failures across multiple components — e.g. select an application error and instantly see what was happening concurrently in the web server, database, and service logs.
+
+## Session Persistence
+
+LogSleuth automatically saves your session when the application closes and restores it at the next launch:
+
+- **What is saved**: scan path, all active filter settings, per-file colour assignments, bookmarks, and the correlation window size.
+- **What is not saved**: parsed log entries (files are always re-parsed on restore to reflect current content).
+- Session data is stored in the platform data directory:
+  - **Windows**: `%APPDATA%\LogSleuth\session.json`
+  - **Linux**: `~/.local/share/logsleuth/session.json`
+  - **macOS**: `~/Library/Application Support/LogSleuth/session.json`
+- A corrupt or missing session file is silently ignored; the application starts fresh.
 
 ## Multi-File Merged Timeline
 
