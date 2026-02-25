@@ -247,21 +247,6 @@ impl eframe::App for LogSleuthApp {
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                // Right-aligned ⓘ About button — pushed all the way to the right
-                // before the left-anchored menus so egui allocates its space first.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let about_btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new(" ⓘ ")
-                                .strong()
-                                .color(egui::Color32::from_rgb(156, 163, 175)),
-                        )
-                        .frame(false),
-                    );
-                    if about_btn.on_hover_text("About LogSleuth").clicked() {
-                        self.state.show_about = true;
-                    }
-                });
                 ui.menu_button("File", |ui| {
                     if ui.button("Open Directory\u{2026}").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
@@ -414,6 +399,22 @@ impl eframe::App for LogSleuthApp {
                             ui.close_menu();
                         }
                     });
+                });
+                // Right-aligned ⓘ About button. Must come AFTER the left-anchored
+                // menus; placing with_layout(right_to_left) first would consume all
+                // available space and leave no room for File / View to render.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let about_btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new(" \u{24d8} ")
+                                .strong()
+                                .color(egui::Color32::from_rgb(156, 163, 175)),
+                        )
+                        .frame(false),
+                    );
+                    if about_btn.on_hover_text("About LogSleuth").clicked() {
+                        self.state.show_about = true;
+                    }
                 });
             });
         });
