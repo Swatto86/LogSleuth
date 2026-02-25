@@ -267,7 +267,15 @@ if ($isGitRepo) {
 }
 
 # --- Detect optional tools ---
-$makensisAvailable = $null -ne (Get-Command makensis -ErrorAction SilentlyContinue)
+# Prefer makensis on PATH; fall back to the default NSIS install location on Windows.
+$makensisCmd = Get-Command makensis -ErrorAction SilentlyContinue
+if ($null -eq $makensisCmd) {
+    $nsisDefaultPath = 'C:\Program Files (x86)\NSIS\makensis.exe'
+    if (Test-Path $nsisDefaultPath) {
+        $makensisCmd = $nsisDefaultPath
+    }
+}
+$makensisAvailable = $null -ne $makensisCmd
 $nsisExists        = Test-Path $nsisScript
 $buildInstaller    = $makensisAvailable -and $nsisExists
 
@@ -426,7 +434,8 @@ try {
     # -----------------------------------------------------------------------
     if ($buildInstaller) {
         Write-Info "Building NSIS installer"
-        & makensis $nsisScript
+        $makensisExe = if ($makensisCmd -is [string]) { $makensisCmd } else { $makensisCmd.Source }
+        & $makensisExe $nsisScript
         if ($LASTEXITCODE -ne 0) { throw "makensis failed for $nsisScript" }
         Write-Success "NSIS installer built"
     } elseif ($nsisExists -and -not $makensisAvailable) {
