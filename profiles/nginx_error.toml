@@ -1,0 +1,51 @@
+# LogSleuth Format Profile: nginx Error Log
+#
+# nginx writes its error log in a consistent format across all versions:
+#
+#   YYYY/MM/DD HH:MM:SS [level] PID#TID: [optional: *connid] message
+#
+# Example lines:
+#   2024/01/15 10:30:22 [error] 1234#5678: *123 connect() failed (111: Connection refused)
+#   2024/01/15 10:30:22 [warn]  1234#5678: *234 upstream response is too slow: 1.234 seconds
+#   2024/01/15 10:30:22 [notice] 1234#5678: signal process started
+#   2024/01/15 10:30:22 [crit]  1234#5678: listen() to 0.0.0.0:80 failed (1: Operation not permitted)
+#   2024/01/15 10:30:22 [debug] 1234#5678: checking cached data
+#
+# Level strings: emerg, alert, crit, error, warn, notice, info, debug
+#
+# The PID#TID pair is captured as thread. The optional *connection-id prefix
+# is included in the message field.
+#
+# Log locations:
+#   Linux:   /var/log/nginx/error.log
+#   FreeBSD: /var/log/nginx-error.log
+#   Windows: %ProgramFiles%\nginx\logs\error.log
+
+[profile]
+id = "nginx-error"
+name = "nginx Error Log"
+version = "1.0"
+description = "nginx web server error log"
+
+[detection]
+file_patterns = [
+    "error.log",
+    "error.log.[0-9]*",
+    "nginx-error.log",
+    "nginx_error.log",
+    "nginx-error.log.[0-9]*",
+]
+# YYYY/MM/DD HH:MM:SS [level] PID#TID pattern
+content_match = '^\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2}\s\[\w+\]\s+\d+#\d+:'
+
+[parsing]
+line_pattern = '^(?P<timestamp>\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2})\s+\[(?P<level>\w+)\]\s+(?P<thread>\d+#\d+):\s+(?P<message>.+)$'
+timestamp_format = "%Y/%m/%d %H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["emerg", "alert", "crit"]
+error    = ["error", "err"]
+warning  = ["warn"]
+info     = ["notice", "info"]
+debug    = ["debug"]

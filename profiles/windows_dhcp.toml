@@ -1,0 +1,60 @@
+# LogSleuth Format Profile: Windows DHCP Server Log
+#
+# The Windows DHCP Server writes daily CSV logs with a header block followed
+# by comma-delimited event records:
+#
+#   Microsoft DHCP Service Activity Log
+#   (... header comment lines explaining Event IDs ...)
+#
+#   ID,Date,Time,Description,IP Address,Host Name,MAC Address
+#   00,01/15/24,10:30:22,Started,,,
+#   10,01/15/24,10:30:22,Assign,192.168.1.100,WORKSTATION01,001122334455
+#   11,01/15/24,10:30:22,Renew,192.168.1.100,WORKSTATION01,001122334455
+#   20,01/15/24,10:30:22,Nack,192.168.1.100,WORKSTATION01,001122334455
+#   21,01/15/24,10:30:22,Bad address (conflict),192.168.1.100,,001122334455
+#
+# ID field maps to lease/event type. Key IDs:
+#   00/01 = Service start/stop    (Info)
+#   10-12 = Assign/Renew/Release  (Info)
+#   13    = DNS Update Request     (Info)
+#   20    = Nack (address refused) (Error)
+#   21    = Bad address / conflict (Error)
+#   23    = Expired                (Warning)
+#   50    = Unreachable domain     (Warning)
+#   56    = Not authorized         (Error)
+#
+# Non-matching header and comment lines are skipped (multiline_mode = "skip").
+#
+# Log locations:
+#   Windows: %SystemRoot%\System32\dhcp\DhcpSrvLog-Mon.log
+#            ... DhcpSrvLog-Tue.log through DhcpSrvLog-Sun.log
+#   IPv6:    DhcpV6SrvLog-Mon.log ... DhcpV6SrvLog-Sun.log
+
+[profile]
+id = "windows-dhcp"
+name = "Windows DHCP Server Log"
+version = "1.0"
+description = "Windows Server DHCP service daily activity logs"
+
+[detection]
+file_patterns = [
+    "DhcpSrvLog-*.log",
+    "DhcpV6SrvLog-*.log",
+]
+# 2-digit event ID + MM/DD/YY + HH:MM:SS as CSV columns
+content_match = '^\d{2},\d{2}/\d{2}/\d{2},\d{2}:\d{2}:\d{2},'
+
+[parsing]
+# Date (MM/DD/YY) and Time (HH:MM:SS) are captured together as the timestamp
+# group (including the comma separator) so they can be parsed as a unit.
+# The event ID is captured as thread; the description and remaining fields
+# (IP, hostname, MAC) form the message.
+line_pattern = '^(?P<thread>\d+),(?P<timestamp>\d{2}/\d{2}/\d{2},\d{2}:\d{2}:\d{2}),(?P<message>.+)$'
+timestamp_format = "%m/%d/%y,%H:%M:%S"
+multiline_mode = "skip"
+
+# No level field; severity is inferred from the event description (message).
+[severity_mapping]
+error   = ["nack", "bad address", "conflict", "not authorized", "declined"]
+warning = ["expired", "unreachable", "paused", "rogue"]
+info    = ["assign", "renew", "release", "started", "stopped", "authorized", "update"]

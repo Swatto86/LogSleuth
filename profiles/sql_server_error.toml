@@ -1,0 +1,59 @@
+# LogSleuth Format Profile: SQL Server Error Log
+#
+# Covers the SQL Server ERRORLOG file and its rotated copies (ERRORLOG.1 etc.).
+# Every line shares the same format regardless of SQL Server version.
+#
+#   2024-01-15 10:30:22.12 Server      Microsoft SQL Server 2022 (RTM-CU10)
+#   2024-01-15 10:30:22.45 Logon       Error: 18456, Severity: 14, State: 1.
+#   2024-01-15 10:30:22.45 Logon       Login failed for user 'sa'. [CLIENT: 10.0.0.1]
+#   2024-01-15 10:30:22.78 spid52      Warning: Memory pressure detected.
+#   2024-01-15 10:30:22.78 Server      Error: 823, Severity: 24, State: 2.
+#
+# Format: YYYY-MM-DD HH:MM:SS.ff  Component  Message
+#
+# Error/login failure messages typically appear as a pair of lines: the first
+# contains the error code and SQL Server severity number; the second contains
+# the human-readable description. Both lines carry their own timestamp so each
+# is treated as an independent entry (multiline_mode = "skip").
+#
+# SQL Server severity levels map to LogSleuth severities:
+#   Severity 20-25 -> Critical (hardware / corruption / fatal)
+#   Severity 14-19 -> Error    (user-facing errors, login failures)
+#   Severity 11-16 -> Error    (object/permission/syntax errors)
+#   Severity 1-10  -> Info/Warning (informational)
+#
+# Log locations:
+#   Windows: %ProgramFiles%\Microsoft SQL Server\MSSQL##.MSSQLSERVER\MSSQL\Log\
+#   Custom:  EXEC xp_readerrorlog or check SERVERPROPERTY('ErrorLogFileName')
+
+[profile]
+id = "sql-server-error"
+name = "SQL Server Error Log"
+version = "1.0"
+description = "Microsoft SQL Server ERRORLOG files (all versions)"
+
+[detection]
+file_patterns = [
+    "ERRORLOG",
+    "ERRORLOG.[0-9]",
+    "ERRORLOG.[0-9][0-9]",
+]
+# Timestamp with fractional seconds followed by a spid/component token
+content_match = '^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{2}'
+
+[parsing]
+# Fractional seconds (.nn) are consumed by the regex but excluded from the
+# captured timestamp group so NaiveDateTime parsing works cleanly.
+# The component field (Server, Logon, spidNN, etc.) is captured for display.
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})\.\d+\s(?P<component>\S+)\s+(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "skip"
+
+# No explicit level field; severity is inferred from message text.
+# Severity keyword matching (case-insensitive substring):
+[severity_mapping]
+critical = ["severity: 20", "severity: 21", "severity: 22", "severity: 23", "severity: 24", "severity: 25"]
+error    = ["error:", "login failed", "failed to", "cannot", "unable to", "access denied", "exception", "corrupt"]
+warning  = ["warning:", "deprecated", "timeout", "timed out", "low memory", "memory pressure", "high cpu"]
+info     = ["starting up", "recovery", "server listening", "completed", "configuration", "restarting"]
+debug    = ["dbcc", "trace flag"]

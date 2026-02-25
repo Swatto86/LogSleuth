@@ -302,6 +302,46 @@
 
 ---
 
+## Increment 15: Sidebar Layout Fixes & Live Tail File-Selection Enforcement
+**Status: COMPLETE**
+
+- [x] `ui/theme.rs` - `SIDEBAR_WIDTH` raised from 290 to 320 px to give the filter button row enough width to render without overflow.
+- [x] `gui.rs` - Added `.min_width(ui::theme::SIDEBAR_WIDTH)` to `SidePanel::left("sidebar")` so egui cannot restore a narrower width from session memory and the sidebar can never be dragged narrower than the filter buttons require.
+- [x] `ui/panels/filters.rs` - Split the single `horizontal_wrapped` button block into **two rows**: Row 1 = severity presets (`Errors only` / `Errors + Warn` / `Err+Warn+15m` / `Clear`); Row 2 = utility actions (`Summary` / `★ Bookmarks` / `× clear bm`). Each row has its own full-width budget so no button is ever squashed.
+- [x] `gui.rs` - Live Tail now **respects the source-file filter**: the `TailFileInfo` list is built by applying `hide_all_sources` and `source_files` whitelist semantics before calling `tail_manager.start_tail()`. Previously all discovered files were always tailed regardless of selection. Status bar message now shows the number of files actually being watched.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (no new tests; UI and logic fixes)**
+
+---
+
+## Increment 16: About Dialog
+**Status: COMPLETE**
+
+- [x] `ui/panels/about.rs` (NEW) - Centred, non-resizable egui `Window` showing the app icon character, app name, `v{VERSION}` (from `CARGO_PKG_VERSION` at compile time), short description, clickable GitHub repository hyperlink, MIT licence line, and "Built with Rust & egui". Dismissed by the title-bar × button; `open` flag wired to `state.show_about`.
+- [x] `ui/panels/mod.rs` - Registered `pub mod about`.
+- [x] `app/state.rs` - Added `show_about: bool` field (initialised `false`; not reset on `clear()` — independent of scan state).
+- [x] `gui.rs` - Right-aligned greyed `ⓘ` frameless button in the menu bar (rendered before left-anchored `File`/`View` menus so egui allocates its space first). Hover text: "About LogSleuth". Click sets `state.show_about = true`.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (no new tests; UI only)**
+
+---
+
+## Increment 17: New Built-in Format Profiles
+**Status: COMPLETE**
+
+Expanded the built-in profile library from 9 to 14 profiles. All profiles are embedded at compile time via `include_str!` and are therefore available in the portable EXE without any external files.
+
+- [x] `profiles/sql_server_error.toml` (NEW) - Microsoft SQL Server `ERRORLOG` / `ERRORLOG.N`. Fractional-second timestamp (`.nn`) excluded from captured group so `NaiveDateTime` parsing works cleanly. Component field captures the `Server`/`Logon`/`spidNN` token. Severity inferred from message keywords (explicit SQL severity numbers for Critical). File pattern detection: `ERRORLOG`, `ERRORLOG.[0-9]`, `ERRORLOG.[0-9][0-9]`.
+- [x] `profiles/sql_server_agent.toml` (NEW) - SQL Server Agent `SQLAGENT.OUT` / `SQLAGENT.N`. Single-char level field: `!` = Error, `?`/`+` = Info. Message ID captured as thread field. File pattern detection: `SQLAGENT.OUT`, `SQLAGENT.[0-9]`.
+- [x] `profiles/apache_combined.toml` (NEW) - Apache httpd and nginx Combined Log Format. Timezone offset matched but excluded from timestamp capture so `NaiveDateTime` parsing works. HTTP status code severity mapping via `severity_override` regex (`5xx` = Error, `4xx` = Warning). File patterns: `access.log`, `access_log`, `*-access.log`, `*_access.log`.
+- [x] `profiles/nginx_error.toml` (NEW) - nginx error log (`YYYY/MM/DD HH:MM:SS [level] PID#TID: message`). Full `level` field: `emerg`/`alert`/`crit` = Critical, `error` = Error, `warn` = Warning, `notice`/`info` = Info, `debug` = Debug. Thread field captures `PID#TID`.
+- [x] `profiles/windows_dhcp.toml` (NEW) - Windows Server DHCP daily CSV logs (`DhcpSrvLog-*.log`, `DhcpV6SrvLog-*.log`). Date and time columns combined into a single timestamp capture group. Event ID captured as thread. Severity inferred from description keywords (nack/conflict/not authorized = Error; expired/unreachable = Warning).
+- [x] `src/core/profile.rs` - All 5 new profiles registered in `builtin_profile_sources()` between `log4j_default.toml` and `generic_timestamp.toml`.
+
+**Test results: 57 unit tests + 14 E2E tests = 71 total, all passing (`test_load_builtin_profiles` validates all 14 profiles compile cleanly)**
+
+---
+
 ## Future Enhancements
 
 ### High Priority
@@ -311,7 +351,7 @@
 - [ ] **Column visibility toggles** -- Allow the user to show/hide columns in the timeline (e.g. hide the filepath column when viewing a single file).
 - [ ] **Export retains filter** -- Optionally export the full entry set (pre-filter) alongside the filtered export.
 - [ ] **Profile editor UI** -- In-app wizard to create and test a new TOML profile without leaving LogSleuth.
-- [ ] **Additional built-in profiles** -- Windows Event Log XML exports, Apache/nginx access logs, Docker/podman JSON logs, systemd journal exports.
+- [x] **Additional built-in profiles** -- Increment 17 added SQL Server Error Log, SQL Server Agent, Apache Combined, nginx Error, and Windows DHCP. Remaining candidates: Windows Event Log XML exports, Docker/podman JSON logs, systemd journal exports.
 - [ ] **Configurable max files / max entries** -- Surface `DEFAULT_MAX_FILES` and any entry cap as editable config values in the UI rather than compile-time constants only.
 
 ### Low Priority / Research

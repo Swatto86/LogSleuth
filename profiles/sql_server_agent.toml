@@ -1,0 +1,45 @@
+# LogSleuth Format Profile: SQL Server Agent Log
+#
+# Covers the SQL Server Agent log file SQLAGENT.OUT and its rotated copies.
+# Each line uses a fixed format with a single-character severity indicator:
+#
+#   2024-01-15 10:30:22 - + [100] Microsoft SQL Server Agent version 15.0.4360.2 ...
+#   2024-01-15 10:30:22 - ? [129] SQLSERVERAGENT starting under Windows NT ...
+#   2024-01-15 10:30:22 - ! [364] The Messenger service has not been started - ignored
+#   2024-01-15 10:30:22 - ! [208] SQL Agent restarting ...
+#
+# Level codes:
+#   +  = Success / informational
+#   ?  = Informational
+#   !  = Error or important warning
+#
+# Format: YYYY-MM-DD HH:MM:SS - LEVEL [MessageID] Message
+#
+# Log locations:
+#   Windows: %ProgramFiles%\Microsoft SQL Server\MSSQL##.MSSQLSERVER\MSSQL\Log\SQLAGENT.OUT
+#            (or configured via SQL Server Agent properties in SSMS)
+
+[profile]
+id = "sql-server-agent"
+name = "SQL Server Agent Log"
+version = "1.0"
+description = "SQL Server Agent logs (SQLAGENT.OUT)"
+
+[detection]
+file_patterns = [
+    "SQLAGENT.OUT",
+    "SQLAGENT.[0-9]",
+    "SQLAGENT.[0-9][0-9]",
+]
+# Timestamp + space + dash + space + one of the three level codes
+content_match = '^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\s-\s[?!+]\s\['
+
+[parsing]
+# Captures timestamp, single-char level (+/?/!), message ID (as thread), and message.
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})\s-\s(?P<level>[?!+])\s\[(?P<thread>\d+)\]\s(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "skip"
+
+[severity_mapping]
+error   = ["!"]
+info    = ["?", "+"]

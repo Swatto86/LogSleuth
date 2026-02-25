@@ -67,6 +67,7 @@ After a scan completes, click **● Live Tail** in the sidebar to watch all load
 - File rotation and truncation are handled automatically: if a file is replaced or cleared, the offset resets to the beginning of the new file.
 - Click **■ Stop Tail** to stop watching. The captured entries remain in the timeline for filtering and export.
 - When a relative-time window is active during Live Tail, a green **● Rolling window (live)** indicator appears under the time-range control to confirm the window is continuously advancing.
+- **Live Tail respects your source-file filter.** If you have narrowed the file list in the sidebar, only those selected files are watched. Selecting "None" stops all watching; the status bar shows how many files are actually being tailed.
 
 > **Tip**: Click **Err+Warn+15m**, then **● Live Tail** to instantly monitor only recent errors and warnings across all loaded files in real time.
 
@@ -123,6 +124,10 @@ Selecting any timeline entry shows it in the detail pane at the bottom. From the
 
 Use **File > Export > CSV** or **File > Export > JSON** to save the currently filtered entry set. A native save dialog is presented. Files are written atomically (write to temp, then rename) to prevent partial output.
 
+## About
+
+Click the **ⓘ** icon in the top-right corner of the menu bar to open the About dialog, which shows the application version, a link to the GitHub repository, and licence information.
+
 ## Scan Summary
 
 Use **File > Scan Summary** (or `Ctrl+S`) after a scan to see:
@@ -135,11 +140,16 @@ A **Cancel** button appears in the status bar during an active scan. Cancellatio
 
 ## Built-in Format Profiles
 
-| Profile | Product |
-|---------|---------|
-| Veeam VBR | Veeam Backup & Replication service and job logs |
-| Veeam VBO365 | Veeam Backup for Microsoft 365 |
-| IIS W3C | Microsoft IIS web server |
+| Profile | Product / Format |
+|---------|------------------|
+| Veeam VBR | Veeam Backup & Replication service and job logs (`Svc.*.log`, `Job.*.log`) |
+| Veeam VBO365 | Veeam Backup for Microsoft 365 (`Veeam.Archiver.*.log`) |
+| IIS W3C | Microsoft IIS web server W3C Extended format (`u_ex*.log`) |
+| SQL Server Error Log | Microsoft SQL Server `ERRORLOG` / `ERRORLOG.N` |
+| SQL Server Agent Log | SQL Server Agent `SQLAGENT.OUT` |
+| Apache / nginx Combined Access | Apache httpd and nginx Combined Log Format (`access.log`, `access_log`) |
+| nginx Error Log | nginx web server error log (`error.log`) |
+| Windows DHCP Server Log | Windows Server DHCP daily activity logs (`DhcpSrvLog-*.log`) |
 | Syslog (RFC 3164) | BSD syslog (rsyslog, syslog-ng) |
 | Syslog (RFC 5424) | IETF structured syslog |
 | JSON Lines | Newline-delimited JSON logs |

@@ -1,6 +1,6 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 14 complete -- portable Windows EXE in release pipeline
+> **Status**: Increment 17 complete — 14 built-in profiles, About dialog, sidebar layout fixes
 > **Last updated**: 2026-02-25
 
 ---
@@ -67,8 +67,8 @@ LogSleuth/
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
 |   |   +-- session.rs           # Session persistence: SessionData + PersistedFilter structs (serde JSON); session_path(), save() (atomic write via .json.tmp rename), load() (returns None on missing/corrupt/version-mismatch — never errors to user); SESSION_VERSION const for forward-compat
-|   |   +-- state.rs             # Application state; tail flags; show_log_summary; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), filtered_results_report() (bounded to MAX_CLIPBOARD_ENTRIES), update_correlation(), next_entry_id(), save_session(), restore_from_session()
-|   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo
+|   |   +-- state.rs             # Application state; tail flags; show_log_summary; show_about; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), filtered_results_report() (bounded to MAX_CLIPBOARD_ENTRIES), update_correlation(), next_entry_id(), save_session(), restore_from_session()
+|   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo; file-selection filter applied before start (respects hide_all_sources + source_files whitelist)
 |   +-- core/
 |   |   +-- mod.rs
 |   |   +-- model.rs             # LogEntry, Severity, FormatProfile structs; FormatProfile includes severity_override: HashMap<Severity,Vec<Regex>> + apply_severity_override() method
@@ -81,13 +81,14 @@ LogSleuth/
 |   |   +-- mod.rs
 |   |   +-- panels/
 |   |   |   +-- mod.rs
+|   |   |   +-- about.rs         # About dialog: centred modal window (version from CARGO_PKG_VERSION, GitHub link, MIT licence); show_about flag on AppState; ⓘ button right-aligned in menu bar
 |   |   |   +-- discovery.rs     # Directory picker, scan controls, file list (max_height 360 px)
 |   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
 |   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
-|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, fuzzy ~ toggle, relative time quick-buttons (15m/1h/6h/24h) + custom input + rolling-window live indicator (green dot when tail active), source file checklist with coloured dot + Solo button + real-time search box (shown >8 files), Select All/None on visible subset; "Errors only" / "Errors+Warn" / "Err+Warn+15m" quick-presets; "Summary" quick-button; "Bookmarks (N)" toggle + "clear bm" button; "Copy" clipboard button at entry-count footer (disabled when filtered set empty)
-|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=290
+|   |   |   +-- filters.rs       # Filter controls sidebar: two button rows (Row 1: severity presets — Errors only/Errors+Warn/Err+Warn+15m/Clear; Row 2: Summary/Bookmarks/clear bm); severity checkboxes; text/regex inputs; fuzzy ~ toggle; relative time quick-buttons (15m/1h/6h/24h) + custom input + rolling-window live indicator; source file checklist with coloured dot + Solo button + real-time search box (shown >8 files); Select All/None on visible subset; "● Rolling window (live)" indicator; "Copy" clipboard button at entry-count footer (disabled when empty)
+|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=320 (min_width enforced on SidePanel)
 |   +-- platform/
 |   |   +-- mod.rs
 |   |   +-- fs.rs                # FileReader trait + OS implementations
@@ -101,6 +102,11 @@ LogSleuth/
 |   +-- veeam_vbr.toml           # Veeam Backup & Replication
 |   +-- veeam_vbo365.toml        # Veeam Backup for M365
 |   +-- iis_w3c.toml             # IIS W3C format
+|   +-- sql_server_error.toml    # SQL Server ERRORLOG
+|   +-- sql_server_agent.toml    # SQL Server Agent SQLAGENT.OUT
+|   +-- apache_combined.toml     # Apache / nginx Combined Access log
+|   +-- nginx_error.toml         # nginx error log
+|   +-- windows_dhcp.toml        # Windows DHCP Server daily logs
 |   +-- syslog_rfc3164.toml      # BSD syslog
 |   +-- syslog_rfc5424.toml      # IETF syslog
 |   +-- json_lines.toml          # JSON Lines (generic)

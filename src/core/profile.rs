@@ -363,6 +363,26 @@ pub fn builtin_profile_sources() -> Vec<(&'static str, &'static str)> {
             include_str!("../../profiles/log4j_default.toml"),
         ),
         (
+            "sql_server_error.toml",
+            include_str!("../../profiles/sql_server_error.toml"),
+        ),
+        (
+            "sql_server_agent.toml",
+            include_str!("../../profiles/sql_server_agent.toml"),
+        ),
+        (
+            "apache_combined.toml",
+            include_str!("../../profiles/apache_combined.toml"),
+        ),
+        (
+            "nginx_error.toml",
+            include_str!("../../profiles/nginx_error.toml"),
+        ),
+        (
+            "windows_dhcp.toml",
+            include_str!("../../profiles/windows_dhcp.toml"),
+        ),
+        (
             "generic_timestamp.toml",
             include_str!("../../profiles/generic_timestamp.toml"),
         ),

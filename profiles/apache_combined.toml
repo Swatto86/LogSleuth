@@ -1,0 +1,59 @@
+# LogSleuth Format Profile: Apache / nginx Combined Access Log
+#
+# The Combined Log Format is the default for Apache httpd and is also widely
+# used by nginx, HAProxy, Caddy, and other HTTP servers. The format is:
+#
+#   %h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-Agent}i"
+#
+# Example lines:
+#   192.168.1.10 - frank [10/Oct/2023:13:55:36 -0700] "GET /img/logo.png HTTP/1.1" 200 2326 "-" "Mozilla/5.0"
+#   10.0.0.1    - -     [10/Oct/2023:13:55:36 +0000] "POST /api/submit HTTP/1.1" 500 1234 "-" "curl/7.68.0"
+#   192.168.1.20 - bob  [10/Oct/2023:13:55:37 +0100] "GET /missing HTTP/1.1" 404 512 "http://ref.com" "Mozilla/5.0"
+#
+# There is no explicit severity field. Severity is derived from the HTTP status
+# code embedded in the message field:
+#   5xx -> Error
+#   4xx -> Warning
+#   3xx/2xx/1xx -> Info
+#
+# The timezone offset is matched by the regex but excluded from the timestamp
+# capture group so NaiveDateTime parsing works cleanly (times treated as UTC).
+#
+# Log locations:
+#   Apache:  /var/log/apache2/access.log, /var/log/httpd/access_log
+#   nginx:   /var/log/nginx/access.log
+#   Windows: %SystemDrive%\inetpub\logs\ (if Apache on Windows)
+
+[profile]
+id = "apache-combined"
+name = "Apache / nginx Combined Access Log"
+version = "1.0"
+description = "Apache httpd and nginx Combined Log Format access logs"
+
+[detection]
+file_patterns = [
+    "access.log",
+    "access.log.[0-9]*",
+    "access_log",
+    "access_log.[0-9]*",
+    "*-access.log",
+    "*_access.log",
+]
+# Matches the [DD/Mon/YYYY:HH:MM:SS timezone] bracket pattern unique to CLF
+content_match = '^\S+\s+\S+\s+\S+\s+\[\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}\s[+-]\d{4}\]'
+
+[parsing]
+# Timezone offset ([+-]dddd) is matched but not included in the timestamp group
+# so NaiveDateTime parsing works (offset is discarded, time treated as-is).
+# The client IP is captured as component; the full request + status + bytes
+# are captured as message so HTTP status codes are available for severity.
+line_pattern = '^(?P<component>\S+)\s+\S+\s+\S+\s+\[(?P<timestamp>\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2})\s[+-]\d{4}\]\s+(?P<message>"[^"]*"\s+\d{3}\s+.+)$'
+timestamp_format = "%d/%b/%Y:%H:%M:%S"
+multiline_mode = "skip"
+
+# No level field — severity is derived from message content via override regexes.
+# The HTTP status code appears in the message as: "GET /path HTTP/1.1" NNN bytes
+# Pattern matches the status code between the closing quote and the byte count.
+[severity_override]
+error   = ['" 5\d{2} ']
+warning = ['" 4[0-9]{2} ']
