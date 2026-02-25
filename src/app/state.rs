@@ -96,10 +96,8 @@ impl AppState {
         // Relative time filter: derive the absolute start bound each call so the
         // rolling window stays current as the clock advances.
         if let Some(secs) = self.filter_state.relative_time_secs {
-            self.filter_state.time_start = Some(
-                chrono::Utc::now()
-                    - chrono::Duration::seconds(secs as i64),
-            );
+            self.filter_state.time_start =
+                Some(chrono::Utc::now() - chrono::Duration::seconds(secs as i64));
             self.filter_state.time_end = None;
         }
 

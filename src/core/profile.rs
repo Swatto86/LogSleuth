@@ -141,10 +141,7 @@ pub fn validate_and_compile(
     let line_pattern = compile_regex(id, "parsing.line_pattern", &def.parsing.line_pattern)?;
 
     // Validate line_pattern has at least a 'message' capture group
-    let capture_names: Vec<&str> = line_pattern
-        .capture_names()
-        .flatten()
-        .collect();
+    let capture_names: Vec<&str> = line_pattern.capture_names().flatten().collect();
 
     if !capture_names.contains(&"message") {
         tracing::warn!(
@@ -267,10 +264,7 @@ pub fn auto_detect(
         }
 
         if confidence >= constants::AUTO_DETECT_MIN_CONFIDENCE {
-            if best
-                .as_ref()
-                .map_or(true, |b| confidence > b.confidence)
-            {
+            if best.as_ref().map_or(true, |b| confidence > b.confidence) {
                 best = Some(DetectionResult {
                     profile_id: profile.id.clone(),
                     confidence,
@@ -296,15 +290,39 @@ pub fn auto_detect(
 /// Each tuple is (filename, TOML content).
 pub fn builtin_profile_sources() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("veeam_vbr.toml", include_str!("../../profiles/veeam_vbr.toml")),
-        ("veeam_vbo365.toml", include_str!("../../profiles/veeam_vbo365.toml")),
+        (
+            "veeam_vbr.toml",
+            include_str!("../../profiles/veeam_vbr.toml"),
+        ),
+        (
+            "veeam_vbo365.toml",
+            include_str!("../../profiles/veeam_vbo365.toml"),
+        ),
         ("iis_w3c.toml", include_str!("../../profiles/iis_w3c.toml")),
-        ("syslog_rfc3164.toml", include_str!("../../profiles/syslog_rfc3164.toml")),
-        ("syslog_rfc5424.toml", include_str!("../../profiles/syslog_rfc5424.toml")),
-        ("json_lines.toml", include_str!("../../profiles/json_lines.toml")),
-        ("log4j_default.toml", include_str!("../../profiles/log4j_default.toml")),
-        ("generic_timestamp.toml", include_str!("../../profiles/generic_timestamp.toml")),
-        ("plain_text.toml", include_str!("../../profiles/plain_text.toml")),
+        (
+            "syslog_rfc3164.toml",
+            include_str!("../../profiles/syslog_rfc3164.toml"),
+        ),
+        (
+            "syslog_rfc5424.toml",
+            include_str!("../../profiles/syslog_rfc5424.toml"),
+        ),
+        (
+            "json_lines.toml",
+            include_str!("../../profiles/json_lines.toml"),
+        ),
+        (
+            "log4j_default.toml",
+            include_str!("../../profiles/log4j_default.toml"),
+        ),
+        (
+            "generic_timestamp.toml",
+            include_str!("../../profiles/generic_timestamp.toml"),
+        ),
+        (
+            "plain_text.toml",
+            include_str!("../../profiles/plain_text.toml"),
+        ),
     ]
 }
 
@@ -448,7 +466,10 @@ timestamp_format = "%Y"
         let def = parse_profile_toml(toml, &path).unwrap();
         let result = validate_and_compile(def, &path, false);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ProfileError::InvalidRegex { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ProfileError::InvalidRegex { .. }
+        ));
     }
 
     #[test]
@@ -472,7 +493,10 @@ timestamp_format = "%Y"
         let def = parse_profile_toml(&toml, &path).unwrap();
         let result = validate_and_compile(def, &path, false);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ProfileError::RegexTooLong { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ProfileError::RegexTooLong { .. }
+        ));
     }
 
     #[test]

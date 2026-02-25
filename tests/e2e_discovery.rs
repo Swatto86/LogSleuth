@@ -11,8 +11,8 @@
 // Per DevWorkflow Part A Rule 3 (E2E tests mandatory for every user-visible
 // feature), these tests MUST be kept passing before each release.
 
-use logsleuth::core::discovery::{DiscoveryConfig, discover_files};
-use logsleuth::core::parser::{ParseConfig, parse_content};
+use logsleuth::core::discovery::{discover_files, DiscoveryConfig};
+use logsleuth::core::parser::{parse_content, ParseConfig};
 use logsleuth::core::profile;
 use std::fs;
 use std::path::PathBuf;
@@ -245,7 +245,11 @@ fn e2e_veeam_vbr_timestamps_are_parsed() {
     );
 
     // Every entry that matched the primary pattern should have a timestamp.
-    let entries_with_ts = result.entries.iter().filter(|e| e.timestamp.is_some()).count();
+    let entries_with_ts = result
+        .entries
+        .iter()
+        .filter(|e| e.timestamp.is_some())
+        .count();
     let total = result.entries.len();
     assert!(
         entries_with_ts > 0,
@@ -312,7 +316,9 @@ fn e2e_veeam_vbr_severity_mapping() {
 
     // Check the specific message we know is in the fixture.
     assert!(
-        error_entries.iter().any(|e| e.message.contains("Failed to create snapshot")),
+        error_entries
+            .iter()
+            .any(|e| e.message.contains("Failed to create snapshot")),
         "should find the snapshot failure error entry"
     );
 }
@@ -339,7 +345,11 @@ fn e2e_entry_ids_are_monotonic() {
     );
 
     let first_id = result.entries.first().map(|e| e.id);
-    assert_eq!(first_id, Some(id_start), "first entry id should equal id_start");
+    assert_eq!(
+        first_id,
+        Some(id_start),
+        "first entry id should equal id_start"
+    );
 
     for (i, entry) in result.entries.iter().enumerate() {
         assert_eq!(

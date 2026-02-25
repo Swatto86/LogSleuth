@@ -233,9 +233,7 @@ fn parse_timestamp(raw: &str, format: &str) -> Result<DateTime<Utc>, String> {
         return Ok(dt.into());
     }
 
-    Err(format!(
-        "cannot parse '{trimmed}' with format '{format}'"
-    ))
+    Err(format!("cannot parse '{trimmed}' with format '{format}'"))
 }
 
 #[cfg(test)]
@@ -334,13 +332,7 @@ info = ["Info"]
             ..ParseConfig::default()
         };
 
-        let result = parse_content(
-            &content,
-            &PathBuf::from("big.log"),
-            &profile,
-            &config,
-            0,
-        );
+        let result = parse_content(&content, &PathBuf::from("big.log"), &profile, &config, 0);
 
         assert_eq!(result.entries.len(), 1);
         assert!(result.entries[0].message.len() < 1100); // truncated + suffix
@@ -354,19 +346,28 @@ info = ["Info"]
     #[test]
     fn test_parse_timestamp_naive_datetime() {
         let ts = parse_timestamp("2024-01-15 14:30:22", "%Y-%m-%d %H:%M:%S").unwrap();
-        assert_eq!(ts.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-01-15 14:30:22");
+        assert_eq!(
+            ts.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-01-15 14:30:22"
+        );
     }
 
     #[test]
     fn test_parse_timestamp_with_milliseconds() {
         let ts = parse_timestamp("2024-01-15 14:30:22.123", "%Y-%m-%d %H:%M:%S%.f").unwrap();
-        assert_eq!(ts.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-01-15 14:30:22");
+        assert_eq!(
+            ts.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-01-15 14:30:22"
+        );
     }
 
     #[test]
     fn test_parse_timestamp_rfc3339() {
         let ts = parse_timestamp("2024-01-15T14:30:22+00:00", "%Y-%m-%dT%H:%M:%S%z").unwrap();
-        assert_eq!(ts.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-01-15 14:30:22");
+        assert_eq!(
+            ts.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-01-15 14:30:22"
+        );
     }
 
     #[test]
@@ -392,9 +393,22 @@ info = ["Info"]
 
         // Both lines match — one has a bad timestamp, one is good
         assert_eq!(result.entries.len(), 2, "both lines should produce entries");
-        assert!(result.entries[0].timestamp.is_none(), "bad ts entry should have None");
-        assert!(result.entries[1].timestamp.is_some(), "good ts entry should have Some");
-        assert_eq!(result.errors.len(), 1, "should record exactly one timestamp error");
-        assert!(matches!(result.errors[0], ParseError::TimestampParse { .. }));
+        assert!(
+            result.entries[0].timestamp.is_none(),
+            "bad ts entry should have None"
+        );
+        assert!(
+            result.entries[1].timestamp.is_some(),
+            "good ts entry should have Some"
+        );
+        assert_eq!(
+            result.errors.len(),
+            1,
+            "should record exactly one timestamp error"
+        );
+        assert!(matches!(
+            result.errors[0],
+            ParseError::TimestampParse { .. }
+        ));
     }
 }

@@ -79,9 +79,15 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Feedback indicator -- only show when there is a non-empty pattern
     if !state.filter_state.regex_pattern.is_empty() {
         if state.filter_state.regex_search.is_some() {
-            ui.colored_label(egui::Color32::from_rgb(74, 222, 128), "\u{2713} regex valid");
+            ui.colored_label(
+                egui::Color32::from_rgb(74, 222, 128),
+                "\u{2713} regex valid",
+            );
         } else {
-            ui.colored_label(egui::Color32::from_rgb(248, 113, 113), "\u{2717} invalid regex");
+            ui.colored_label(
+                egui::Color32::from_rgb(248, 113, 113),
+                "\u{2717} invalid regex",
+            );
         }
     }
 
@@ -95,7 +101,12 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     // Quick-select buttons (toggle: click active button to clear it)
     ui.horizontal_wrapped(|ui| {
-        for &(label, secs) in &[("15m", 15u64 * 60), ("1h", 3_600), ("6h", 21_600), ("24h", 86_400)] {
+        for &(label, secs) in &[
+            ("15m", 15u64 * 60),
+            ("1h", 3_600),
+            ("6h", 21_600),
+            ("24h", 86_400),
+        ] {
             let active = state.filter_state.relative_time_secs == Some(secs);
             if ui.selectable_label(active, label).clicked() {
                 if active {
@@ -120,8 +131,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         );
         ui.label("min");
 
-        let committed = resp.lost_focus()
-            && resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        let committed = resp.lost_focus() && resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
         if committed {
             let trimmed = state.filter_state.relative_time_input.trim().to_string();
             if let Ok(mins) = trimmed.parse::<u64>() {
@@ -133,8 +143,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         }
 
         // Clear button when a relative window is set
-        if state.filter_state.relative_time_secs.is_some()
-            && ui.small_button("\u{2715}").clicked()
+        if state.filter_state.relative_time_secs.is_some() && ui.small_button("\u{2715}").clicked()
         {
             state.filter_state.relative_time_secs = None;
             state.filter_state.time_start = None;
@@ -266,10 +275,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                             // first, then remove this one.
                             if state.filter_state.source_files.is_empty() {
                                 for (other_path, _) in &file_paths {
-                                    state
-                                        .filter_state
-                                        .source_files
-                                        .insert(other_path.clone());
+                                    state.filter_state.source_files.insert(other_path.clone());
                                 }
                             }
                             state.filter_state.source_files.remove(path);

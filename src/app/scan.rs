@@ -154,26 +154,23 @@ fn run_scan(
     send!(ScanProgress::DiscoveryStarted);
 
     let tx_discovery = tx.clone();
-    let (mut discovered_files, warnings) = match discovery::discover_files(
-        &root,
-        &config,
-        |path, count| {
+    let (mut discovered_files, warnings) =
+        match discovery::discover_files(&root, &config, |path, count| {
             tracing::trace!(file = %path.display(), count, "File discovered");
             // Non-fatal: ignore send error (UI may have closed).
             let _ = tx_discovery.send(ScanProgress::FileDiscovered {
                 path: path.to_path_buf(),
                 files_found: count,
             });
-        },
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            send!(ScanProgress::Failed {
-                error: e.to_string(),
-            });
-            return;
-        }
-    };
+        }) {
+            Ok(result) => result,
+            Err(e) => {
+                send!(ScanProgress::Failed {
+                    error: e.to_string(),
+                });
+                return;
+            }
+        };
 
     // Forward discovery warnings as non-fatal scan warnings.
     for warning in warnings {
@@ -192,11 +189,7 @@ fn run_scan(
         check_cancel!();
 
         let samples = read_sample_lines(&file.path, SAMPLE_LINES);
-        let file_name = file
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if let Some(detection) = profile::auto_detect(file_name, &samples, &profiles) {
             file.profile_id = Some(detection.profile_id.clone());
@@ -326,10 +319,8 @@ fn run_scan(
         for entry in parse_result.entries {
             entry_batch.push(entry);
             if entry_batch.len() >= ENTRY_BATCH_SIZE {
-                let batch = std::mem::replace(
-                    &mut entry_batch,
-                    Vec::with_capacity(ENTRY_BATCH_SIZE),
-                );
+                let batch =
+                    std::mem::replace(&mut entry_batch, Vec::with_capacity(ENTRY_BATCH_SIZE));
                 send!(ScanProgress::EntriesBatch { entries: batch });
                 check_cancel!();
             }

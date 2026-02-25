@@ -114,8 +114,7 @@ fn main() {
         .unwrap_or(&platform_paths.user_profiles_dir);
 
     // Load format profiles
-    let (profiles, profile_errors) =
-        app::profile_mgr::load_all_profiles(Some(user_profile_dir));
+    let (profiles, profile_errors) = app::profile_mgr::load_all_profiles(Some(user_profile_dir));
 
     if !profile_errors.is_empty() {
         for err in &profile_errors {
@@ -123,10 +122,7 @@ fn main() {
         }
     }
 
-    tracing::info!(
-        profiles = profiles.len(),
-        "Ready to launch GUI"
-    );
+    tracing::info!(profiles = profiles.len(), "Ready to launch GUI");
 
     // Create application state
     let mut state = app::state::AppState::new(profiles, cli.debug);
@@ -162,9 +158,7 @@ fn main() {
     let result = eframe::run_native(
         util::constants::APP_NAME,
         native_options,
-        Box::new(move |_cc| {
-            Ok(Box::new(gui::LogSleuthApp::new(state)))
-        }),
+        Box::new(move |_cc| Ok(Box::new(gui::LogSleuthApp::new(state)))),
     );
 
     if let Err(e) = result {

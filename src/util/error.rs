@@ -132,16 +132,10 @@ pub enum ProfileError {
     },
 
     /// Maximum number of profiles exceeded.
-    TooManyProfiles {
-        count: usize,
-        max: usize,
-    },
+    TooManyProfiles { count: usize, max: usize },
 
     /// I/O error reading a profile file.
-    Io {
-        path: PathBuf,
-        source: io::Error,
-    },
+    Io { path: PathBuf, source: io::Error },
 }
 
 impl fmt::Display for ProfileError {
@@ -160,7 +154,10 @@ impl fmt::Display for ProfileError {
                 path.display()
             ),
             Self::MissingField { profile_id, field } => {
-                write!(f, "Profile '{profile_id}': missing required field '{field}'")
+                write!(
+                    f,
+                    "Profile '{profile_id}': missing required field '{field}'"
+                )
             }
             Self::InvalidRegex {
                 profile_id,
@@ -199,7 +196,11 @@ impl fmt::Display for ProfileError {
                 write!(f, "Too many profiles loaded ({count}), maximum is {max}")
             }
             Self::Io { path, source } => {
-                write!(f, "I/O error reading profile '{}': {source}", path.display())
+                write!(
+                    f,
+                    "I/O error reading profile '{}': {source}",
+                    path.display()
+                )
             }
         }
     }
@@ -272,11 +273,7 @@ impl fmt::Display for DiscoveryError {
                 )
             }
             Self::Traversal { path, source } => {
-                write!(
-                    f,
-                    "Error traversing '{}': {source}",
-                    path.display()
-                )
+                write!(f, "Error traversing '{}': {source}", path.display())
             }
         }
     }
@@ -327,10 +324,7 @@ pub enum ParseError {
     },
 
     /// I/O error while reading a log file.
-    Io {
-        file: PathBuf,
-        source: io::Error,
-    },
+    Io { file: PathBuf, source: io::Error },
 }
 
 impl fmt::Display for ParseError {
@@ -340,11 +334,7 @@ impl fmt::Display for ParseError {
                 file,
                 line_number,
                 reason,
-            } => write!(
-                f,
-                "'{}' line {line_number}: {reason}",
-                file.display()
-            ),
+            } => write!(f, "'{}' line {line_number}: {reason}", file.display()),
             Self::TimestampParse {
                 file,
                 line_number,
@@ -357,11 +347,7 @@ impl fmt::Display for ParseError {
                 file.display()
             ),
             Self::InvalidEncoding { file, source } => {
-                write!(
-                    f,
-                    "'{}': invalid UTF-8 encoding: {source}",
-                    file.display()
-                )
+                write!(f, "'{}': invalid UTF-8 encoding: {source}", file.display())
             }
             Self::Io { file, source } => {
                 write!(f, "'{}': I/O error: {source}", file.display())
@@ -432,16 +418,10 @@ impl From<FilterError> for LogSleuthError {
 #[derive(Debug)]
 pub enum ExportError {
     /// I/O error writing the export file.
-    Io {
-        path: PathBuf,
-        source: io::Error,
-    },
+    Io { path: PathBuf, source: io::Error },
 
     /// CSV serialisation error.
-    Csv {
-        path: PathBuf,
-        source: csv::Error,
-    },
+    Csv { path: PathBuf, source: csv::Error },
 
     /// JSON serialisation error.
     Json {
@@ -450,10 +430,7 @@ pub enum ExportError {
     },
 
     /// Export would exceed maximum entry count.
-    TooManyEntries {
-        count: usize,
-        max: usize,
-    },
+    TooManyEntries { count: usize, max: usize },
 }
 
 impl fmt::Display for ExportError {
@@ -515,10 +492,7 @@ pub enum ConfigError {
     },
 
     /// I/O error reading config file.
-    Io {
-        path: PathBuf,
-        source: io::Error,
-    },
+    Io { path: PathBuf, source: io::Error },
 }
 
 impl fmt::Display for ConfigError {

@@ -35,9 +35,7 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
             .strong(),
         );
         if let Some(ts) = entry.timestamp {
-            ui.label(
-                egui::RichText::new(ts.format("  %Y-%m-%d %H:%M:%S UTC").to_string()).weak(),
-            );
+            ui.label(egui::RichText::new(ts.format("  %Y-%m-%d %H:%M:%S UTC").to_string()).weak());
         }
     });
 

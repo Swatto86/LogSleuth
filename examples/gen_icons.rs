@@ -32,8 +32,7 @@ fn main() {
     let mut opt = usvg::Options::default();
     Arc::make_mut(&mut opt.fontdb).load_system_fonts();
 
-    let tree = usvg::Tree::from_data(&svg_data, &opt)
-        .expect("Failed to parse SVG");
+    let tree = usvg::Tree::from_data(&svg_data, &opt).expect("Failed to parse SVG");
 
     let svg_w = tree.size().width();
     let svg_h = tree.size().height();
@@ -91,8 +90,8 @@ fn main() {
     }
 
     let ico_path = "assets/icon.ico";
-    let ico_file = fs::File::create(ico_path)
-        .unwrap_or_else(|e| panic!("Failed to create {ico_path}: {e}"));
+    let ico_file =
+        fs::File::create(ico_path).unwrap_or_else(|e| panic!("Failed to create {ico_path}: {e}"));
     icon_dir
         .write(ico_file)
         .unwrap_or_else(|e| panic!("Failed to write ICO: {e}"));

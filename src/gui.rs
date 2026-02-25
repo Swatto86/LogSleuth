@@ -35,9 +35,7 @@ impl eframe::App for LogSleuthApp {
                     self.state.status_message = "Discovering files...".to_string();
                     self.state.scan_in_progress = true;
                 }
-                crate::core::model::ScanProgress::FileDiscovered {
-                    files_found, ..
-                } => {
+                crate::core::model::ScanProgress::FileDiscovered { files_found, .. } => {
                     self.state.status_message =
                         format!("Discovering files... ({files_found} found)");
                 }
@@ -49,8 +47,7 @@ impl eframe::App for LogSleuthApp {
                     self.state.discovered_files = files;
                 }
                 crate::core::model::ScanProgress::ParsingStarted { total_files } => {
-                    self.state.status_message =
-                        format!("Parsing {total_files} files...");
+                    self.state.status_message = format!("Parsing {total_files} files...");
                 }
                 crate::core::model::ScanProgress::FileParsed {
                     files_completed,

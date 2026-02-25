@@ -22,10 +22,7 @@ pub fn load_all_profiles(
     let mut profiles = profile::load_builtin_profiles();
     let mut errors = Vec::new();
 
-    tracing::info!(
-        builtin_count = profiles.len(),
-        "Loaded built-in profiles"
-    );
+    tracing::info!(builtin_count = profiles.len(), "Loaded built-in profiles");
 
     // Load user-defined profiles if the directory exists
     if let Some(dir) = user_profile_dir {
@@ -71,10 +68,7 @@ pub fn load_all_profiles(
         profiles.truncate(constants::MAX_PROFILES);
     }
 
-    tracing::info!(
-        total = profiles.len(),
-        "Profile loading complete"
-    );
+    tracing::info!(total = profiles.len(), "Profile loading complete");
 
     (profiles, errors)
 }

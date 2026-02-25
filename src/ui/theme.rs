@@ -9,12 +9,12 @@ use egui::Color32;
 /// Colour for a given severity level.
 pub fn severity_colour(severity: &Severity) -> Color32 {
     match severity {
-        Severity::Critical => Color32::from_rgb(220, 38, 38),   // Red 600
-        Severity::Error => Color32::from_rgb(185, 28, 28),      // Red 800
-        Severity::Warning => Color32::from_rgb(217, 119, 6),    // Amber 600
-        Severity::Info => Color32::from_rgb(209, 213, 219),     // Gray 300
-        Severity::Debug => Color32::from_rgb(107, 114, 128),    // Gray 500
-        Severity::Unknown => Color32::from_rgb(75, 85, 99),     // Gray 600
+        Severity::Critical => Color32::from_rgb(220, 38, 38), // Red 600
+        Severity::Error => Color32::from_rgb(185, 28, 28),    // Red 800
+        Severity::Warning => Color32::from_rgb(217, 119, 6),  // Amber 600
+        Severity::Info => Color32::from_rgb(209, 213, 219),   // Gray 300
+        Severity::Debug => Color32::from_rgb(107, 114, 128),  // Gray 500
+        Severity::Unknown => Color32::from_rgb(75, 85, 99),   // Gray 600
     }
 }
 
@@ -29,8 +29,8 @@ pub fn severity_bg_colour(severity: &Severity) -> Option<Color32> {
 }
 
 /// Status bar colours.
-pub const STATUS_BG: Color32 = Color32::from_rgb(31, 41, 55);      // Gray 800
-pub const STATUS_TEXT: Color32 = Color32::from_rgb(209, 213, 219);  // Gray 300
+pub const STATUS_BG: Color32 = Color32::from_rgb(31, 41, 55); // Gray 800
+pub const STATUS_TEXT: Color32 = Color32::from_rgb(209, 213, 219); // Gray 300
 
 /// Layout constants.
 pub const SIDEBAR_WIDTH: f32 = 250.0;

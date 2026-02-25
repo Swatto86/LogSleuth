@@ -22,7 +22,15 @@ pub fn export_csv<W: Write>(
 
     // Header
     csv_writer
-        .write_record(["timestamp", "severity", "source_file", "line", "thread", "component", "message"])
+        .write_record([
+            "timestamp",
+            "severity",
+            "source_file",
+            "line",
+            "thread",
+            "component",
+            "message",
+        ])
         .map_err(|e| ExportError::Csv {
             path: _export_path.clone(),
             source: e,
@@ -30,10 +38,7 @@ pub fn export_csv<W: Write>(
 
     let mut count = 0;
     for entry in entries {
-        let ts = entry
-            .timestamp
-            .map(|t| t.to_rfc3339())
-            .unwrap_or_default();
+        let ts = entry.timestamp.map(|t| t.to_rfc3339()).unwrap_or_default();
 
         csv_writer
             .write_record([
@@ -95,10 +100,7 @@ mod tests {
 
     #[test]
     fn test_csv_export() {
-        let entries = vec![
-            make_entry(1, "Error one"),
-            make_entry(2, "Error two"),
-        ];
+        let entries = vec![make_entry(1, "Error one"), make_entry(2, "Error two")];
         let mut buf = Vec::new();
         let count = export_csv(&entries, &mut buf, &PathBuf::from("out.csv")).unwrap();
         assert_eq!(count, 2);

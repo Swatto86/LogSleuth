@@ -324,20 +324,13 @@ pub enum ScanProgress {
     DiscoveryStarted,
 
     /// A file was discovered.
-    FileDiscovered {
-        path: PathBuf,
-        files_found: usize,
-    },
+    FileDiscovered { path: PathBuf, files_found: usize },
 
     /// Discovery phase completed.
-    DiscoveryCompleted {
-        total_files: usize,
-    },
+    DiscoveryCompleted { total_files: usize },
 
     /// Parsing phase started.
-    ParsingStarted {
-        total_files: usize,
-    },
+    ParsingStarted { total_files: usize },
 
     /// A file has been parsed.
     FileParsed {
@@ -349,35 +342,25 @@ pub enum ScanProgress {
     },
 
     /// Parsing phase completed.
-    ParsingCompleted {
-        summary: ScanSummary,
-    },
+    ParsingCompleted { summary: ScanSummary },
 
     /// A non-fatal warning occurred during scanning.
-    Warning {
-        message: String,
-    },
+    Warning { message: String },
 
     /// Scan failed with a fatal error.
-    Failed {
-        error: String,
-    },
+    Failed { error: String },
 
     /// Scan was cancelled by the user before completion.
     Cancelled,
 
     /// All discovered file metadata, sent once after auto-detection completes
     /// so the UI can populate the discovery panel before parsing begins.
-    FilesDiscovered {
-        files: Vec<DiscoveredFile>,
-    },
+    FilesDiscovered { files: Vec<DiscoveredFile> },
 
     /// A batch of parsed log entries, streamed to the UI during parsing.
     ///
     /// Batched (see ENTRY_BATCH_SIZE in app::scan) to amortise channel overhead
     /// while still allowing the UI to display partial results before the scan
     /// finishes.
-    EntriesBatch {
-        entries: Vec<LogEntry>,
-    },
+    EntriesBatch { entries: Vec<LogEntry> },
 }

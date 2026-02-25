@@ -87,7 +87,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         ui.label(egui::RichText::new(name).small().strong());
                         ui.label(egui::RichText::new(size_text).small().weak());
                     });
-                    ui.label(egui::RichText::new(profile_text).small().color(profile_colour));
+                    ui.label(
+                        egui::RichText::new(profile_text)
+                            .small()
+                            .color(profile_colour),
+                    );
                     ui.add_space(2.0);
                 }
             });

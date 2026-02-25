@@ -175,10 +175,7 @@ where
         let file_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n,
             None => {
-                warnings.push(format!(
-                    "Skipping '{}': non-UTF-8 filename",
-                    path.display()
-                ));
+                warnings.push(format!("Skipping '{}': non-UTF-8 filename", path.display()));
                 continue;
             }
         };
@@ -204,10 +201,7 @@ where
         let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(e) => {
-                let msg = format!(
-                    "Cannot read metadata for '{}': {e}",
-                    path.display()
-                );
+                let msg = format!("Cannot read metadata for '{}': {e}", path.display());
                 tracing::debug!(warning = %msg, "Discovery warning");
                 warnings.push(msg);
                 continue;
@@ -215,10 +209,7 @@ where
         };
 
         let size = metadata.len();
-        let modified: Option<DateTime<Utc>> = metadata
-            .modified()
-            .ok()
-            .map(DateTime::<Utc>::from);
+        let modified: Option<DateTime<Utc>> = metadata.modified().ok().map(DateTime::<Utc>::from);
         let is_large = size >= config.large_file_threshold;
 
         if is_large {
@@ -315,8 +306,11 @@ mod tests {
         // Normal log files
         fs::write(root.join("app.log"), "[2024-01-01 12:00:00] Info Hello\n")
             .expect("write app.log");
-        fs::write(root.join("service.log"), "[2024-01-01 12:00:01] Error Oops\n")
-            .expect("write service.log");
+        fs::write(
+            root.join("service.log"),
+            "[2024-01-01 12:00:01] Error Oops\n",
+        )
+        .expect("write service.log");
         fs::write(root.join("readme.txt"), "Just a readme\n").expect("write readme.txt");
 
         // Excluded file
@@ -454,14 +448,20 @@ mod tests {
             ..Default::default()
         };
         let (files, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
-        assert!(!files[0].is_large, "tiny.log should not be flagged as large");
+        assert!(
+            !files[0].is_large,
+            "tiny.log should not be flagged as large"
+        );
 
         let config2 = DiscoveryConfig {
             large_file_threshold: 0, // everything is large
             ..Default::default()
         };
         let (files2, _) = discover_files(dir.path(), &config2, |_, _| {}).unwrap();
-        assert!(files2[0].is_large, "all files should be large with threshold=0");
+        assert!(
+            files2[0].is_large,
+            "all files should be large with threshold=0"
+        );
     }
 
     #[test]

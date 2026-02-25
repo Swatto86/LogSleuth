@@ -93,9 +93,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                             .file_name()
                                             .and_then(|n| n.to_str())
                                             .unwrap_or("?");
-                                        ui.label(
-                                            egui::RichText::new(name).monospace().size(11.5),
-                                        );
+                                        ui.label(egui::RichText::new(name).monospace().size(11.5));
                                         ui.label(&fs.profile_id);
                                         ui.label(fs.entry_count.to_string());
 
@@ -104,10 +102,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                         } else {
                                             ui.style().visuals.text_color()
                                         };
-                                        ui.colored_label(
-                                            err_colour,
-                                            fs.error_count.to_string(),
-                                        );
+                                        ui.colored_label(err_colour, fs.error_count.to_string());
 
                                         let time_range = match (fs.earliest, fs.latest) {
                                             (Some(e), Some(l)) if e == l => {
@@ -123,9 +118,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                             _ => "--".to_string(),
                                         };
                                         ui.label(
-                                            egui::RichText::new(time_range)
-                                                .monospace()
-                                                .size(11.5),
+                                            egui::RichText::new(time_range).monospace().size(11.5),
                                         );
                                         ui.end_row();
                                     }
