@@ -1,5 +1,6 @@
 // LogSleuth - ui/panels/mod.rs
 
+pub mod about;
 pub mod detail;
 pub mod discovery;
 pub mod filters;

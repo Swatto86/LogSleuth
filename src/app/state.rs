@@ -52,6 +52,9 @@ pub struct AppState {
     /// Whether to show the log-entry summary panel.
     pub show_log_summary: bool,
 
+    /// Whether to show the About dialog.
+    pub show_about: bool,
+
     /// Whether debug mode is enabled.
     pub debug_mode: bool,
 
@@ -166,6 +169,7 @@ impl AppState {
             warnings: Vec::new(),
             show_summary: false,
             show_log_summary: false,
+            show_about: false,
             debug_mode,
             pending_scan: None,
             request_cancel: false,
