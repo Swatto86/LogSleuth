@@ -1,33 +1,122 @@
 // LogSleuth - ui/panels/discovery.rs
 //
-// Directory picker, scan controls, discovered file list.
-// Implementation: next increment.
+// Scan controls and discovered-file list for the left sidebar.
+//
+// This panel sets `state.pending_scan` and `state.request_cancel` flags;
+// gui.rs consumes those flags and calls the ScanManager. This keeps the
+// panel within the UI layer (no direct access to ScanManager).
 
 use crate::app::state::AppState;
 
-/// Render the discovery panel (left sidebar section).
+/// Render the scan controls and file list (left sidebar top section).
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.heading("Scan");
     ui.separator();
 
-    if let Some(ref path) = state.scan_path {
-        ui.label(format!("Path: {}", path.display()));
+    // Current scan path (truncated to fit sidebar)
+    if let Some(ref path) = state.scan_path.clone() {
+        ui.label(
+            egui::RichText::new(path.display().to_string())
+                .small()
+                .weak(),
+        );
     } else {
-        ui.label("No directory selected.");
+        ui.label(egui::RichText::new("No directory selected.").small().weak());
     }
 
-    if ui
-        .add_enabled(!state.scan_in_progress, egui::Button::new("Open Directory..."))
-        .clicked()
-    {
-        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            state.scan_path = Some(path);
-            // TODO: trigger scan
+    ui.add_space(4.0);
+
+    // Scan / cancel controls
+    if state.scan_in_progress {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label("Scanning\u{2026}");
+        });
+        if ui.button("Cancel").clicked() {
+            state.request_cancel = true;
+        }
+    } else {
+        if ui
+            .add_enabled(
+                !state.scan_in_progress,
+                egui::Button::new("Open Directory\u{2026}"),
+            )
+            .clicked()
+        {
+            if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                state.pending_scan = Some(path);
+            }
         }
     }
 
-    if state.scan_in_progress {
-        ui.spinner();
-        ui.label("Scanning...");
+    // Discovered file list (shown after scan completes or while scanning)
+    if !state.discovered_files.is_empty() {
+        ui.add_space(6.0);
+        ui.separator();
+        ui.label(
+            egui::RichText::new(format!("{} files discovered", state.discovered_files.len()))
+                .small()
+                .strong(),
+        );
+
+        egui::ScrollArea::vertical()
+            .id_salt("discovery_files")
+            .max_height(200.0)
+            .show(ui, |ui| {
+                for file in &state.discovered_files {
+                    let name = file
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?");
+
+                    let (profile_text, profile_colour) = match &file.profile_id {
+                        Some(id) => (
+                            format!("{id} ({:.0}%)", file.detection_confidence * 100.0),
+                            egui::Color32::from_rgb(74, 222, 128),
+                        ),
+                        None => (
+                            "unmatched".to_string(),
+                            egui::Color32::from_rgb(156, 163, 175),
+                        ),
+                    };
+
+                    let size_text = format_size(file.size);
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(name).small().strong());
+                        ui.label(egui::RichText::new(size_text).small().weak());
+                    });
+                    ui.label(egui::RichText::new(profile_text).small().color(profile_colour));
+                    ui.add_space(2.0);
+                }
+            });
+    }
+
+    // Warnings summary
+    if !state.warnings.is_empty() {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "{} warning{}",
+                state.warnings.len(),
+                if state.warnings.len() == 1 { "" } else { "s" }
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(217, 119, 6)),
+        );
+    }
+}
+
+/// Human-readable byte size.
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1_024 {
+        format!("{:.1} KB", bytes as f64 / 1_024.0)
+    } else {
+        format!("{bytes} B")
     }
 }

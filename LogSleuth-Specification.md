@@ -20,6 +20,13 @@ Where EventSleuth targets the Windows Event Log API for structured system events
 - Log ingestion pipelines or SIEM integration
 - Modification or deletion of source log files
 
+### 1.3 Implementation Status Convention
+
+Requirements are tagged where their implementation status is notable:
+- `[IMPL]` -- fully implemented and tested
+- `[PARTIAL]` -- partially implemented; detail noted inline
+- `[FUTURE]` -- planned but not yet implemented
+
 ---
 
 ## 2. Functional Requirements
@@ -130,16 +137,19 @@ critical = ["Critical", "Fatal"]
 | ID | Requirement |
 |----|-------------|
 | FILT-01 | Filter by severity level (multi-select: Critical, Error, Warning, Info, Debug) |
-| FILT-02 | Filter by source file (multi-select from discovered files) |
-| FILT-03 | Filter by time range (start datetime, end datetime) |
+| FILT-02 | Filter by source file (multi-select from discovered files). When more than 8 files are loaded, a real-time search box appears above the list. **Select All** / **Select None** buttons operate on the currently visible (search-filtered) subset. An `N / total` counter shows how many files are visible. |
+| FILT-03 | Filter by time range. Two modes: (a) **relative rolling window** -- select a preset (15 min, 1 h, 6 h, 24 h) or type a custom number of minutes; the window advances automatically as the clock ticks, re-evaluated every second; (b) **absolute bounds** -- explicit start/end `DateTime<Utc>` stored in `FilterState.time_start` / `time_end` and evaluated in `core::filter`. The rolling window is computed in `app::state::apply_filters()` so `core` remains clock-free. |
 | FILT-04 | Filter by text search (substring match across message field, case-insensitive) |
 | FILT-05 | Filter by regex search (user-provided regex against message field) |
 | FILT-06 | Filters are composable: all active filters are AND-combined |
-| FILT-07 | Filter changes apply immediately (no "Apply" button) with debounce on text input (300ms) |
-| FILT-08 | Active filter count and matched/total entry count displayed in the status bar |
+| FILT-07 | Filter changes apply immediately (no "Apply" button). `[FUTURE]` Debounce on text input (300ms) is not yet implemented; text filters apply on every keystroke. |
+| FILT-08 | Matched/total entry count displayed as a badge in the filter panel. `[PARTIAL]` Active filter count label (e.g. "3 filters active") is not yet shown. |
 | FILT-09 | "Errors only" quick-filter button for the most common troubleshooting workflow |
+| FILT-10 | `[IMPL]` Relative time window quick-buttons (15 min / 1 h / 6 h / 24 h) and a custom "Last ___ min" text input with Enter-to-commit and a clear (✕) button. A live feedback label shows the computed absolute "After HH:MM:SS" boundary. |
 
 ### 2.6 Cross-Log Correlation
+
+> **[FUTURE -- Deferred to post-v1.0]** The requirements in this section are planned but not yet implemented.
 
 | ID | Requirement |
 |----|-------------|
@@ -161,9 +171,9 @@ critical = ["Critical", "Fatal"]
 
 | ID | Requirement |
 |----|-------------|
-| SUMM-01 | After scanning completes, display a summary: total files scanned, total entries parsed, entries by severity, files with errors, parse error count |
-| SUMM-02 | Summary includes per-file breakdown: file path, format profile, entry count, error count, time range |
-| SUMM-03 | Summary is accessible at any time via a "Scan Summary" panel/dialog |
+| SUMM-01 | `[IMPL]` After scanning completes, display a summary: total files scanned, total entries parsed, entries by severity, files with errors, parse error count, scan duration |
+| SUMM-02 | `[IMPL]` Summary includes per-file breakdown: file path, format profile, entry count, error count, time range (earliest/latest timestamp) |
+| SUMM-03 | `[IMPL]` Summary is accessible at any time via **File > Scan Summary** (`Ctrl+S`) after a scan completes |
 
 ---
 
@@ -298,12 +308,12 @@ All cross-thread communication uses `std::sync::mpsc` channels. No shared mutabl
 | `core::discovery` | Recursive file discovery with glob matching | `core::model` |
 | `core::profile` | Profile TOML parsing, validation, auto-detection | `core::model` |
 | `core::parser` | Stream-oriented log parsing using profiles | `core::model`, `core::profile` |
-| `core::filter` | Composable filter engine | `core::model` |
+| `core::filter` | Composable filter engine: severity, text, regex, absolute time bounds, source file whitelist; `FilterState` holds `relative_time_secs` (rolling window) and `relative_time_input` (UI buffer) | `core::model` |
 | `core::export` | CSV/JSON serialisation | `core::model` |
 | `app::scan` | Scan lifecycle management, threading, progress | `core::*` |
-| `app::state` | Application state, filter state, selection | `core::model` |
+| `app::state` | Application state (`pending_scan`, `request_cancel`, `file_list_search`); `apply_filters()` computes absolute time bound from `relative_time_secs` before delegating to `core::filter` | `core::model` |
 | `app::profile_mgr` | Load built-in + user profiles, handle overrides | `core::profile` |
-| `ui::panels` | UI panels (discovery, timeline, detail, summary) | `app::*` |
+| `ui::panels` | UI panels (discovery, timeline, detail, summary, filters); filters panel includes relative time quick-buttons and source file checklist with search | `app::*` |
 | `ui::theme` | Colour scheme, severity colours, layout constants | None |
 | `platform::fs` | File reading trait + OS implementations | None |
 | `platform::config` | Config paths per OS | None |

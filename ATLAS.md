@@ -1,7 +1,7 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 2 complete — Discovery Engine, timestamp parsing, background scan thread, E2E tests
-> **Last updated**: 2026-07-08
+> **Status**: Increment 4a complete — UI Polish, Virtual Scrolling, Export, Scan Summary, Relative Time Filter, Source File Filter with search
+> **Last updated**: 2026-07-10
 
 ---
 
@@ -64,7 +64,7 @@ LogSleuth/
 |   +-- app/
 |   |   +-- mod.rs
 |   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, entry batching
-|   |   +-- state.rs             # Application state, filter state, selection
+|   |   +-- state.rs             # Application state (pending_scan, request_cancel, file_list_search), filter state (relative_time_secs, source file whitelist), selection; apply_filters() computes rolling time window from wall clock
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   +-- core/
 |   |   +-- mod.rs
@@ -72,7 +72,7 @@ LogSleuth/
 |   |   +-- discovery.rs         # Recursive traversal (walkdir), glob include/exclude, filter_entry dir exclusion, metadata
 |   |   +-- profile.rs           # TOML profile parsing, validation, auto-detection scoring
 |   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing
-|   |   +-- filter.rs            # Composable filter engine
+|   |   +-- filter.rs            # Composable filter engine: severity, text, regex, absolute/relative time window, source file whitelist
 |   |   +-- export.rs            # CSV/JSON serialisation
 |   +-- ui/
 |   |   +-- mod.rs
@@ -82,7 +82,7 @@ LogSleuth/
 |   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline
 |   |   |   +-- detail.rs        # Entry detail pane
 |   |   |   +-- summary.rs       # Scan summary dialog
-|   |   |   +-- filters.rs       # Filter controls sidebar
+|   |   |   +-- filters.rs       # Filter controls sidebar: severity checkboxes, text/regex inputs, relative time quick-buttons (15m/1h/6h/24h) + custom input, source file checklist with real-time search box (shown at >8 files), Select All/None on visible subset, N/total counter
 |   |   +-- theme.rs             # Colours, severity mapping, layout constants
 |   +-- platform/
 |   |   +-- mod.rs

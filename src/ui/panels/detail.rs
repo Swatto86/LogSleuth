@@ -1,62 +1,92 @@
 // LogSleuth - ui/panels/detail.rs
 //
 // Entry detail pane showing full message, metadata, and raw text.
-// Implementation: next increment.
+// Severity label is coloured to match the timeline.
 
 use crate::app::state::AppState;
+use crate::ui::theme;
 
 /// Render the detail pane (bottom panel).
 pub fn render(ui: &mut egui::Ui, state: &AppState) {
-    if let Some(entry) = state.selected_entry() {
-        egui::Grid::new("detail_grid")
-            .num_columns(2)
-            .spacing([8.0, 4.0])
-            .show(ui, |ui| {
-                ui.label("Severity:");
-                ui.label(entry.severity.label());
-                ui.end_row();
-
-                ui.label("File:");
-                ui.label(entry.source_file.display().to_string());
-                ui.end_row();
-
-                ui.label("Line:");
-                ui.label(entry.line_number.to_string());
-                ui.end_row();
-
-                if let Some(ref ts) = entry.timestamp {
-                    ui.label("Timestamp:");
-                    ui.label(ts.to_rfc3339());
-                    ui.end_row();
-                }
-
-                if let Some(ref thread) = entry.thread {
-                    ui.label("Thread:");
-                    ui.label(thread);
-                    ui.end_row();
-                }
-
-                if let Some(ref component) = entry.component {
-                    ui.label("Component:");
-                    ui.label(component);
-                    ui.end_row();
-                }
-
-                ui.label("Profile:");
-                ui.label(&entry.profile_id);
-                ui.end_row();
-            });
-
-        ui.separator();
-        ui.label("Message:");
-        egui::ScrollArea::vertical()
-            .max_height(100.0)
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new(&entry.message).monospace());
-            });
-    } else {
+    let Some(entry) = state.selected_entry() else {
         ui.centered_and_justified(|ui| {
-            ui.label("Select an entry to view details.");
+            ui.label("Select a timeline entry to view details.");
         });
-    }
+        return;
+    };
+
+    // Coloured severity badge as a heading row
+    let sev_colour = theme::severity_colour(&entry.severity);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(entry.severity.label())
+                .strong()
+                .color(sev_colour),
+        );
+        ui.separator();
+        ui.label(
+            egui::RichText::new(
+                entry
+                    .source_file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?"),
+            )
+            .strong(),
+        );
+        if let Some(ts) = entry.timestamp {
+            ui.label(
+                egui::RichText::new(ts.format("  %Y-%m-%d %H:%M:%S UTC").to_string()).weak(),
+            );
+        }
+    });
+
+    ui.separator();
+
+    // Metadata grid
+    egui::Grid::new("detail_meta_grid")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("File:");
+            ui.label(egui::RichText::new(entry.source_file.display().to_string()).monospace());
+            ui.end_row();
+
+            ui.label("Line:");
+            ui.label(entry.line_number.to_string());
+            ui.end_row();
+
+            ui.label("Profile:");
+            ui.label(&entry.profile_id);
+            ui.end_row();
+
+            if let Some(ref thread) = entry.thread {
+                ui.label("Thread:");
+                ui.label(egui::RichText::new(thread).monospace());
+                ui.end_row();
+            }
+
+            if let Some(ref component) = entry.component {
+                ui.label("Component:");
+                ui.label(component);
+                ui.end_row();
+            }
+        });
+
+    ui.add_space(4.0);
+
+    // Message area with copy-to-clipboard button
+    ui.horizontal(|ui| {
+        ui.label("Message:");
+        if ui.small_button("Copy").clicked() {
+            ui.ctx().copy_text(entry.message.clone());
+        }
+    });
+    egui::ScrollArea::vertical()
+        .id_salt("detail_message")
+        .auto_shrink([false, true])
+        .max_height(80.0)
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(&entry.message).monospace().size(11.5));
+        });
 }

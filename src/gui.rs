@@ -92,14 +92,39 @@ impl eframe::App for LogSleuthApp {
             ctx.request_repaint();
         }
 
+        // If a relative time filter is active, refresh the time window each frame
+        // and schedule a 1-second repaint so the rolling boundary stays current
+        // as the clock advances even when nothing else is happening.
+        if self.state.filter_state.relative_time_secs.is_some() {
+            self.state.apply_filters();
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+
+        // ---- Handle flags set by discovery panel ----
+        // pending_scan: a panel requested a new scan via Open Directory button.
+        if let Some(path) = self.state.pending_scan.take() {
+            self.state.clear();
+            self.state.scan_path = Some(path.clone());
+            self.scan_manager.start_scan(
+                path,
+                self.state.profiles.clone(),
+                DiscoveryConfig::default(),
+            );
+        }
+        // request_cancel: a panel requested the current scan be cancelled.
+        if self.state.request_cancel {
+            self.state.request_cancel = false;
+            self.scan_manager.cancel_scan();
+        }
+
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open Directory...").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                            self.state.scan_path = Some(path.clone());
                             self.state.clear();
+                            self.state.scan_path = Some(path.clone());
                             self.scan_manager.start_scan(
                                 path,
                                 self.state.profiles.clone(),
@@ -108,6 +133,89 @@ impl eframe::App for LogSleuthApp {
                         }
                         ui.close_menu();
                     }
+                    ui.separator();
+                    // Export sub-menu -- enabled only when there are filtered entries
+                    let has_entries = !self.state.filtered_indices.is_empty();
+                    ui.add_enabled_ui(has_entries, |ui| {
+                        ui.menu_button("Export", |ui| {
+                            if ui.button("Export CSV...").clicked() {
+                                if let Some(dest) = rfd::FileDialog::new()
+                                    .add_filter("CSV", &["csv"])
+                                    .set_file_name("export.csv")
+                                    .save_file()
+                                {
+                                    let filtered_entries: Vec<_> = self
+                                        .state
+                                        .filtered_indices
+                                        .iter()
+                                        .filter_map(|&i| self.state.entries.get(i))
+                                        .cloned()
+                                        .collect();
+                                    match std::fs::File::create(&dest) {
+                                        Ok(f) => {
+                                            match crate::core::export::export_csv(
+                                                &filtered_entries,
+                                                f,
+                                                &dest,
+                                            ) {
+                                                Ok(n) => {
+                                                    self.state.status_message =
+                                                        format!("Exported {n} entries to CSV.");
+                                                }
+                                                Err(e) => {
+                                                    self.state.status_message =
+                                                        format!("CSV export failed: {e}");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            self.state.status_message =
+                                                format!("Cannot create file: {e}");
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button("Export JSON...").clicked() {
+                                if let Some(dest) = rfd::FileDialog::new()
+                                    .add_filter("JSON", &["json"])
+                                    .set_file_name("export.json")
+                                    .save_file()
+                                {
+                                    let filtered_entries: Vec<_> = self
+                                        .state
+                                        .filtered_indices
+                                        .iter()
+                                        .filter_map(|&i| self.state.entries.get(i))
+                                        .cloned()
+                                        .collect();
+                                    match std::fs::File::create(&dest) {
+                                        Ok(f) => {
+                                            match crate::core::export::export_json(
+                                                &filtered_entries,
+                                                f,
+                                                &dest,
+                                            ) {
+                                                Ok(n) => {
+                                                    self.state.status_message =
+                                                        format!("Exported {n} entries to JSON.");
+                                                }
+                                                Err(e) => {
+                                                    self.state.status_message =
+                                                        format!("JSON export failed: {e}");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            self.state.status_message =
+                                                format!("Cannot create file: {e}");
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        });
+                    });
                     ui.separator();
                     if ui.button("Exit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -126,6 +234,10 @@ impl eframe::App for LogSleuthApp {
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.state.status_message);
+                // Cancel button visible only while a scan is running
+                if self.state.scan_in_progress && ui.small_button("Cancel").clicked() {
+                    self.scan_manager.cancel_scan();
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let total = self.state.entries.len();
                     let filtered = self.state.filtered_indices.len();

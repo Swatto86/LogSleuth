@@ -9,8 +9,38 @@ Point LogSleuth at a directory and it will:
 1. **Discover** all log files recursively, regardless of vendor or format
 2. **Auto-detect** the log format using extensible TOML-based profiles
 3. **Parse** entries into a normalised model (timestamp, severity, message, source)
-4. **Display** everything in a unified, colour-coded, filterable timeline
-5. **Correlate** events across multiple log files by timestamp
+4. **Display** everything in a unified, colour-coded, virtual-scrolling timeline
+5. **Filter** by severity, text, regex, time range, and source file
+6. **Export** filtered results to CSV or JSON
+7. **Summarise** each scan with a per-file breakdown (entries, errors, time range)
+
+## Filtering
+
+The filter sidebar provides:
+
+| Filter | Description |
+|--------|-------------|
+| Severity | Checkboxes for Critical / Error / Warning / Info / Debug / Unknown |
+| Text search | Case-insensitive substring match across message + metadata |
+| Regex search | Full regex with live compile-error feedback |
+| Relative time window | Quick-select **15 min / 1 h / 6 h / 24 h** buttons or type a custom number of minutes; LogSleuth automatically advances the window as the clock ticks |
+| Source file | Per-file checklist; when more than 8 files are loaded a live search box appears. **Select All / None** operate on the currently visible (filtered) subset |
+
+The entry count badge in the filter panel always reflects the current filtered vs. total count.
+
+## Exporting Results
+
+Use **File > Export > CSV** or **File > Export > JSON** to save the currently filtered entry set. A native save dialog is presented. Files are written atomically (write to temp, then rename) to prevent partial output.
+
+## Scan Summary
+
+Use **File > Scan Summary** (or `Ctrl+S`) after a scan to see:
+- Total entries, errors, and scan duration
+- Per-file table: profile detected, entry count, error count, earliest and latest timestamps
+
+## Cancel a Scan
+
+A **Cancel** button appears in the status bar during an active scan. Cancellation is cooperative and completes any in-flight file cleanly.
 
 ## Built-in Format Profiles
 

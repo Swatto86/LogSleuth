@@ -29,8 +29,22 @@ pub struct FilterState {
     /// Substring text search (case-insensitive). Empty = no filter.
     pub text_search: String,
 
-    /// Compiled regex search. None = no regex filter.
+    /// Raw regex pattern string kept for the UI input buffer.
+    /// The compiled form is in `regex_search`.
+    pub regex_pattern: String,
+
+    /// Compiled regex search. None = no regex filter (or last pattern was invalid).
     pub regex_search: Option<Regex>,
+
+    /// Relative time window in seconds.  When Some(n), only entries timestamped
+    /// within the last n seconds are shown.  The actual `time_start` value is
+    /// computed from `Utc::now()` by the *app* layer (not core) so that core
+    /// remains a pure, side-effect-free function.
+    pub relative_time_secs: Option<u64>,
+
+    /// UI text buffer for the custom relative-time input (stores minutes typed
+    /// by the user before parsing).  Not used by the filter logic itself.
+    pub relative_time_input: String,
 }
 
 impl FilterState {
@@ -42,11 +56,14 @@ impl FilterState {
             && self.time_end.is_none()
             && self.text_search.is_empty()
             && self.regex_search.is_none()
+            && self.relative_time_secs.is_none()
     }
 
     /// Set the regex search pattern, compiling it.
-    /// Returns an error if the pattern is invalid.
+    /// Always updates `regex_pattern` (for the UI buffer).
+    /// On success updates `regex_search`; on failure clears it and returns Err.
     pub fn set_regex(&mut self, pattern: &str) -> Result<(), FilterError> {
+        self.regex_pattern = pattern.to_string();
         if pattern.is_empty() {
             self.regex_search = None;
             return Ok(());
@@ -239,5 +256,71 @@ mod tests {
         let mut filter = FilterState::default();
         let result = filter.set_regex("[invalid");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_time_range_start_bound() {
+        use chrono::TimeZone;
+        let base = chrono::Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let mut old_entry = make_entry(1, Severity::Info, "old message");
+        let mut new_entry = make_entry(2, Severity::Info, "new message");
+        old_entry.timestamp = Some(base);
+        new_entry.timestamp = Some(base + chrono::Duration::hours(1));
+        let entries = vec![old_entry, new_entry];
+
+        let filter = FilterState {
+            time_start: Some(base + chrono::Duration::minutes(30)),
+            ..Default::default()
+        };
+        let result = apply_filters(&entries, &filter);
+        // Only the newer entry is after the start bound
+        assert_eq!(result, vec![1]);
+    }
+
+    #[test]
+    fn test_time_filter_excludes_entries_without_timestamps() {
+        use chrono::TimeZone;
+        let base = chrono::Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let mut ts_entry = make_entry(1, Severity::Info, "has timestamp");
+        let no_ts_entry = make_entry(2, Severity::Info, "no timestamp");
+        ts_entry.timestamp = Some(base + chrono::Duration::hours(1));
+        // no_ts_entry.timestamp stays None
+        let entries = vec![ts_entry, no_ts_entry];
+
+        let filter = FilterState {
+            time_start: Some(base),
+            ..Default::default()
+        };
+        let result = apply_filters(&entries, &filter);
+        // Entry without a timestamp must be excluded when a time bound is active
+        assert_eq!(result, vec![0]);
+    }
+
+    #[test]
+    fn test_source_file_filter() {
+        let mut entry_a = make_entry(1, Severity::Info, "file a entry");
+        let mut entry_b = make_entry(2, Severity::Info, "file b entry");
+        entry_a.source_file = PathBuf::from("a.log");
+        entry_b.source_file = PathBuf::from("b.log");
+        let entries = vec![entry_a, entry_b];
+
+        let mut source_files = HashSet::new();
+        source_files.insert(PathBuf::from("a.log"));
+        let filter = FilterState {
+            source_files,
+            ..Default::default()
+        };
+        let result = apply_filters(&entries, &filter);
+        assert_eq!(result, vec![0]);
+    }
+
+    #[test]
+    fn test_relative_time_field_tracked_in_is_empty() {
+        let mut filter = FilterState::default();
+        assert!(filter.is_empty());
+        filter.relative_time_secs = Some(900);
+        assert!(!filter.is_empty());
+        filter.relative_time_secs = None;
+        assert!(filter.is_empty());
     }
 }

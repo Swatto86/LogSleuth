@@ -16,14 +16,14 @@
 //   - Cancel is checked before each file operation to enable prompt termination.
 
 use crate::core::discovery::{self, DiscoveryConfig};
-use crate::core::model::{FormatProfile, LogEntry, ScanProgress, ScanSummary};
+use crate::core::model::{FileSummary, FormatProfile, LogEntry, ScanProgress, ScanSummary};
 use crate::core::parser::{self, ParseConfig};
 use crate::core::profile;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // =============================================================================
 // Constants (Rule 11: named bounds)
@@ -224,11 +224,13 @@ fn run_scan(
     // -------------------------------------------------------------------------
     send!(ScanProgress::ParsingStarted { total_files });
 
+    let scan_start = Instant::now();
     let mut total_entries: usize = 0;
     let mut total_errors: usize = 0;
     let mut files_with_entries: usize = 0;
     let mut entry_id: u64 = 0;
     let mut entry_batch: Vec<LogEntry> = Vec::with_capacity(ENTRY_BATCH_SIZE);
+    let mut file_summaries: Vec<FileSummary> = Vec::new();
 
     for (idx, file) in discovered_files.iter().enumerate() {
         check_cancel!();
@@ -291,6 +293,30 @@ fn run_scan(
             files_with_entries += 1;
         }
 
+        // Collect per-file timestamp range for FileSummary.
+        let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
+        let mut latest: Option<chrono::DateTime<chrono::Utc>> = None;
+        for entry in &parse_result.entries {
+            if let Some(ts) = entry.timestamp {
+                earliest = Some(match earliest {
+                    Some(e) if e <= ts => e,
+                    _ => ts,
+                });
+                latest = Some(match latest {
+                    Some(l) if l >= ts => l,
+                    _ => ts,
+                });
+            }
+        }
+        file_summaries.push(FileSummary {
+            path: file.path.clone(),
+            profile_id: profile_id.clone(),
+            entry_count,
+            error_count,
+            earliest,
+            latest,
+        });
+
         // Log non-fatal parse errors at debug level.
         for err in &parse_result.errors {
             tracing::debug!(error = %err, "Parse error");
@@ -332,6 +358,8 @@ fn run_scan(
         total_entries: total_entries,
         total_parse_errors: total_errors,
         files_matched: files_with_entries,
+        file_summaries,
+        duration: scan_start.elapsed(),
         ..Default::default()
     };
 

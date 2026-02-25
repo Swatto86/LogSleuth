@@ -49,6 +49,19 @@ pub struct AppState {
 
     /// Whether debug mode is enabled.
     pub debug_mode: bool,
+
+    /// Set by a UI panel to request starting a new scan on this path.
+    /// Consumed and cleared by `gui.rs` in the update loop each frame.
+    pub pending_scan: Option<PathBuf>,
+
+    /// Set by a UI panel to request cancellation of the running scan.
+    /// Consumed and cleared by `gui.rs` in the update loop each frame.
+    pub request_cancel: bool,
+
+    /// Text typed into the file-list search box in the filters panel.
+    /// Filters which filenames are shown in the source-file checklist.
+    /// Pure UI state: does not affect the filter logic itself.
+    pub file_list_search: String,
 }
 
 impl AppState {
@@ -68,11 +81,28 @@ impl AppState {
             warnings: Vec::new(),
             show_summary: false,
             debug_mode,
+            pending_scan: None,
+            request_cancel: false,
+            file_list_search: String::new(),
         }
     }
 
     /// Recompute filtered indices from current entries and filter state.
+    ///
+    /// If a relative time filter is active (`filter_state.relative_time_secs`),
+    /// the effective `time_start` is computed here from `Utc::now()`.  This keeps
+    /// the core filter layer pure (no side-effects or clock access).
     pub fn apply_filters(&mut self) {
+        // Relative time filter: derive the absolute start bound each call so the
+        // rolling window stays current as the clock advances.
+        if let Some(secs) = self.filter_state.relative_time_secs {
+            self.filter_state.time_start = Some(
+                chrono::Utc::now()
+                    - chrono::Duration::seconds(secs as i64),
+            );
+            self.filter_state.time_end = None;
+        }
+
         self.filtered_indices =
             crate::core::filter::apply_filters(&self.entries, &self.filter_state);
 
@@ -102,5 +132,8 @@ impl AppState {
         self.warnings.clear();
         self.show_summary = false;
         self.status_message = "Ready.".to_string();
+        self.pending_scan = None;
+        self.request_cancel = false;
+        self.file_list_search.clear();
     }
 }
