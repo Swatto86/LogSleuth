@@ -57,6 +57,48 @@ jobs:
           if-no-files-found: error
 
 # ---------------------------------------------------------------------------
+# Windows: standalone portable EXE (no installer, no runtime dependencies)
+#
+# Built with +crt-static so the MSVC CRT is embedded directly in the binary.
+# Users can run LogSleuth-*-windows-portable.exe from any location without
+# installing anything or requiring the Visual C++ Redistributable.
+# ---------------------------------------------------------------------------
+
+  build-windows-portable:
+    name: Build Windows portable EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build portable release binary (static CRT)
+        # +crt-static links the MSVC runtime into the EXE so it runs on any
+        # Windows 10/11 machine without the VC++ Redistributable pre-installed.
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: cargo build --release
+
+      - name: Rename to versioned portable filename
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          Copy-Item target\release\logsleuth.exe "LogSleuth-${version}-windows-portable.exe"
+
+      - name: Upload Windows portable artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: LogSleuth-*-windows-portable.exe
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
 # macOS: build binary + DMG
 # ---------------------------------------------------------------------------
 
@@ -147,7 +189,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, build-windows-portable, build-macos, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create releases and upload assets
@@ -170,5 +212,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             LogSleuth-Setup-*.exe
+            LogSleuth-*-windows-portable.exe
             LogSleuth-*.dmg
             LogSleuth-*.AppImage

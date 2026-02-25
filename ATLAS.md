@@ -1,6 +1,6 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 13 complete -- "Copy Filtered Results" + "Err+Warn+15m" troubleshoot preset
+> **Status**: Increment 14 complete -- portable Windows EXE in release pipeline
 > **Last updated**: 2026-02-25
 
 ---
@@ -225,7 +225,8 @@ RUST_LOG=debug cargo test -- --nocapture
 - **release.yml**: Triggered on `v*` tag push.
   - Builds release binaries on all platforms
   - Builds platform installers (NSIS, DMG, AppImage)
-  - Creates GitHub Release with artifacts
+  - **`build-windows-portable`** job: compiles with `RUSTFLAGS="-C target-feature=+crt-static"` and produces `LogSleuth-{VERSION}-windows-portable.exe` — a fully self-contained EXE with the MSVC CRT statically linked; no installation or redistributable required
+  - Creates GitHub Release with 4 Windows artifacts: installer + portable EXE; macOS DMG; Linux AppImage
 
 ### Release
 
