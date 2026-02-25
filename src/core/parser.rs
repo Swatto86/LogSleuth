@@ -2,11 +2,10 @@
 //
 // Stream-oriented log file parsing using format profiles.
 // Core layer: accepts Read trait objects, never touches filesystem directly.
-//
-// Implementation: next increment.
 
 use crate::core::model::{FormatProfile, LogEntry};
 use crate::util::error::ParseError;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use std::path::PathBuf;
 
 /// Configuration for parsing operations.
@@ -59,7 +58,6 @@ pub fn parse_content(
     id_start: u64,
 ) -> ParseResult {
     // TODO: Implement full streaming parser in next increment.
-    // Stub: demonstrate the pattern with basic line-by-line parsing.
     tracing::debug!(
         file = %file_path.display(),
         profile = %profile.id,
@@ -94,9 +92,32 @@ pub fn parse_content(
                 profile.infer_severity_from_message(&message)
             };
 
+            // Parse timestamp using the profile's format string.
+            // On failure: record a non-fatal parse error and keep timestamp as None
+            // so the entry is still visible in the timeline (sorted to the end).
+            let timestamp: Option<DateTime<Utc>> =
+                if let Some(raw_ts) = caps.name("timestamp").map(|m| m.as_str()) {
+                    match parse_timestamp(raw_ts, &profile.timestamp_format) {
+                        Ok(ts) => Some(ts),
+                        Err(_msg) => {
+                            if errors.len() < config.max_parse_errors_per_file {
+                                errors.push(ParseError::TimestampParse {
+                                    file: file_path.clone(),
+                                    line_number,
+                                    raw_timestamp: raw_ts.to_string(),
+                                    format: profile.timestamp_format.clone(),
+                                });
+                            }
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
             let entry = LogEntry {
                 id: current_id,
-                timestamp: None, // TODO: parse timestamp in next increment
+                timestamp,
                 severity,
                 source_file: file_path.clone(),
                 line_number,
@@ -179,6 +200,42 @@ pub fn parse_content(
         errors,
         lines_processed,
     }
+}
+
+// =============================================================================
+// Timestamp parsing
+// =============================================================================
+
+/// Parse a raw timestamp string using a chrono format string.
+///
+/// Tries the format string directly against `NaiveDateTime`. If the format
+/// does not include timezone information, the result is treated as UTC.
+///
+/// Returns `Ok(DateTime<Utc>)` on success, or `Err(description)` on failure.
+fn parse_timestamp(raw: &str, format: &str) -> Result<DateTime<Utc>, String> {
+    let trimmed = raw.trim();
+
+    // First try: parse as a full NaiveDateTime with the format string.
+    if let Ok(ndt) = NaiveDateTime::parse_from_str(trimmed, format) {
+        return Ok(ndt.and_utc());
+    }
+
+    // Second try: parse as NaiveDate only (for date-only formats like "%Y-%m-%d").
+    // Treat as midnight UTC.
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(trimmed, format) {
+        if let Some(ndt) = nd.and_hms_opt(0, 0, 0) {
+            return Ok(ndt.and_utc());
+        }
+    }
+
+    // Third try: parse as RFC 3339 / ISO 8601 (includes timezone offset).
+    if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(dt.into());
+    }
+
+    Err(format!(
+        "cannot parse '{trimmed}' with format '{format}'"
+    ))
 }
 
 #[cfg(test)]
@@ -288,5 +345,56 @@ info = ["Info"]
         assert_eq!(result.entries.len(), 1);
         assert!(result.entries[0].message.len() < 1100); // truncated + suffix
         assert!(result.entries[0].message.ends_with("... [truncated]"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Timestamp parsing tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_timestamp_naive_datetime() {
+        let ts = parse_timestamp("2024-01-15 14:30:22", "%Y-%m-%d %H:%M:%S").unwrap();
+        assert_eq!(ts.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-01-15 14:30:22");
+    }
+
+    #[test]
+    fn test_parse_timestamp_with_milliseconds() {
+        let ts = parse_timestamp("2024-01-15 14:30:22.123", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+        assert_eq!(ts.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-01-15 14:30:22");
+    }
+
+    #[test]
+    fn test_parse_timestamp_rfc3339() {
+        let ts = parse_timestamp("2024-01-15T14:30:22+00:00", "%Y-%m-%dT%H:%M:%S%z").unwrap();
+        assert_eq!(ts.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-01-15 14:30:22");
+    }
+
+    #[test]
+    fn test_parse_timestamp_invalid_returns_error() {
+        let result = parse_timestamp("not-a-date", "%Y-%m-%d %H:%M:%S");
+        assert!(result.is_err(), "invalid timestamp should return Err");
+    }
+
+    #[test]
+    fn test_parse_timestamp_errors_recorded_in_result() {
+        let profile = make_test_profile();
+        // The profile has format "%Y-%m-%d %H:%M:%S" so "BADTS" will fail
+        let content = "[BADTS] Error Bad timestamp line\n\
+                        [2024-01-15 14:30:22] Info Good timestamp\n";
+
+        let result = parse_content(
+            content,
+            &PathBuf::from("test.log"),
+            &profile,
+            &ParseConfig::default(),
+            0,
+        );
+
+        // Both lines match — one has a bad timestamp, one is good
+        assert_eq!(result.entries.len(), 2, "both lines should produce entries");
+        assert!(result.entries[0].timestamp.is_none(), "bad ts entry should have None");
+        assert!(result.entries[1].timestamp.is_some(), "good ts entry should have Some");
+        assert_eq!(result.errors.len(), 1, "should record exactly one timestamp error");
+        assert!(matches!(result.errors[0], ParseError::TimestampParse { .. }));
     }
 }

@@ -1,7 +1,7 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Pre-implementation (specification phase)
-> **Last updated**: 2026-02-24
+> **Status**: Increment 2 complete — Discovery Engine, timestamp parsing, background scan thread, E2E tests
+> **Last updated**: 2026-07-08
 
 ---
 
@@ -58,19 +58,20 @@ LogSleuth is a cross-platform log file viewer and analyser that discovers, parse
 ```
 LogSleuth/
 +-- src/
-|   +-- main.rs                  # Entry point, CLI parsing, single-instance guard
-|   +-- app.rs                   # App state, eframe::App impl
+|   +-- main.rs                  # Entry point, CLI parsing, logging init, GUI launch
+|   +-- lib.rs                   # Library crate entry point (exposes modules for integration tests)
+|   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring
 |   +-- app/
 |   |   +-- mod.rs
-|   |   +-- scan.rs              # Scan lifecycle, threading, progress
+|   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, entry batching
 |   |   +-- state.rs             # Application state, filter state, selection
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   +-- core/
 |   |   +-- mod.rs
 |   |   +-- model.rs             # LogEntry, Severity, FormatProfile structs
-|   |   +-- discovery.rs         # Directory traversal, glob matching, file enumeration
+|   |   +-- discovery.rs         # Recursive traversal (walkdir), glob include/exclude, filter_entry dir exclusion, metadata
 |   |   +-- profile.rs           # TOML profile parsing, validation, auto-detection scoring
-|   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling
+|   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing
 |   |   +-- filter.rs            # Composable filter engine
 |   |   +-- export.rs            # CSV/JSON serialisation
 |   +-- ui/
@@ -103,8 +104,8 @@ LogSleuth/
 |   +-- generic_timestamp.toml   # Generic timestamp+message
 |   +-- plain_text.toml          # Fallback (no structure)
 +-- tests/
-|   +-- e2e/                     # End-to-end tests (real files, real parsing)
-|   +-- fixtures/                # Sample log files per format for testing
+|   +-- e2e_discovery.rs         # E2E: discovery pipeline, auto-detect, parse, timestamp, severity
+|   +-- fixtures/                # Sample log files per format for testing (veeam_vbr_sample.log, iis_w3c_sample.log)
 |   +-- profiles/                # Test profile TOML files
 +-- assets/
 |   +-- app.manifest             # Windows UAC/DPI manifest
@@ -155,14 +156,15 @@ LogSleuth/
 
 | API | Location | Consumers |
 |-----|----------|-----------|
-| `ScanManager::start_scan(path, config)` | `app::scan` | UI layer |
+| `ScanManager::start_scan(root, profiles, config)` | `app::scan` | UI layer (`gui.rs`) |
 | `ScanManager::cancel_scan()` | `app::scan` | UI layer |
-| `FilterEngine::apply(entries, filters) -> Vec<usize>` | `core::filter` | App layer |
-| `ProfileLoader::load_all(built_in, user_dir) -> Vec<FormatProfile>` | `core::profile` | App layer |
-| `Parser::parse_file(reader, profile) -> Vec<LogEntry>` | `core::parser` | App scan thread |
-| `Discovery::scan(root, config) -> Vec<DiscoveredFile>` | `core::discovery` | App scan thread |
-| `Exporter::export_csv(entries, path)` | `core::export` | App layer |
-| `Exporter::export_json(entries, path)` | `core::export` | App layer |
+| `ScanManager::poll_progress() -> Vec<ScanProgress>` | `app::scan` | UI layer (called from `eframe::App::update`) |
+| `discover_files(root, config, on_file_found) -> Result<(Vec<DiscoveredFile>, Vec<String>)>` | `core::discovery` | `app::scan` background thread |
+| `parse_content(content, path, profile, config, id_start) -> ParseResult` | `core::parser` | `app::scan` background thread |
+| `profile::auto_detect(file_name, sample_lines, profiles) -> Option<DetectionResult>` | `core::profile` | `app::scan` background thread |
+| `apply_filters(entries, state) -> Vec<usize>` | `core::filter` | App layer |
+| `load_all_profiles(user_dir) -> (Vec<FormatProfile>, Vec<ProfileError>)` | `app::profile_mgr` | `main.rs` at startup |
+| `export_csv(entries, path)` / `export_json(entries, path)` | `core::export` | App layer |
 
 ### Extension Points
 
@@ -194,11 +196,11 @@ cargo run --release -- /path/to/logs
 ### Test
 
 ```bash
-# Full test suite
+# Full test suite (unit + E2E)
 cargo test
 
 # E2E tests only
-cargo test --test e2e
+cargo test --test e2e_discovery
 
 # With debug output
 RUST_LOG=debug cargo test -- --nocapture

@@ -9,7 +9,7 @@
 - [x] `util::logging` - Structured logging with debug mode support
 - [x] `core::model` - LogEntry, Severity, FormatProfile, ScanProgress, ScanSummary
 - [x] `core::profile` - TOML profile parsing, validation, regex compilation, auto-detection
-- [x] `core::parser` - Basic line-by-line parsing with multiline support (needs timestamp parsing)
+- [x] `core::parser` - Basic line-by-line parsing with multiline support, timestamp parsing via chrono
 - [x] `core::filter` - Composable filter engine with severity, text, regex, time range
 - [x] `core::export` - CSV and JSON export to Write trait objects
 - [x] `core::discovery` - Stub with config and validation
@@ -29,37 +29,35 @@
 - [x] LogSleuth-Specification.md
 - [x] ATLAS.md (Project Atlas)
 
-## Increment 2: Discovery Engine (NEXT)
-**Status: NOT STARTED**
+## Increment 2: Discovery Engine
+**Status: COMPLETE**
 
-- [ ] `core::discovery` - Full recursive traversal with walkdir
-- [ ] Glob pattern matching (include/exclude)
-- [ ] File metadata collection (size, modified time)
-- [ ] Format auto-detection integration (sample lines + profile matching)
-- [ ] Progress reporting via ScanProgress messages
-- [ ] Max depth and max files enforcement
-- [ ] E2E tests with real directory structures
+- [x] `core::discovery` - Full recursive traversal with walkdir, glob include/exclude patterns, directory descent short-circuiting via `filter_entry`
+- [x] File metadata collection (size, modified time, `is_large` flag)
+- [x] Format auto-detection integration (sample lines + `profile::auto_detect`)
+- [x] Progress reporting via `ScanProgress::FileDiscovered` callback per file
+- [x] Max depth and max files enforcement (clamped to `ABSOLUTE_MAX_*` constants)
+- [x] `core::parser` - Timestamp parsing via chrono (`NaiveDateTime::parse_from_str`, RFC 3339 fallback, date-only fallback); `ParseError::TimestampParse` on failure (non-fatal, entry kept)
+- [x] `app::scan` - Full background scan thread: discovery → auto-detection → parsing; `Arc<AtomicBool>` cancel; transient I/O retry (50/100/200 ms); `memmap2` for large files; entry batching (`ENTRY_BATCH_SIZE = 500`)
+- [x] `gui.rs` - Handles all `ScanProgress` variants (`FilesDiscovered`, `EntriesBatch`, `FileParsed`, `ParsingStarted`, `Cancelled`); passes profiles + `DiscoveryConfig` to `start_scan`; `ctx.request_repaint()` during active scans
+- [x] `src/lib.rs` - Added library crate entry point to enable integration tests
+- [x] E2E test suite in `tests/e2e_discovery.rs`: 9 tests covering discovery, error cases, auto-detection, parsing, timestamps, severity mapping, entry IDs
 
-## Increment 3: Full Parser Implementation
-**Status: NOT STARTED**
+**Test results: 36 unit tests + 9 E2E tests = 45 total, all passing**
 
-- [ ] Timestamp parsing with chrono (all profile formats)
-- [ ] Streaming/chunked file reading for large files
-- [ ] Memory-mapped I/O for files above threshold
-- [ ] Full integration with discovery (scan thread orchestration)
-- [ ] Per-file parse error tracking and summarisation
-- [ ] E2E tests with real Veeam log samples
-
-## Increment 4: UI Polish
-**Status: NOT STARTED**
+## Increment 3: UI Polish & Full Parser Implementation
+**Status: NEXT**
 
 - [ ] Virtual scrolling for timeline (1M+ entries)
 - [ ] Filter debounce
 - [ ] Keyboard shortcuts
 - [ ] Cross-log correlation view
-- [ ] Scan summary with per-file breakdown
+- [ ] Scan summary with per-file breakdown (FileSummary population in scan.rs)
 - [ ] Export dialog
 - [ ] Dark/light theme toggle
+- [ ] Streaming/chunked file reading for very large files (supplement current mmap approach)
+- [ ] Per-file parse error tracking and summarisation in UI
+- [ ] Additional test fixtures (syslog, log4j E2E)
 
 ## Increment 5: Release Pipeline
 **Status: NOT STARTED**

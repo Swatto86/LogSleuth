@@ -5,6 +5,7 @@
 
 use crate::app::scan::ScanManager;
 use crate::app::state::AppState;
+use crate::core::discovery::DiscoveryConfig;
 use crate::ui;
 
 /// The LogSleuth application.
@@ -26,15 +27,41 @@ impl LogSleuthApp {
 impl eframe::App for LogSleuthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Poll for scan progress
-        for msg in self.scan_manager.poll_progress() {
+        let messages = self.scan_manager.poll_progress();
+        let had_messages = !messages.is_empty();
+        for msg in messages {
             match msg {
                 crate::core::model::ScanProgress::DiscoveryStarted => {
                     self.state.status_message = "Discovering files...".to_string();
                     self.state.scan_in_progress = true;
                 }
+                crate::core::model::ScanProgress::FileDiscovered {
+                    files_found, ..
+                } => {
+                    self.state.status_message =
+                        format!("Discovering files... ({files_found} found)");
+                }
                 crate::core::model::ScanProgress::DiscoveryCompleted { total_files } => {
                     self.state.status_message =
                         format!("Discovery complete: {total_files} files found.");
+                }
+                crate::core::model::ScanProgress::FilesDiscovered { files } => {
+                    self.state.discovered_files = files;
+                }
+                crate::core::model::ScanProgress::ParsingStarted { total_files } => {
+                    self.state.status_message =
+                        format!("Parsing {total_files} files...");
+                }
+                crate::core::model::ScanProgress::FileParsed {
+                    files_completed,
+                    total_files,
+                    ..
+                } => {
+                    self.state.status_message =
+                        format!("Parsing files ({files_completed}/{total_files})...");
+                }
+                crate::core::model::ScanProgress::EntriesBatch { entries } => {
+                    self.state.entries.extend(entries);
                 }
                 crate::core::model::ScanProgress::ParsingCompleted { summary } => {
                     self.state.status_message = format!(
@@ -54,8 +81,15 @@ impl eframe::App for LogSleuthApp {
                     self.state.status_message = format!("Scan failed: {error}");
                     self.state.scan_in_progress = false;
                 }
-                _ => {}
+                crate::core::model::ScanProgress::Cancelled => {
+                    self.state.status_message = "Scan cancelled.".to_string();
+                    self.state.scan_in_progress = false;
+                }
             }
+        }
+        // Repaint when scan is active so progress updates appear promptly.
+        if had_messages || self.state.scan_in_progress {
+            ctx.request_repaint();
         }
 
         // Top menu bar
@@ -66,7 +100,11 @@ impl eframe::App for LogSleuthApp {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
                             self.state.scan_path = Some(path.clone());
                             self.state.clear();
-                            self.scan_manager.start_scan(path);
+                            self.scan_manager.start_scan(
+                                path,
+                                self.state.profiles.clone(),
+                                DiscoveryConfig::default(),
+                            );
                         }
                         ui.close_menu();
                     }

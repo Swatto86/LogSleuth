@@ -10,13 +10,13 @@
 
 mod gui;
 
-// Re-export modules used across the crate.
-// This structure mirrors the Atlas layer diagram.
-pub mod app;
-pub mod core;
-pub mod platform;
-pub mod ui;
-pub mod util;
+// Re-export modules from the library crate so that `gui.rs` and other
+// binary-side code can still use `crate::app::...`, `crate::core::...` etc.
+pub use logsleuth::app;
+pub use logsleuth::core;
+pub use logsleuth::platform;
+pub use logsleuth::ui;
+pub use logsleuth::util;
 
 use clap::Parser;
 use std::path::PathBuf;

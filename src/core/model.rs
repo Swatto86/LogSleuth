@@ -362,4 +362,22 @@ pub enum ScanProgress {
     Failed {
         error: String,
     },
+
+    /// Scan was cancelled by the user before completion.
+    Cancelled,
+
+    /// All discovered file metadata, sent once after auto-detection completes
+    /// so the UI can populate the discovery panel before parsing begins.
+    FilesDiscovered {
+        files: Vec<DiscoveredFile>,
+    },
+
+    /// A batch of parsed log entries, streamed to the UI during parsing.
+    ///
+    /// Batched (see ENTRY_BATCH_SIZE in app::scan) to amortise channel overhead
+    /// while still allowing the UI to display partial results before the scan
+    /// finishes.
+    EntriesBatch {
+        entries: Vec<LogEntry>,
+    },
 }
