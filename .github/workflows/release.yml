@@ -12,6 +12,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Cancel any in-progress run for the same tag so only the latest survives
+# if the tag is force-pushed or pushed multiple times in quick succession.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
 # ---------------------------------------------------------------------------
 # Windows: build binary + NSIS installer
 # ---------------------------------------------------------------------------
