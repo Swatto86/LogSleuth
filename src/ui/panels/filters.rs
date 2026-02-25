@@ -13,7 +13,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.heading("Filters");
     ui.separator();
 
-    // Quick-filter buttons
+    // Row 1 — severity / time presets
     ui.horizontal_wrapped(|ui| {
         let fuzzy = state.filter_state.fuzzy;
         if ui.small_button("Errors only").clicked() {
@@ -53,6 +53,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             };
             state.apply_filters();
         }
+    });
+
+    // Row 2 — utility actions (separate row so they always have room to render)
+    ui.horizontal_wrapped(|ui| {
         // Log Summary shortcut (disabled when no filtered entries yet)
         let has_entries = !state.filtered_indices.is_empty();
         ui.add_enabled_ui(has_entries, |ui| {

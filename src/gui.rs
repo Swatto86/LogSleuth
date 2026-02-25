@@ -443,8 +443,11 @@ impl eframe::App for LogSleuthApp {
 
         // Left sidebar — two independent scroll areas so the file list and
         // filter controls each get proportional room and scroll independently.
+        // min_width = SIDEBAR_WIDTH ensures the panel cannot be dragged narrower
+        // than what the filter button rows need to render without wrapping.
         egui::SidePanel::left("sidebar")
             .default_width(ui::theme::SIDEBAR_WIDTH)
+            .min_width(ui::theme::SIDEBAR_WIDTH)
             .resizable(true)
             .show(ctx, |ui| {
                 let available = ui.available_height();
