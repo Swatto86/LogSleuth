@@ -350,6 +350,11 @@ pub enum ScanProgress {
     /// so the UI can populate the discovery panel before parsing begins.
     FilesDiscovered { files: Vec<DiscoveredFile> },
 
+    /// Additional files discovered when "Add File(s)" appends to an existing
+    /// session. Unlike `FilesDiscovered` (which replaces the list), this
+    /// message extends the UI's discovered-file list.
+    AdditionalFilesDiscovered { files: Vec<DiscoveredFile> },
+
     /// A batch of parsed log entries, streamed to the UI during parsing.
     ///
     /// Batched (see ENTRY_BATCH_SIZE in app::scan) to amortise channel overhead

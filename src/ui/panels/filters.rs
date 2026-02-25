@@ -15,16 +15,24 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     // Quick-filter buttons
     ui.horizontal_wrapped(|ui| {
+        let fuzzy = state.filter_state.fuzzy;
         if ui.small_button("Errors only").clicked() {
-            state.filter_state = crate::core::filter::FilterState::errors_only();
+            let current_files = std::mem::take(&mut state.filter_state.source_files);
+            state.filter_state = crate::core::filter::FilterState::errors_only_from(fuzzy);
+            state.filter_state.source_files = current_files;
             state.apply_filters();
         }
         if ui.small_button("Errors + Warn").clicked() {
-            state.filter_state = crate::core::filter::FilterState::errors_and_warnings();
+            let current_files = std::mem::take(&mut state.filter_state.source_files);
+            state.filter_state = crate::core::filter::FilterState::errors_and_warnings_from(fuzzy);
+            state.filter_state.source_files = current_files;
             state.apply_filters();
         }
         if ui.small_button("Clear").clicked() {
-            state.filter_state = crate::core::filter::FilterState::default();
+            state.filter_state = crate::core::filter::FilterState {
+                fuzzy,
+                ..Default::default()
+            };
             state.apply_filters();
         }
     });
@@ -55,13 +63,45 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(6.0);
     ui.separator();
 
-    // Text search (substring, case-insensitive)
+    // Text search (substring or fuzzy depending on mode toggle)
     ui.label("Text search:");
-    if ui
-        .text_edit_singleline(&mut state.filter_state.text_search)
-        .changed()
-    {
-        state.apply_filters();
+    ui.horizontal(|ui| {
+        if ui
+            .text_edit_singleline(&mut state.filter_state.text_search)
+            .changed()
+        {
+            state.apply_filters();
+        }
+        // Fuzzy mode toggle button: lights up when active
+        let fuzzy_colour = if state.filter_state.fuzzy {
+            egui::Color32::from_rgb(96, 165, 250) // blue-ish when active
+        } else {
+            ui.style().visuals.text_color()
+        };
+        let fuzzy_btn = ui.add(
+            egui::Button::new(egui::RichText::new("~").color(fuzzy_colour))
+                .small()
+                .min_size(egui::vec2(18.0, 0.0)),
+        );
+        if fuzzy_btn
+            .on_hover_text("Toggle fuzzy (subsequence) matching")
+            .clicked()
+        {
+            state.filter_state.fuzzy = !state.filter_state.fuzzy;
+            state.apply_filters();
+        }
+    });
+    // Mode label under the search box
+    if !state.filter_state.text_search.is_empty() {
+        ui.label(
+            egui::RichText::new(if state.filter_state.fuzzy {
+                "\u{223c} fuzzy"
+            } else {
+                "= exact"
+            })
+            .small()
+            .weak(),
+        );
     }
 
     ui.add_space(4.0);
@@ -266,28 +306,62 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     let mut checked = state.filter_state.source_files.is_empty()
                         || state.filter_state.source_files.contains(path);
 
-                    if ui
-                        .checkbox(&mut checked, egui::RichText::new(name.as_str()).small())
-                        .changed()
-                    {
-                        if !checked {
-                            // If set was empty (all files in), populate with all files
-                            // first, then remove this one.
-                            if state.filter_state.source_files.is_empty() {
-                                for (other_path, _) in &file_paths {
-                                    state.filter_state.source_files.insert(other_path.clone());
+                    ui.horizontal(|ui| {
+                        // Coloured dot matching timeline file stripe.
+                        let dot_colour = state.colour_for_file(path);
+                        let (dot_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.painter()
+                            .circle_filled(dot_rect.center(), 4.0, dot_colour);
+
+                        if ui
+                            .checkbox(&mut checked, egui::RichText::new(name.as_str()).small())
+                            .changed()
+                        {
+                            if !checked {
+                                if state.filter_state.source_files.is_empty() {
+                                    for (other_path, _) in &file_paths {
+                                        state.filter_state.source_files.insert(other_path.clone());
+                                    }
+                                }
+                                state.filter_state.source_files.remove(path);
+                            } else {
+                                state.filter_state.source_files.insert((*path).clone());
+                                if state.filter_state.source_files.len() == total {
+                                    state.filter_state.source_files.clear();
                                 }
                             }
-                            state.filter_state.source_files.remove(path);
-                        } else {
-                            state.filter_state.source_files.insert((*path).clone());
-                            // If every file is now explicitly in set, revert to "all pass"
-                            if state.filter_state.source_files.len() == total {
-                                state.filter_state.source_files.clear();
-                            }
+                            state.apply_filters();
                         }
-                        state.apply_filters();
-                    }
+
+                        // Solo button.
+                        let already_solo = state.filter_state.source_files.len() == 1
+                            && state.filter_state.source_files.contains(path);
+                        let solo_colour = if already_solo {
+                            egui::Color32::from_rgb(96, 165, 250)
+                        } else {
+                            egui::Color32::from_rgb(107, 114, 128)
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("solo").small().color(solo_colour),
+                                )
+                                .small()
+                                .frame(false),
+                            )
+                            .on_hover_text("Show only this file")
+                            .clicked()
+                        {
+                            if already_solo {
+                                state.filter_state.source_files.clear();
+                            } else {
+                                state.filter_state.source_files.clear();
+                                state.filter_state.source_files.insert((*path).clone());
+                            }
+                            state.apply_filters();
+                        }
+                    });
                 }
 
                 if visible.is_empty() {

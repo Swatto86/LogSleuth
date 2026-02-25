@@ -73,17 +73,42 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
 
     ui.add_space(4.0);
 
-    // Message area with copy-to-clipboard button
+    // Message area with copy-to-clipboard and open-in-folder buttons
     ui.horizontal(|ui| {
         ui.label("Message:");
         if ui.small_button("Copy").clicked() {
             ui.ctx().copy_text(entry.message.clone());
         }
+        // Open the containing folder in Windows Explorer / macOS Finder / Linux file manager.
+        if ui.small_button("Show in folder").clicked() {
+            let folder = entry.source_file.parent().unwrap_or(&entry.source_file);
+            #[cfg(target_os = "windows")]
+            {
+                // Use `explorer /select,<path>` to highlight the specific file.
+                let _ = std::process::Command::new("explorer")
+                    .arg("/select,")
+                    .arg(&entry.source_file)
+                    .spawn();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = std::process::Command::new("open")
+                    .arg("-R")
+                    .arg(&entry.source_file)
+                    .spawn();
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
+            }
+            let _ = folder; // suppress unused-variable warning on all paths
+        }
     });
+    // Use most of the available panel height so multi-line messages are readable.
+    // auto_shrink keeps it compact when the message is short.
     egui::ScrollArea::vertical()
         .id_salt("detail_message")
-        .auto_shrink([false, true])
-        .max_height(80.0)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.label(egui::RichText::new(&entry.message).monospace().size(11.5));
         });

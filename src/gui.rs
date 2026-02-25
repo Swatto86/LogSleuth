@@ -44,7 +44,18 @@ impl eframe::App for LogSleuthApp {
                         format!("Discovery complete: {total_files} files found.");
                 }
                 crate::core::model::ScanProgress::FilesDiscovered { files } => {
+                    // Assign a palette colour to each newly discovered file.
+                    for f in &files {
+                        self.state.assign_file_colour(&f.path);
+                    }
                     self.state.discovered_files = files;
+                }
+                crate::core::model::ScanProgress::AdditionalFilesDiscovered { files } => {
+                    // Append mode: extend the file list and assign colours.
+                    for f in &files {
+                        self.state.assign_file_colour(&f.path);
+                    }
+                    self.state.discovered_files.extend(files);
                 }
                 crate::core::model::ScanProgress::ParsingStarted { total_files } => {
                     self.state.status_message = format!("Parsing {total_files} files...");
@@ -69,6 +80,8 @@ impl eframe::App for LogSleuthApp {
                     );
                     self.state.scan_summary = Some(summary);
                     self.state.scan_in_progress = false;
+                    // Entries were sorted chronologically by the background
+                    // thread before streaming, so only filters need applying.
                     self.state.apply_filters();
                 }
                 crate::core::model::ScanProgress::Warning { message } => {
@@ -108,6 +121,13 @@ impl eframe::App for LogSleuthApp {
                 DiscoveryConfig::default(),
             );
         }
+        // pending_single_files: user chose "Add File(s)" — append to session.
+        if let Some(files) = self.state.pending_single_files.take() {
+            self.state.scan_in_progress = true;
+            self.state.status_message = format!("Adding {} file(s)...", files.len());
+            self.scan_manager
+                .start_scan_files(files, self.state.profiles.clone());
+        }
         // request_cancel: a panel requested the current scan be cancelled.
         if self.state.request_cancel {
             self.state.request_cancel = false;
@@ -118,7 +138,7 @@ impl eframe::App for LogSleuthApp {
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open Directory...").clicked() {
+                    if ui.button("Open Directory\u{2026}").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
                             self.state.clear();
                             self.state.scan_path = Some(path.clone());
@@ -127,6 +147,15 @@ impl eframe::App for LogSleuthApp {
                                 self.state.profiles.clone(),
                                 DiscoveryConfig::default(),
                             );
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Add File(s)\u{2026}").clicked() {
+                        if let Some(files) = rfd::FileDialog::new()
+                            .add_filter("Log files", &["log", "txt", "log.1", "log.2", "log.3"])
+                            .pick_files()
+                        {
+                            self.state.pending_single_files = Some(files);
                         }
                         ui.close_menu();
                     }

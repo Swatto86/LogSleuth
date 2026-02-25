@@ -40,7 +40,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 };
 
                 let is_selected = state.selected_index == Some(display_idx);
-                let colour = theme::severity_colour(&entry.severity);
+                let sev_colour = theme::severity_colour(&entry.severity);
+                let file_colour = state.colour_for_file(&entry.source_file);
 
                 // Format: [SEV ] HH:MM:SS | filename.log | first line of message
                 let ts = entry
@@ -63,11 +64,22 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     truncate_filename(file_name, 16),
                     first_line,
                 ))
-                .color(colour)
+                .color(sev_colour)
                 .monospace()
                 .size(12.0);
 
-                let response = ui.selectable_label(is_selected, row_text);
+                // Each row: 4 px coloured file stripe | selectable label
+                let response = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        // Coloured left stripe — visual CMTrace-style file indicator.
+                        let (bar_rect, _) = ui
+                            .allocate_exact_size(egui::vec2(4.0, row_height), egui::Sense::hover());
+                        ui.painter().rect_filled(bar_rect, 0.0, file_colour);
+                        ui.selectable_label(is_selected, row_text)
+                    })
+                    .inner;
+
                 if response.clicked() {
                     state.selected_index = Some(display_idx);
                 }

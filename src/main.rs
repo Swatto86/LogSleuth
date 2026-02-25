@@ -13,6 +13,7 @@ mod gui;
 // Re-export modules from the library crate so that `gui.rs` and other
 // binary-side code can still use `crate::app::...`, `crate::core::...` etc.
 pub use logsleuth::app;
+
 pub use logsleuth::core;
 pub use logsleuth::platform;
 pub use logsleuth::ui;
@@ -67,6 +68,78 @@ fn placeholder_icon() -> egui::IconData {
         width: 1,
         height: 1,
     }
+}
+
+/// Configure fonts for the egui context.
+///
+/// On Windows, loads Segoe UI, Segoe UI Emoji, and Segoe UI Symbol from the
+/// system font directory and sets them as the primary proportional fonts.
+/// These fonts have much broader Unicode coverage than the egui built-ins,
+/// preventing square-glyph rendering for arrows, box-drawing, and other symbols.
+/// The built-in egui fonts are kept as final fallbacks so no glyph is ever lost.
+///
+/// On non-Windows platforms the egui defaults are used unchanged.
+fn configure_fonts(ctx: &egui::Context) {
+    #[cfg(target_os = "windows")]
+    {
+        let mut fonts = egui::FontDefinitions::default();
+
+        // Load Windows system fonts in priority order.
+        // Segoe UI covers most Latin and common UI symbols.
+        // Segoe UI Emoji adds Unicode emoji and many pictographic symbols.
+        // Segoe UI Symbol covers Mathematical, Braille, and other specialist blocks.
+        let candidates: &[(&str, &str)] = &[
+            ("Segoe UI", r"C:\Windows\Fonts\segoeui.ttf"),
+            ("Segoe UI Emoji", r"C:\Windows\Fonts\seguiemj.ttf"),
+            ("Segoe UI Symbol", r"C:\Windows\Fonts\seguisym.ttf"),
+        ];
+
+        let mut loaded_names: Vec<&str> = Vec::new();
+        for (name, path) in candidates {
+            match std::fs::read(path) {
+                Ok(data) => {
+                    fonts
+                        .font_data
+                        .insert((*name).to_owned(), egui::FontData::from_owned(data).into());
+                    loaded_names.push(name);
+                    tracing::debug!(font = name, "Loaded Windows system font");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        font = name,
+                        error = %e,
+                        "Failed to load Windows system font; some symbols may render as squares"
+                    );
+                }
+            }
+        }
+
+        if !loaded_names.is_empty() {
+            // Proportional: place Windows fonts first so they take priority over
+            // the egui default (NotoSans), while keeping it as a final fallback.
+            if let Some(proportional) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                for (i, name) in loaded_names.iter().enumerate() {
+                    proportional.insert(i, (*name).to_owned());
+                }
+            }
+
+            // Monospace: append Windows fonts as symbol fallbacks after the primary
+            // monospace font (Hack) so log-line column alignment is preserved while
+            // Unicode symbols outside the monospace range still render correctly.
+            if let Some(monospace) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                for name in &loaded_names {
+                    monospace.push((*name).to_owned());
+                }
+            }
+
+            ctx.set_fonts(fonts);
+            tracing::info!(fonts = ?loaded_names, "Windows system fonts configured");
+        }
+    }
+
+    // On non-Windows platforms the egui built-in fonts are used unchanged.
+    #[cfg(not(target_os = "windows"))]
+    let _ = ctx;
 }
 
 /// LogSleuth - Cross-platform log file viewer and analyser.
@@ -158,7 +231,10 @@ fn main() {
     let result = eframe::run_native(
         util::constants::APP_NAME,
         native_options,
-        Box::new(move |_cc| Ok(Box::new(gui::LogSleuthApp::new(state)))),
+        Box::new(move |cc| {
+            configure_fonts(&cc.egui_ctx);
+            Ok(Box::new(gui::LogSleuthApp::new(state)))
+        }),
     );
 
     if let Err(e) = result {

@@ -88,6 +88,31 @@ impl ScanManager {
         tracing::info!("Scan started");
     }
 
+    /// Start parsing a pre-selected list of individual files in *append* mode.
+    ///
+    /// Unlike `start_scan`, this does NOT clear existing state — the caller is
+    /// responsible for deciding whether to clear before calling.  The parsed
+    /// entries are streamed via `EntriesBatch` and the file list is sent via
+    /// `AdditionalFilesDiscovered` so the UI extends rather than replaces its
+    /// current file list.
+    pub fn start_scan_files(&mut self, files: Vec<PathBuf>, profiles: Vec<FormatProfile>) {
+        self.cancel_scan();
+
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        self.progress_rx = Some(rx);
+        self.cancel_flag = Some(Arc::clone(&cancel));
+
+        let parse_config = ParseConfig::default();
+
+        std::thread::spawn(move || {
+            run_files_scan(files, profiles, parse_config, tx, cancel);
+        });
+
+        tracing::info!("File append scan started");
+    }
+
     /// Request cancellation of the running scan.
     /// The background thread will send `ScanProgress::Cancelled` and exit.
     pub fn cancel_scan(&mut self) {
@@ -134,11 +159,10 @@ fn run_scan(
     macro_rules! send {
         ($msg:expr) => {
             if tx.send($msg).is_err() {
-                return; // Receiver dropped (UI closed); exit quietly.
+                return;
             }
         };
     }
-
     macro_rules! check_cancel {
         () => {
             if cancel.load(Ordering::SeqCst) {
@@ -154,10 +178,9 @@ fn run_scan(
     send!(ScanProgress::DiscoveryStarted);
 
     let tx_discovery = tx.clone();
-    let (mut discovered_files, warnings) =
+    let (discovered_files, warnings) =
         match discovery::discover_files(&root, &config, |path, count| {
             tracing::trace!(file = %path.display(), count, "File discovered");
-            // Non-fatal: ignore send error (UI may have closed).
             let _ = tx_discovery.send(ScanProgress::FileDiscovered {
                 path: path.to_path_buf(),
                 files_found: count,
@@ -172,17 +195,52 @@ fn run_scan(
             }
         };
 
-    // Forward discovery warnings as non-fatal scan warnings.
     for warning in warnings {
         send!(ScanProgress::Warning { message: warning });
     }
 
     check_cancel!();
 
+    run_parse_pipeline(discovered_files, profiles, parse_config, tx, cancel, false);
+}
+
+// =============================================================================
+// Phases 2+3: Auto-detection + Parsing (shared by directory scan and add-files)
+// =============================================================================
+
+/// Auto-detect format profiles for each file, then parse them all, streaming
+/// results back over `tx`.
+///
+/// `append`: when `true` the discovered-file list is sent as
+/// `AdditionalFilesDiscovered` (extends the UI list); when `false` it is sent
+/// as `FilesDiscovered` (replaces the UI list).
+fn run_parse_pipeline(
+    mut discovered_files: Vec<crate::core::model::DiscoveredFile>,
+    profiles: Vec<FormatProfile>,
+    parse_config: ParseConfig,
+    tx: mpsc::Sender<ScanProgress>,
+    cancel: Arc<AtomicBool>,
+    append: bool,
+) {
+    macro_rules! send {
+        ($msg:expr) => {
+            if tx.send($msg).is_err() {
+                return;
+            }
+        };
+    }
+    macro_rules! check_cancel {
+        () => {
+            if cancel.load(Ordering::SeqCst) {
+                send!(ScanProgress::Cancelled);
+                return;
+            }
+        };
+    }
+
     // -------------------------------------------------------------------------
     // Phase 2: Auto-detection
     // -------------------------------------------------------------------------
-    // Read sample lines per file, run auto-detect, annotate the file record.
     let total_files = discovered_files.len();
 
     for file in &mut discovered_files {
@@ -200,15 +258,31 @@ fn run_scan(
                 confidence = detection.confidence,
                 "Auto-detected profile"
             );
+        } else {
+            // No specific profile matched: fall back to plain-text.
+            if profiles.iter().any(|p| p.id == "plain-text") {
+                file.profile_id = Some("plain-text".to_string());
+                file.detection_confidence = 0.0;
+                tracing::debug!(
+                    file = %file.path.display(),
+                    "No structured profile matched; falling back to plain-text"
+                );
+            }
         }
     }
 
     send!(ScanProgress::DiscoveryCompleted { total_files });
 
-    // Send the full annotated file list so the UI can populate the discovery panel.
-    send!(ScanProgress::FilesDiscovered {
-        files: discovered_files.clone(),
-    });
+    // Send file list. Append mode extends UI list; normal mode replaces it.
+    if append {
+        send!(ScanProgress::AdditionalFilesDiscovered {
+            files: discovered_files.clone(),
+        });
+    } else {
+        send!(ScanProgress::FilesDiscovered {
+            files: discovered_files.clone(),
+        });
+    }
 
     check_cancel!();
 
@@ -222,7 +296,9 @@ fn run_scan(
     let mut total_errors: usize = 0;
     let mut files_with_entries: usize = 0;
     let mut entry_id: u64 = 0;
-    let mut entry_batch: Vec<LogEntry> = Vec::with_capacity(ENTRY_BATCH_SIZE);
+    // Collect all entries here; sort chronologically on this background thread
+    // before streaming to the UI so the UI thread never blocks on a large sort.
+    let mut all_entries: Vec<LogEntry> = Vec::new();
     let mut file_summaries: Vec<FileSummary> = Vec::new();
 
     for (idx, file) in discovered_files.iter().enumerate() {
@@ -230,14 +306,13 @@ fn run_scan(
 
         let files_completed = idx + 1;
 
-        // Look up the matched profile; skip files with no matched format.
         let profile_id = match &file.profile_id {
             Some(id) => id.clone(),
             None => {
-                tracing::debug!(file = %file.path.display(), "No matching profile, skipping");
+                tracing::debug!(file = %file.path.display(), "No profile assigned, skipping");
                 send!(ScanProgress::Warning {
                     message: format!(
-                        "'{}': no matching format profile, file skipped",
+                        "'{}': no format profile could be assigned (even plain-text was unavailable), file skipped",
                         file.path.display()
                     ),
                 });
@@ -253,7 +328,6 @@ fn run_scan(
             }
         };
 
-        // Read file content (with retry for transient I/O errors, mmap for large).
         let content = match read_file_content(&file.path, file.is_large) {
             Ok(c) => c,
             Err(e) => {
@@ -266,7 +340,6 @@ fn run_scan(
 
         check_cancel!();
 
-        // Parse the file content.
         let parse_result = parser::parse_content(
             &content,
             &file.path,
@@ -286,7 +359,6 @@ fn run_scan(
             files_with_entries += 1;
         }
 
-        // Collect per-file timestamp range for FileSummary.
         let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
         let mut latest: Option<chrono::DateTime<chrono::Utc>> = None;
         for entry in &parse_result.entries {
@@ -310,21 +382,11 @@ fn run_scan(
             latest,
         });
 
-        // Log non-fatal parse errors at debug level.
         for err in &parse_result.errors {
             tracing::debug!(error = %err, "Parse error");
         }
 
-        // Batch entries and flush when the batch is full.
-        for entry in parse_result.entries {
-            entry_batch.push(entry);
-            if entry_batch.len() >= ENTRY_BATCH_SIZE {
-                let batch =
-                    std::mem::replace(&mut entry_batch, Vec::with_capacity(ENTRY_BATCH_SIZE));
-                send!(ScanProgress::EntriesBatch { entries: batch });
-                check_cancel!();
-            }
-        }
+        all_entries.extend(parse_result.entries);
 
         send!(ScanProgress::FileParsed {
             path: file.path.clone(),
@@ -335,14 +397,29 @@ fn run_scan(
         });
     }
 
-    // Flush the remaining partial batch.
-    if !entry_batch.is_empty() {
-        send!(ScanProgress::EntriesBatch {
-            entries: entry_batch,
-        });
-    }
+    // Sort all collected entries chronologically on the background thread.
+    // Entries with timestamps come first ordered by time; timestamp-less entries
+    // retain their relative parse order at the end.  This prevents the UI thread
+    // from blocking on a potentially large sort after ParsingCompleted arrives.
+    tracing::debug!(
+        entries = all_entries.len(),
+        "Sorting entries chronologically on background thread"
+    );
+    all_entries.sort_by(|a, b| match (a.timestamp, b.timestamp) {
+        (Some(ta), Some(tb)) => ta.cmp(&tb),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
 
+    // Stream sorted entries to the UI in batches.
     check_cancel!();
+    for chunk in all_entries.chunks(ENTRY_BATCH_SIZE) {
+        send!(ScanProgress::EntriesBatch {
+            entries: chunk.to_vec(),
+        });
+        check_cancel!();
+    }
 
     let summary = ScanSummary {
         total_files_discovered: total_files,
@@ -360,8 +437,66 @@ fn run_scan(
         files = total_files,
         entries = total_entries,
         errors = total_errors,
-        "Scan complete"
+        "Parse pipeline complete (append={})",
+        append
     );
+}
+
+// =============================================================================
+// Add-files scan (no directory walk, append to existing session)
+// =============================================================================
+
+/// Scan a user-provided list of individual file paths without clearing state.
+///
+/// For each path, reads OS metadata to build a `DiscoveredFile`, then hands
+/// off to `run_parse_pipeline` with `append=true`.  Permission errors and
+/// missing files are reported as non-fatal warnings.
+fn run_files_scan(
+    paths: Vec<PathBuf>,
+    profiles: Vec<FormatProfile>,
+    parse_config: ParseConfig,
+    tx: mpsc::Sender<ScanProgress>,
+    cancel: Arc<AtomicBool>,
+) {
+    use crate::util::constants::DEFAULT_LARGE_FILE_THRESHOLD;
+    use chrono::DateTime;
+
+    macro_rules! send {
+        ($msg:expr) => {
+            if tx.send($msg).is_err() {
+                return;
+            }
+        };
+    }
+
+    send!(ScanProgress::DiscoveryStarted);
+
+    let mut discovered: Vec<crate::core::model::DiscoveredFile> = Vec::with_capacity(paths.len());
+
+    for path in &paths {
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                let size = meta.len();
+                let modified = meta.modified().ok().map(DateTime::<chrono::Utc>::from);
+                let is_large = size >= DEFAULT_LARGE_FILE_THRESHOLD;
+                discovered.push(crate::core::model::DiscoveredFile {
+                    path: path.clone(),
+                    size,
+                    modified,
+                    profile_id: None,
+                    detection_confidence: 0.0,
+                    is_large,
+                });
+            }
+            Err(e) => {
+                let msg = format!("Cannot access '{}': {e}", path.display());
+                tracing::warn!(warning = %msg, "Add-files metadata error");
+                send!(ScanProgress::Warning { message: msg });
+            }
+        }
+    }
+
+    run_parse_pipeline(discovered, profiles, parse_config, tx, cancel, true);
 }
 
 // =============================================================================
@@ -370,7 +505,12 @@ fn run_scan(
 
 /// Read up to `max_lines` lines from the start of a file for auto-detection.
 /// Returns an empty vec on any I/O error (non-fatal; auto-detection will skip).
+///
+/// Handles UTF-16 LE/BE encoded files (common in C:\Windows\Logs) by first
+/// reading the full content with encoding detection, then splitting into lines.
+/// This ensures auto-detection works on Windows system log files.
 fn read_sample_lines(path: &Path, max_lines: usize) -> Vec<String> {
+    // Try fast UTF-8 path first.
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
@@ -379,11 +519,31 @@ fn read_sample_lines(path: &Path, max_lines: usize) -> Vec<String> {
         }
     };
 
-    BufReader::new(file)
+    let lines: Vec<String> = BufReader::new(file)
         .lines()
         .take(max_lines)
         .filter_map(|l| l.ok())
-        .collect()
+        .collect();
+
+    // If we got lines, we're done (UTF-8 file).
+    if !lines.is_empty() {
+        return lines;
+    }
+
+    // Empty result may mean UTF-16 LE/BE encoding. Try encoding-aware read.
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.len() >= 2 => {
+            if let Ok(content) = decode_bytes(&bytes, path) {
+                return content
+                    .lines()
+                    .take(max_lines)
+                    .map(|s| s.to_string())
+                    .collect();
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Read the full content of a file as a UTF-8 string.
@@ -409,9 +569,14 @@ fn read_large_file(path: &Path) -> io::Result<String> {
     // during the map's lifetime could produce undefined behaviour, which is
     // acceptable for a log viewer reading already-written files.
     let mmap = unsafe { memmap2::Mmap::map(&file)? };
-    std::str::from_utf8(&mmap)
-        .map(|s| s.to_string())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+
+    // Fast path: valid UTF-8 (most log files).
+    if let Ok(s) = std::str::from_utf8(&mmap) {
+        return Ok(s.to_string());
+    }
+
+    // Encoding fallback: handles UTF-16 LE/BE (Windows system logs) and ANSI.
+    decode_bytes(&mmap, path)
 }
 
 /// Read a small file with transient-error retries.
@@ -421,6 +586,11 @@ fn read_small_file_with_retry(path: &Path) -> io::Result<String> {
     for attempt in 0..MAX_RETRIES {
         match std::fs::read_to_string(path) {
             Ok(content) => return Ok(content),
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                // File is not valid UTF-8 (e.g. UTF-16 LE Windows system logs).
+                // Switch to encoding-aware decoding rather than retrying.
+                return decode_non_utf8_file(path);
+            }
             Err(e) if is_transient_error(&e) => {
                 tracing::debug!(
                     file = %path.display(),
@@ -436,6 +606,48 @@ fn read_small_file_with_retry(path: &Path) -> io::Result<String> {
     }
 
     Err(last_err.unwrap_or_else(|| io::Error::other("Unknown read error")))
+}
+
+/// Decode a file whose bytes are not valid UTF-8.
+///
+/// Checks for UTF-16 LE BOM (0xFF 0xFE) and UTF-16 BE BOM (0xFE 0xFF) —
+/// both are used by Windows system logs such as CBS.log and WindowsUpdate.log.
+/// Falls back to lossy UTF-8 for ANSI / Windows-1252 encoded files.
+fn decode_non_utf8_file(path: &Path) -> io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    decode_bytes(&bytes, path)
+}
+
+/// Detect encoding from `bytes` and return the decoded string.
+///
+/// Checks BOM markers only; does not do statistical charset detection.
+/// This is intentionally conservative: it correctly handles the most common
+/// non-UTF-8 encodings found in Windows system log directories while avoiding
+/// the complexity and potential false-positives of full charset detection.
+fn decode_bytes(bytes: &[u8], path: &Path) -> io::Result<String> {
+    // UTF-16 LE BOM: 0xFF 0xFE — used by CBS.log, WindowsUpdate.log, etc.
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        let utf16: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        tracing::debug!(file = %path.display(), "Decoded file as UTF-16 LE");
+        return Ok(String::from_utf16_lossy(&utf16));
+    }
+
+    // UTF-16 BE BOM: 0xFE 0xFF — uncommon but valid.
+    if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let utf16: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        tracing::debug!(file = %path.display(), "Decoded file as UTF-16 BE");
+        return Ok(String::from_utf16_lossy(&utf16));
+    }
+
+    // No recognised BOM: treat as lossy UTF-8 / ANSI.
+    tracing::debug!(file = %path.display(), "Decoded file as lossy UTF-8 (no BOM)");
+    Ok(String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// Returns true for transient I/O errors that are worth retrying.

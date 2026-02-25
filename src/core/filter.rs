@@ -26,8 +26,14 @@ pub struct FilterState {
     /// End of time range (inclusive). None = no upper bound.
     pub time_end: Option<DateTime<Utc>>,
 
-    /// Substring text search (case-insensitive). Empty = no filter.
+    /// Text search term. When `fuzzy` is false this is a case-insensitive
+    /// substring match; when true it uses subsequence fuzzy matching.
+    /// Empty = no filter.
     pub text_search: String,
+
+    /// When true, `text_search` uses fuzzy (subsequence) matching instead
+    /// of exact case-insensitive substring matching.
+    pub fuzzy: bool,
 
     /// Raw regex pattern string kept for the UI input buffer.
     /// The compiled form is in `regex_search`.
@@ -49,6 +55,7 @@ pub struct FilterState {
 
 impl FilterState {
     /// Returns true if no filters are active.
+    /// Note: `fuzzy` is a mode toggle, not a filter value, so it is not counted here.
     pub fn is_empty(&self) -> bool {
         self.severity_levels.is_empty()
             && self.source_files.is_empty()
@@ -76,27 +83,39 @@ impl FilterState {
         Ok(())
     }
 
-    /// Create a quick-filter for errors only.
-    pub fn errors_only() -> Self {
+    /// Create a quick-filter for errors only, preserving the current fuzzy mode.
+    pub fn errors_only_from(fuzzy: bool) -> Self {
         let mut levels = HashSet::new();
         levels.insert(Severity::Critical);
         levels.insert(Severity::Error);
         Self {
             severity_levels: levels,
+            fuzzy,
             ..Default::default()
         }
     }
 
-    /// Create a quick-filter for errors and warnings.
-    pub fn errors_and_warnings() -> Self {
+    /// Create a quick-filter for errors only.
+    pub fn errors_only() -> Self {
+        Self::errors_only_from(false)
+    }
+
+    /// Create a quick-filter for errors and warnings, preserving the current fuzzy mode.
+    pub fn errors_and_warnings_from(fuzzy: bool) -> Self {
         let mut levels = HashSet::new();
         levels.insert(Severity::Critical);
         levels.insert(Severity::Error);
         levels.insert(Severity::Warning);
         Self {
             severity_levels: levels,
+            fuzzy,
             ..Default::default()
         }
+    }
+
+    /// Create a quick-filter for errors and warnings.
+    pub fn errors_and_warnings() -> Self {
+        Self::errors_and_warnings_from(false)
     }
 }
 
@@ -117,6 +136,34 @@ pub fn apply_filters(entries: &[LogEntry], filter: &FilterState) -> Vec<usize> {
         .filter(|(_, entry)| matches_all(entry, filter, &text_lower))
         .map(|(idx, _)| idx)
         .collect()
+}
+
+/// Return true if every character of `query` appears in `text` in order
+/// (case-insensitive subsequence / fuzzy match).
+///
+/// Examples:
+///   fuzzy_match("cerr", "Connection error") -> true  (c..e..r..r)
+///   fuzzy_match("fail", "FAILED")            -> true
+///   fuzzy_match("xyz",  "Connection error")  -> false
+pub fn fuzzy_match(query: &str, text: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let mut text_chars = text.chars();
+    'outer: for qc in query.chars() {
+        let ql = qc.to_lowercase().next().unwrap_or(qc);
+        loop {
+            match text_chars.next() {
+                Some(tc) => {
+                    if tc.to_lowercase().next().unwrap_or(tc) == ql {
+                        continue 'outer;
+                    }
+                }
+                None => return false, // query char not found
+            }
+        }
+    }
+    true
 }
 
 /// Check if a single entry matches all active filters.
@@ -147,9 +194,17 @@ fn matches_all(entry: &LogEntry, filter: &FilterState, text_lower: &str) -> bool
         }
     }
 
-    // Text search (case-insensitive substring)
-    if !text_lower.is_empty() && !entry.message.to_lowercase().contains(text_lower) {
-        return false;
+    // Text search: fuzzy subsequence or exact case-insensitive substring
+    if !text_lower.is_empty() {
+        let msg_lower = entry.message.to_lowercase();
+        let hit = if filter.fuzzy {
+            fuzzy_match(text_lower, &msg_lower)
+        } else {
+            msg_lower.contains(text_lower)
+        };
+        if !hit {
+            return false;
+        }
     }
 
     // Regex search
@@ -181,6 +236,53 @@ mod tests {
             raw_text: message.to_string(),
             profile_id: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn test_fuzzy_match_basic_subsequence() {
+        assert!(fuzzy_match("cerr", "Connection error"));
+        assert!(fuzzy_match("fail", "FAILED"));
+        assert!(fuzzy_match("err", "error"));
+        assert!(!fuzzy_match("xyz", "Connection error"));
+    }
+
+    #[test]
+    fn test_fuzzy_match_empty_query_always_matches() {
+        assert!(fuzzy_match("", "anything"));
+        assert!(fuzzy_match("", ""));
+    }
+
+    #[test]
+    fn test_fuzzy_match_exact_still_works() {
+        assert!(fuzzy_match("error", "error"));
+        assert!(!fuzzy_match("errors", "error")); // query longer than text
+    }
+
+    #[test]
+    fn test_fuzzy_filter_applied_when_flag_set() {
+        let entries = vec![
+            make_entry(1, Severity::Error, "Connection error"),
+            make_entry(2, Severity::Info, "All systems ok"),
+        ];
+        let filter = FilterState {
+            text_search: "cerr".to_string(), // won't substring-match but WILL fuzzy-match
+            fuzzy: true,
+            ..Default::default()
+        };
+        let result = apply_filters(&entries, &filter);
+        assert_eq!(result, vec![0]);
+    }
+
+    #[test]
+    fn test_substring_mode_does_not_fuzzy_match() {
+        let entries = vec![make_entry(1, Severity::Error, "Connection error")];
+        let filter = FilterState {
+            text_search: "cerr".to_string(),
+            fuzzy: false,
+            ..Default::default()
+        };
+        // "cerr" is not a substring of "Connection error"
+        assert!(apply_filters(&entries, &filter).is_empty());
     }
 
     #[test]

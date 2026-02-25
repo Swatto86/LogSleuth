@@ -69,19 +69,29 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         .unwrap_or("?");
 
                     let (profile_text, profile_colour) = match &file.profile_id {
+                        Some(id) if id == "plain-text" && file.detection_confidence == 0.0 => (
+                            // Fallback assignment: readable but no structured format detected.
+                            "plain-text (fallback)".to_string(),
+                            egui::Color32::from_rgb(156, 163, 175), // gray
+                        ),
                         Some(id) => (
                             format!("{id} ({:.0}%)", file.detection_confidence * 100.0),
-                            egui::Color32::from_rgb(74, 222, 128),
+                            egui::Color32::from_rgb(74, 222, 128), // green
                         ),
                         None => (
                             "unmatched".to_string(),
-                            egui::Color32::from_rgb(156, 163, 175),
+                            egui::Color32::from_rgb(156, 163, 175), // gray
                         ),
                     };
 
                     let size_text = format_size(file.size);
 
                     ui.horizontal(|ui| {
+                        // Coloured dot matching the file's timeline stripe colour.
+                        let colour = state.colour_for_file(&file.path);
+                        let (dot_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.painter().circle_filled(dot_rect.center(), 4.0, colour);
                         ui.label(egui::RichText::new(name).small().strong());
                         ui.label(egui::RichText::new(size_text).small().weak());
                     });
