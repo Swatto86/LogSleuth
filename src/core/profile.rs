@@ -264,12 +264,13 @@ pub fn auto_detect(
         }
 
         if confidence >= constants::AUTO_DETECT_MIN_CONFIDENCE
-            && best.as_ref().map_or(true, |b| confidence > b.confidence) {
-                best = Some(DetectionResult {
-                    profile_id: profile.id.clone(),
-                    confidence,
-                });
-            }
+            && best.as_ref().map_or(true, |b| confidence > b.confidence)
+        {
+            best = Some(DetectionResult {
+                profile_id: profile.id.clone(),
+                confidence,
+            });
+        }
     }
 
     tracing::debug!(

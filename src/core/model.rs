@@ -61,8 +61,9 @@ pub struct LogEntry {
 ///
 /// All format-specific level strings (Error, ERR, E, error, Failed, etc.)
 /// are mapped to one of these variants via the profile's severity_mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
+)]
 pub enum Severity {
     Critical,
     Error,
@@ -117,7 +118,6 @@ impl std::fmt::Display for Severity {
     }
 }
 
-
 // =============================================================================
 // Multiline mode
 // =============================================================================
@@ -138,7 +138,6 @@ pub enum MultilineMode {
     /// Treat non-matching lines as standalone entries with no parsed fields.
     Raw,
 }
-
 
 // =============================================================================
 // Format Profile (runtime representation)
