@@ -219,8 +219,18 @@ RUST_LOG=debug cargo test -- --nocapture
 
 ### Release
 
-- Windows: `.\update-application.ps1 -Version "x.y.z"`
-- Unix: `./update-application.sh --version x.y.z`
+- **Windows**: `.\update-application.ps1 [-Version x.y.z] [-Notes "..."] [-Force] [-DryRun]`
+  - Reads/writes `[package]` version from `Cargo.toml`
+  - Runs `cargo update` to refresh `Cargo.lock`
+  - Runs `cargo build --release` (Windows/host binary only — validation step)
+  - Runs `cargo fmt -- --check` and `cargo clippy -- -D warnings` (mirrors CI checks to catch failures before the tag is pushed)
+  - Runs `cargo test` (rolls back all version changes on any failure)
+  - Optionally runs `makensis installer/windows/logsleuth.nsi` if both file and tool exist
+  - Commits version bump, creates annotated tag, pushes to origin
+  - **macOS and Linux binaries are built by `release.yml` CI triggered by the pushed tag**
+  - Prunes all older `v*.*.*` tags and GitHub releases (keeps only new tag)
+  - DryRun mode prints the full plan without touching files, git, or the remote
+- **Unix**: `./update-application.sh --version x.y.z` (not yet implemented)
 - Both scripts follow DevWorkflow Part A Rule 18.
 
 ---

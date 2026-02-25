@@ -67,7 +67,7 @@
 - [ ] NSIS installer script (Windows)
 - [ ] GitHub Actions CI workflow
 - [ ] GitHub Actions release workflow
-- [ ] update-application.ps1 release script
+- [x] update-application.ps1 release script
 - [x] Application icon embedding (ICO for Windows, via winres build.rs; runtime PNG via eframe viewport `with_icon`)
 - [ ] DMG builder (macOS)
 - [ ] AppImage builder (Linux)
