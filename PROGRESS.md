@@ -642,6 +642,55 @@ Font file I/O was occurring inside the `eframe::run_native` creator closure — 
 
 ---
 
+## Increment 32: Time Range Filter Bug Fix
+**Status: COMPLETE**
+
+**Bug**: The relative-time filter (15m / 1h / 6h / 24h buttons and custom minute input) was filtering on `entry.file_modified` — the OS last-modified time of the *source file* — rather than the parsed log event timestamp inside each entry. This meant:
+- "Last 15 minutes" showed **all entries from files whose mtime was recent**, not entries whose log event timestamp fell in the last 15 minutes.
+- A large log file continuously written to (e.g. a live application log) would always show its entire history when any time filter was active.
+- Structured log formats with accurate parsed timestamps (Veeam, IIS, SQL Server, syslog, etc.) were all affected.
+
+**Fix** (`src/core/filter.rs`):
+- The time range predicate now resolves an **effective time** for each entry: `entry.timestamp` (parsed log event time) is used when available; `entry.file_modified` (OS mtime) is used as a fallback only for plain-text/no-timestamp entries.
+- Entries with neither a parsed timestamp nor a file mtime are excluded from any time-bounded view (unchanged).
+- The two existing time-filter unit tests were updated to reflect the corrected semantics; `test_time_filter_excludes_entries_without_file_mtime` was renamed `test_time_filter_uses_file_mtime_fallback_when_no_timestamp` and extended to verify all three cases: timestamp present, mtime fallback, and neither.
+- `ATLAS.md` `filter.rs` description updated.
+
+**Test results: 69 unit tests + 29 E2E tests = 98 total, all passing. Zero clippy warnings.**
+
+---
+
+## Increment 33: Timeline Sort Order (Ascending / Descending)
+**Status: COMPLETE**
+
+**Feature**: Added a compact sort-order toggle button above the timeline scroll area, allowing the user to switch between **ascending (oldest first)** and **descending (newest first)** display order without altering the underlying data structures.
+
+**Design decisions**:
+- `state.entries` and `state.filtered_indices` always remain in **ascending chronological order** — the sort toggle is purely a display-layer concern, avoiding expensive data mutations on every toggle.
+- `selected_index` retains its existing semantic: a **stable position into `filtered_indices`** (ascending order), independent of display direction.  `selected_entry()` therefore remains correct without modification.
+- When descending, `display_idx 0` maps to the **last** element of `filtered_indices` (newest entry) via `actual_idx = n - 1 - display_idx`; this reversal is applied only inside the `show_rows` loop in `timeline.rs`.
+- `stick_to_bottom` is disabled in descending order (newest is already at the top; sticky-bottom would fight live tail scroll).
+- `sort_descending: bool` is a **user preference** — it is **not** cleared by `clear()`, consistent with `dark_mode` and `tail_auto_scroll`.  Default is `false` (ascending).
+
+**Changes**:
+- `src/app/state.rs`:
+  - Added `pub sort_descending: bool` field (default `false`).
+  - Added `toggle_sort_direction(&mut self)` — flips `sort_descending`; `selected_index` requires no remapping.
+  - `clear()` intentionally leaves `sort_descending` untouched (user preference).
+- `src/ui/panels/timeline.rs`:
+  - Added compact sort toolbar (`↑ Oldest first` / `↓ Newest first` button + `ui.separator()`) above the `ScrollArea`.
+  - Inside `show_rows`: computes `actual_idx` from `display_idx` using the descending reversal when `state.sort_descending`.
+  - `is_selected` and the click handler both use `actual_idx` (stable `filtered_indices` position) instead of `display_idx`.
+  - `stick_to_bottom` gated on `&& !state.sort_descending`.
+
+**New regression tests** (both in `src/app/state.rs`):
+- `test_toggle_sort_direction_preserves_selected_entry` — toggles twice; asserts `sort_descending` flips, `selected_index` is unchanged, and `selected_entry()` returns the same entry in all three states (ascending → descending → ascending).
+- `test_sort_descending_preserved_across_clear` — sets `sort_descending = true`, calls `clear()`, asserts the preference survives.
+
+**Test results: 71 unit tests + 29 E2E tests = 100 total, all passing. Zero clippy warnings.**
+
+---
+
 ### High Priority
 - [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*
 

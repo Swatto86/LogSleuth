@@ -36,9 +36,33 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     let row_height = theme::ROW_HEIGHT;
 
-    // Stick to the bottom while live tail + auto-scroll are both active so
-    // new entries scroll into view immediately as they arrive.
-    let stick = state.tail_active && state.tail_auto_scroll;
+    // Sort order toolbar — compact single-line bar above the scroll area.
+    ui.horizontal(|ui| {
+        let (sort_label, sort_hint) = if state.sort_descending {
+            (
+                "\u{2193} Newest first",
+                "Switch to ascending order (oldest first)",
+            )
+        } else {
+            (
+                "\u{2191} Oldest first",
+                "Switch to descending order (newest first)",
+            )
+        };
+        if ui
+            .small_button(sort_label)
+            .on_hover_text(sort_hint)
+            .clicked()
+        {
+            state.toggle_sort_direction();
+        }
+    });
+    ui.separator();
+
+    // Stick to the bottom while live tail + auto-scroll are both active AND the
+    // sort order is ascending.  In descending order the newest entry is already
+    // at the top (display_idx == 0), so no sticky-bottom scroll is needed.
+    let stick = state.tail_active && state.tail_auto_scroll && !state.sort_descending;
 
     // Bookmark toggle and correlation refresh are collected here and applied
     // after show_rows so we do not mutable-borrow `state` while `entry` still
@@ -51,14 +75,22 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         .stick_to_bottom(stick)
         .show_rows(ui, row_height, filtered, |ui, row_range| {
             for display_idx in row_range {
-                let Some(&entry_idx) = state.filtered_indices.get(display_idx) else {
+                // When sort_descending the display positions are reversed:
+                // display_idx 0 maps to the last element of filtered_indices
+                // (the newest entry) and display_idx n-1 maps to the first.
+                let actual_idx = if state.sort_descending {
+                    filtered.saturating_sub(1).saturating_sub(display_idx)
+                } else {
+                    display_idx
+                };
+                let Some(&entry_idx) = state.filtered_indices.get(actual_idx) else {
                     continue;
                 };
                 let Some(entry) = state.entries.get(entry_idx) else {
                     continue;
                 };
 
-                let is_selected = state.selected_index == Some(display_idx);
+                let is_selected = state.selected_index == Some(actual_idx);
                 let sev_colour = theme::severity_colour(&entry.severity, state.dark_mode);
                 let file_colour = state.colour_for_file(&entry.source_file);
                 let entry_id = entry.id;
@@ -199,7 +231,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     .inner;
 
                 if response.clicked() {
-                    state.selected_index = Some(display_idx);
+                    state.selected_index = Some(actual_idx);
                     // Flag for correlation recompute; must happen outside show_rows
                     // because update_correlation() takes &mut self which conflicts
                     // with the immutable borrow of state.entries (via `entry`).

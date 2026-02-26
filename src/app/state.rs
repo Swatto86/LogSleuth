@@ -60,6 +60,11 @@ pub struct AppState {
     /// Applied every frame via `ctx.set_visuals()` in `gui.rs`.
     pub dark_mode: bool,
 
+    /// Timeline sort order.  `false` = ascending (oldest first, default);
+    /// `true` = descending (newest first).
+    /// Persists across `clear()` calls — it is a user preference, not scan state.
+    pub sort_descending: bool,
+
     /// Whether debug mode is enabled.
     pub debug_mode: bool,
 
@@ -244,7 +249,8 @@ impl AppState {
             show_summary: false,
             show_log_summary: false,
             show_about: false,
-            dark_mode: true, // default to dark; matches egui's own default
+            dark_mode: true,        // default to dark; matches egui's own default
+            sort_descending: false, // default ascending (oldest first)
             debug_mode,
             pending_scan: None,
             request_cancel: false,
@@ -580,6 +586,27 @@ impl AppState {
                 (None, None) => std::cmp::Ordering::Equal,
             });
         self.apply_filters();
+    }
+
+    /// Toggle the timeline sort direction between ascending (oldest first) and
+    /// descending (newest first).
+    ///
+    /// `selected_index` is a **stable position into `filtered_indices`** (which
+    /// is always kept in ascending chronological order).  It does not change
+    /// meaning when the display direction flips, so no remapping is needed here.
+    /// `selected_entry()` continues to return the correct entry regardless of
+    /// sort direction.
+    ///
+    /// `sort_descending` is a user preference and is **not** cleared by
+    /// `clear()` — it persists across scans, like `dark_mode` and
+    /// `tail_auto_scroll`.
+    pub fn toggle_sort_direction(&mut self) {
+        self.sort_descending = !self.sort_descending;
+        // `selected_index` is a stable position into `filtered_indices` (always
+        // in ascending chronological order), so it does not need remapping when
+        // the display direction flips.  `selected_entry()` continues to return
+        // the correct entry because it looks up `filtered_indices[selected_index]`
+        // which is independent of `sort_descending`.
     }
 
     /// Clear all scan results and reset to initial state.
@@ -1031,6 +1058,78 @@ mod tests {
             state.correlated_ids.is_empty(),
             "correlated_ids must be cleared when the selected entry is no longer visible \
              (otherwise phantom teal highlights appear with no active selection)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // toggle_sort_direction — sort order flag and selection stability
+    // -------------------------------------------------------------------------
+
+    /// `toggle_sort_direction` must flip `sort_descending` and leave
+    /// `selected_index` unchanged (it is a stable position into
+    /// `filtered_indices`, not a display-position integer that varies with
+    /// sort order).  `selected_entry()` must therefore return the same entry
+    /// both before and after the toggle.
+    #[test]
+    fn test_toggle_sort_direction_preserves_selected_entry() {
+        let mut state = AppState::new(vec![], false);
+
+        // Three entries at t+0, t+60, t+120 (ascending chronological order).
+        state.entries = vec![make_entry(1, 0), make_entry(2, 60), make_entry(3, 120)];
+        state.apply_filters(); // filtered_indices = [0, 1, 2]
+
+        // Select the middle entry — filtered_indices[1] → entries[1] → id=2.
+        state.selected_index = Some(1);
+        let id_before = state.selected_entry().map(|e| e.id);
+        assert_eq!(
+            id_before,
+            Some(2),
+            "pre-toggle: selected entry must be id=2"
+        );
+        assert!(!state.sort_descending, "default sort must be ascending");
+
+        // Toggle to descending.
+        state.toggle_sort_direction();
+
+        assert!(
+            state.sort_descending,
+            "after first toggle: sort must be descending"
+        );
+        assert_eq!(
+            state.selected_index,
+            Some(1),
+            "selected_index must not change (stable position into filtered_indices)"
+        );
+        assert_eq!(
+            state.selected_entry().map(|e| e.id),
+            id_before,
+            "selected_entry() must still return id=2 after toggling to descending"
+        );
+
+        // Toggle back to ascending.
+        state.toggle_sort_direction();
+        assert!(
+            !state.sort_descending,
+            "after second toggle: sort must be ascending again"
+        );
+        assert_eq!(
+            state.selected_entry().map(|e| e.id),
+            id_before,
+            "selected_entry() must still return id=2 after toggling back to ascending"
+        );
+    }
+
+    /// `sort_descending` must survive `clear()` unchanged, because it is a
+    /// user preference like `dark_mode` and `tail_auto_scroll`.
+    #[test]
+    fn test_sort_descending_preserved_across_clear() {
+        let mut state = AppState::new(vec![], false);
+        assert!(!state.sort_descending, "default must be ascending (false)");
+        state.sort_descending = true;
+        state.clear();
+        assert!(
+            state.sort_descending,
+            "sort_descending must not be reset by clear() — it is a user preference"
         );
     }
 }
