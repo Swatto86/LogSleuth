@@ -7,24 +7,62 @@ use crate::core::model::Severity;
 use egui::Color32;
 
 /// Colour for a given severity level.
-pub fn severity_colour(severity: &Severity) -> Color32 {
-    match severity {
-        Severity::Critical => Color32::from_rgb(220, 38, 38), // Red 600
-        Severity::Error => Color32::from_rgb(185, 28, 28),    // Red 800
-        Severity::Warning => Color32::from_rgb(217, 119, 6),  // Amber 600
-        Severity::Info => Color32::from_rgb(209, 213, 219),   // Gray 300
-        Severity::Debug => Color32::from_rgb(107, 114, 128),  // Gray 500
-        Severity::Unknown => Color32::from_rgb(75, 85, 99),   // Gray 600
+///
+/// Dark mode uses bright, high-contrast colours visible on a dark background.
+/// Light mode uses dark, saturated colours visible on a light background.
+pub fn severity_colour(severity: &Severity, dark_mode: bool) -> Color32 {
+    if dark_mode {
+        match severity {
+            // Bright coral-red: most alarming, clearly critical
+            Severity::Critical => Color32::from_rgb(255, 99, 99),
+            // Red 400: clearly red and readable on dark
+            Severity::Error => Color32::from_rgb(248, 113, 113),
+            // Orange 300: warm amber distinct from red, highly visible
+            Severity::Warning => Color32::from_rgb(253, 186, 116),
+            // Gray 300: soft white-gray, readable on dark
+            Severity::Info => Color32::from_rgb(209, 213, 219),
+            // Gray 400: slightly lighter than the old Gray 500
+            Severity::Debug => Color32::from_rgb(156, 163, 175),
+            // Gray 500: muted, lowest visual priority
+            Severity::Unknown => Color32::from_rgb(107, 114, 128),
+        }
+    } else {
+        match severity {
+            // Red 800: strong red on white
+            Severity::Critical => Color32::from_rgb(185, 28, 28),
+            // Red 900: slightly darker to distinguish from Critical
+            Severity::Error => Color32::from_rgb(127, 29, 29),
+            // Amber 900: dark, warm, readable on white
+            Severity::Warning => Color32::from_rgb(120, 53, 15),
+            // Gray 700: dark enough to read on a light background
+            Severity::Info => Color32::from_rgb(55, 65, 81),
+            // Gray 600: slightly lighter than Info
+            Severity::Debug => Color32::from_rgb(75, 85, 99),
+            // Gray 500
+            Severity::Unknown => Color32::from_rgb(107, 114, 128),
+        }
     }
 }
 
-/// Background highlight colour for a severity (subtle, for row backgrounds).
-pub fn severity_bg_colour(severity: &Severity) -> Option<Color32> {
-    match severity {
-        Severity::Critical => Some(Color32::from_rgba_premultiplied(220, 38, 38, 25)),
-        Severity::Error => Some(Color32::from_rgba_premultiplied(185, 28, 28, 20)),
-        Severity::Warning => Some(Color32::from_rgba_premultiplied(217, 119, 6, 15)),
-        _ => None,
+/// Background highlight colour for a severity (subtle row tint).
+///
+/// Dark mode uses a stronger alpha so the tint is actually perceptible
+/// against the dark panel background. Light mode keeps a very subtle wash.
+pub fn severity_bg_colour(severity: &Severity, dark_mode: bool) -> Option<Color32> {
+    if dark_mode {
+        match severity {
+            Severity::Critical => Some(Color32::from_rgba_premultiplied(239, 68, 68, 55)),
+            Severity::Error => Some(Color32::from_rgba_premultiplied(220, 38, 38, 45)),
+            Severity::Warning => Some(Color32::from_rgba_premultiplied(217, 119, 6, 38)),
+            _ => None,
+        }
+    } else {
+        match severity {
+            Severity::Critical => Some(Color32::from_rgba_premultiplied(220, 38, 38, 25)),
+            Severity::Error => Some(Color32::from_rgba_premultiplied(185, 28, 28, 18)),
+            Severity::Warning => Some(Color32::from_rgba_premultiplied(217, 119, 6, 14)),
+            _ => None,
+        }
     }
 }
 

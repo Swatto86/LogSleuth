@@ -16,7 +16,7 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
     };
 
     // Coloured severity badge as a heading row
-    let sev_colour = theme::severity_colour(&entry.severity);
+    let sev_colour = theme::severity_colour(&entry.severity, state.dark_mode);
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(entry.severity.label())

@@ -128,7 +128,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                         if count == 0 {
                             continue;
                         }
-                        let colour = theme::severity_colour(sev);
+                        let colour = theme::severity_colour(sev, state.dark_mode);
                         let pct = if total_filtered > 0 {
                             (count as f64 / total_filtered as f64) * 100.0
                         } else {
@@ -168,7 +168,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             continue;
                         }
                         let count = counts.get(sev).copied().unwrap_or(0);
-                        let colour = theme::severity_colour(sev);
+                        let colour = theme::severity_colour(sev, state.dark_mode);
 
                         // Default-open for actionable severities.
                         let default_open = matches!(

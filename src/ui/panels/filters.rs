@@ -116,7 +116,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.label("Severity:");
     let mut changed = false;
     for severity in Severity::all() {
-        let colour = theme::severity_colour(severity);
+        let colour = theme::severity_colour(severity, state.dark_mode);
         let label = egui::RichText::new(severity.label()).color(colour);
         let mut checked = state.filter_state.severity_levels.contains(severity);
         if ui.checkbox(&mut checked, label).changed() {

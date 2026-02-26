@@ -51,7 +51,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 };
 
                 let is_selected = state.selected_index == Some(display_idx);
-                let sev_colour = theme::severity_colour(&entry.severity);
+                let sev_colour = theme::severity_colour(&entry.severity, state.dark_mode);
                 let file_colour = state.colour_for_file(&entry.source_file);
                 let entry_id = entry.id;
                 let is_bookmarked = state.is_bookmarked(entry_id);
@@ -86,7 +86,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 // that the correlated (teal) and bookmarked (gold) tints visually
                 // override it.  Only Critical / Error / Warning produce a tint;
                 // Info, Debug, and Unknown return None and paint nothing.
-                if let Some(sev_bg) = theme::severity_bg_colour(&entry.severity) {
+                if let Some(sev_bg) = theme::severity_bg_colour(&entry.severity, state.dark_mode) {
                     let tint_rect = egui::Rect::from_min_size(
                         ui.cursor().min,
                         egui::vec2(ui.available_width(), row_height),
