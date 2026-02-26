@@ -336,6 +336,24 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 state.apply_filters();
                             }
 
+                            // Reveal-in-file-manager button — opens Explorer/Finder
+                            // with this file pre-selected so the user can inspect it.
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("\u{1f4c2}")
+                                            .small()
+                                            .color(egui::Color32::from_rgb(107, 114, 128)),
+                                    )
+                                    .small()
+                                    .frame(false),
+                                )
+                                .on_hover_text("Reveal in file manager")
+                                .clicked()
+                            {
+                                crate::platform::fs::reveal_in_file_manager(path);
+                            }
+
                             // Profile label — right-aligned, coloured by match quality.
                             // Only shown when there is enough horizontal space.
                             ui.with_layout(

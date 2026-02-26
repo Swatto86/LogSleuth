@@ -38,3 +38,56 @@ pub fn read_file_lossy(path: &Path) -> io::Result<String> {
     let bytes = std::fs::read(path)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
+
+/// Open the system file manager and highlight `path` within it.
+///
+/// Platform behaviour:
+/// - **Windows**: `explorer.exe /select,"<path>"` — opens Explorer with the
+///   file pre-selected in its parent folder.
+/// - **macOS**: `open -R "<path>"` — reveals the file in Finder.
+/// - **Linux**: `xdg-open "<parent>"` — opens the parent directory (most
+///   Linux file managers do not support per-file selection via a standard
+///   command-line API).
+///
+/// The subprocess is spawned detached; any launch failure is logged at WARN
+/// level but never propagated so the UI never blocks.
+pub fn reveal_in_file_manager(path: &Path) {
+    #[cfg(target_os = "windows")]
+    {
+        // `/select,<path>` must be a single argument — no space after comma.
+        let arg = format!("/select,{}", path.display());
+        if let Err(e) = std::process::Command::new("explorer").arg(arg).spawn() {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to reveal file in Explorer"
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+        {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to reveal file in Finder"
+            );
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Best available fallback: open the parent directory.
+        let parent = path.parent().unwrap_or(path);
+        if let Err(e) = std::process::Command::new("xdg-open").arg(parent).spawn() {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to open parent directory in file manager"
+            );
+        }
+    }
+}
