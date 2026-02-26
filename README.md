@@ -22,7 +22,7 @@ Point LogSleuth at a directory and it will:
 1. **Discover** all log files recursively, regardless of vendor or format
 2. **Auto-detect** the log format using extensible TOML-based profiles
 3. **Parse** entries into a normalised model (timestamp, severity, message, source)
-4. **Display** everything in a unified, colour-coded, virtual-scrolling timeline with per-file colour stripes
+4. **Display** everything in a unified, colour-coded, virtual-scrolling timeline with per-file colour stripes and a **sort order toggle** (↑ Oldest first / ↓ Newest first) above the scroll area
 5. **Filter** by severity, text (exact or fuzzy), regex, time range, and source file
 6. **Export** filtered results to CSV or JSON
 7. **Summarise** each scan with a per-file breakdown (entries, errors, time range)
@@ -41,6 +41,7 @@ The filter sidebar provides:
 | Regex search | Full regex with live compile-error feedback |
 | Relative time window | Quick-select **15 min / 1 h / 6 h / 24 h** buttons or type a custom number of minutes; LogSleuth automatically advances the window as the clock ticks |
 | Source file | Per-file checklist with a coloured dot matching the file's timeline stripe. When more than 8 files are loaded a live search box appears. **Select All / None** operate on the currently visible (filtered) subset. **Solo** instantly isolates a single file. |
+| Sort order | **↑ Oldest first / ↓ Newest first** toggle button above the timeline. Flips the display order instantly without altering the underlying data. Preference persists across scans. |
 
 ### Quick-Filter Presets
 
