@@ -45,6 +45,15 @@ pub struct DiscoveryConfig {
 
     /// File size (bytes) above which the `is_large` flag is set.
     pub large_file_threshold: u64,
+
+    /// When set, only files whose last-modified timestamp is on or after this
+    /// instant are included in the scan.  Files with no readable mtime are always
+    /// included (fail-open) so permission-restricted metadata does not silently
+    /// hide relevant log files.
+    ///
+    /// Use `chrono::NaiveDate::and_hms_opt(…).and_utc()` to derive the start of
+    /// a calendar day in UTC, or `chrono::Local::today()` for local midnight.
+    pub modified_since: Option<DateTime<Utc>>,
 }
 
 impl Default for DiscoveryConfig {
@@ -62,6 +71,7 @@ impl Default for DiscoveryConfig {
                 .map(|s| (*s).to_string())
                 .collect(),
             large_file_threshold: constants::DEFAULT_LARGE_FILE_THRESHOLD,
+            modified_since: None,
         }
     }
 }
@@ -206,6 +216,22 @@ where
         let size = metadata.len();
         let modified: Option<DateTime<Utc>> = metadata.modified().ok().map(DateTime::<Utc>::from);
         let is_large = size >= config.large_file_threshold;
+
+        // Apply the modification-date filter: skip files modified before the
+        // requested date.  Files with no readable mtime are included (fail-open).
+        if let Some(since) = config.modified_since {
+            if let Some(mtime) = modified {
+                if mtime < since {
+                    tracing::trace!(
+                        file = %path.display(),
+                        mtime = %mtime,
+                        since = %since,
+                        "Skipped: modified before date filter"
+                    );
+                    continue;
+                }
+            }
+        }
 
         if is_large {
             tracing::debug!(

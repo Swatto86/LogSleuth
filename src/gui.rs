@@ -181,6 +181,9 @@ impl eframe::App for LogSleuthApp {
         // ---- Handle flags set by discovery panel ----
         // pending_scan: a panel requested a new scan via Open Directory button.
         if let Some(path) = self.state.pending_scan.take() {
+            // Capture the date filter BEFORE clear() — clear() does not reset
+            // discovery_date_input intentionally (user preference, not scan state).
+            let modified_since = self.state.discovery_modified_since();
             self.state.clear();
             self.state.scan_path = Some(path.clone());
             self.scan_manager.start_scan(
@@ -188,6 +191,7 @@ impl eframe::App for LogSleuthApp {
                 self.state.profiles.clone(),
                 DiscoveryConfig {
                     max_files: self.state.max_files_limit,
+                    modified_since,
                     ..DiscoveryConfig::default()
                 },
             );
@@ -196,11 +200,13 @@ impl eframe::App for LogSleuthApp {
         // Unlike pending_scan, does NOT call clear() so the restored
         // filter/colour/bookmark state is preserved during the re-scan.
         if let Some(path) = self.state.initial_scan.take() {
+            let modified_since = self.state.discovery_modified_since();
             self.scan_manager.start_scan(
                 path,
                 self.state.profiles.clone(),
                 DiscoveryConfig {
                     max_files: self.state.max_files_limit,
+                    modified_since,
                     ..DiscoveryConfig::default()
                 },
             );

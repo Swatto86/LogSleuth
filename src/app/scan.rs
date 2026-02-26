@@ -314,9 +314,18 @@ fn run_parse_pipeline(
     // before streaming to the UI so the UI thread never blocks on a large sort.
     let mut all_entries: Vec<LogEntry> = Vec::new();
     let mut file_summaries: Vec<FileSummary> = Vec::new();
+    // Flag set when MAX_TOTAL_ENTRIES is reached so processing stops cleanly.
+    let mut entry_cap_reached = false;
 
     for (idx, file) in discovered_files.iter().enumerate() {
         check_cancel!();
+
+        // Stop ingesting new files once the hard entry cap is reached (Rule 11).
+        // Continuing to parse would allocate unbounded memory, causing an OOM
+        // crash with no warning — the original bug this guard prevents.
+        if entry_cap_reached {
+            break;
+        }
 
         let files_completed = idx + 1;
 
@@ -400,7 +409,30 @@ fn run_parse_pipeline(
             tracing::debug!(error = %err, "Parse error");
         }
 
-        all_entries.extend(parse_result.entries);
+        // Enforce the hard entry cap (Rule 11: bounded collections).
+        // All entries from this file are still counted in file_summaries so
+        // the scan summary accurately reflects what was found vs. what was loaded.
+        let remaining_capacity =
+            crate::util::constants::MAX_TOTAL_ENTRIES.saturating_sub(all_entries.len());
+        if remaining_capacity == 0 {
+            // Cap already hit before this file; entries were skipped above.
+            // This branch should not be reached now that the loop breaks early,
+            // but guard defensively.
+        } else if parse_result.entries.len() <= remaining_capacity {
+            all_entries.extend(parse_result.entries);
+        } else {
+            // Partial ingest: take as many entries as fit, then trigger the cap.
+            all_entries.extend(parse_result.entries.into_iter().take(remaining_capacity));
+            entry_cap_reached = true;
+            let cap = crate::util::constants::MAX_TOTAL_ENTRIES;
+            let msg = format!(
+                "Entry limit reached: {cap} entries loaded. \
+                 Remaining files in this scan have been skipped to prevent an out-of-memory crash. \
+                 Use the date filter or reduce the max-files limit to target a smaller dataset."
+            );
+            tracing::warn!("{}", msg);
+            send!(ScanProgress::Warning { message: msg });
+        }
 
         send!(ScanProgress::FileParsed {
             path: file.path.clone(),

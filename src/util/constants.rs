@@ -59,6 +59,18 @@ pub const MAX_PARSE_ERRORS_PER_FILE: usize = 1_000;
 /// Maximum total parse errors tracked across all files in a scan.
 pub const MAX_TOTAL_PARSE_ERRORS: usize = 10_000;
 
+/// Hard upper bound on the total number of log entries held in memory at once.
+///
+/// Prevents out-of-memory crashes when scanning directories with many large,
+/// high-frequency log files.  When the cap is reached the background scan
+/// thread stops ingesting further entries and emits a warning so the user
+/// knows data was truncated.  At ~1 KB per entry this caps heap usage at
+/// roughly 1 GB for entries alone — well within 64-bit address space limits.
+///
+/// Users who need more entries should apply date or file-count filters to
+/// narrow the scope of the scan.
+pub const MAX_TOTAL_ENTRIES: usize = 1_000_000;
+
 // =============================================================================
 // Live tail limits
 // =============================================================================

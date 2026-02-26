@@ -176,6 +176,15 @@ pub struct AppState {
     /// results **and** the selected directory path, returning to the initial
     /// "no directory selected" state. Consumed and cleared by `gui.rs`.
     pub request_new_session: bool,
+
+    /// Date filter typed by the user in the "Open Directory" date-filter box.
+    ///
+    /// Expected format: `YYYY-MM-DD`.  An empty string means no date filter.
+    /// Parsed into a UTC midnight boundary by `discovery_modified_since()` and
+    /// passed as `DiscoveryConfig::modified_since` when a scan is started.
+    ///
+    /// Persists across scans so the user does not have to re-enter it each time.
+    pub discovery_date_input: String,
 }
 
 impl AppState {
@@ -219,6 +228,7 @@ impl AppState {
             total_files_found: 0,
             pending_replace_files: None,
             request_new_session: false,
+            discovery_date_input: String::new(),
         }
     }
 
@@ -567,6 +577,23 @@ impl AppState {
         self.clear();
         self.scan_path = None;
         self.status_message = "Ready. Open a directory to begin scanning.".to_string();
+    }
+
+    /// Parse `discovery_date_input` into a UTC `DateTime` representing the
+    /// start of that calendar day (00:00:00 UTC).
+    ///
+    /// Returns `None` when the input is empty or cannot be parsed as YYYY-MM-DD.
+    /// The caller passes this to `DiscoveryConfig::modified_since` when starting
+    /// a scan so only files modified on or after that UTC midnight are ingested.
+    pub fn discovery_modified_since(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        let trimmed = self.discovery_date_input.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+            .ok()
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+            .map(|ndt| ndt.and_utc())
     }
 
     // -------------------------------------------------------------------------
