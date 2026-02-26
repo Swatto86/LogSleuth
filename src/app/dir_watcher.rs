@@ -19,6 +19,7 @@
 
 use crate::core::model::DirWatchProgress;
 use crate::util::constants::DIR_WATCH_CANCEL_CHECK_INTERVAL_MS;
+use chrono::{DateTime, Utc};
 use glob::Pattern;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,19 @@ pub struct DirWatchConfig {
     pub max_depth: usize,
     /// How often to poll the directory tree for new files (ms).
     pub poll_interval_ms: u64,
+    /// When `Some`, only newly-discovered files whose OS last-modified time is
+    /// on or after this instant are reported.
+    ///
+    /// Mirrors `DiscoveryConfig::modified_since` so the watcher honours the
+    /// same date filter that was active during the initial directory scan.  If
+    /// the user set a "files modified on or after YYYY-MM-DD" filter when they
+    /// opened the directory, the watcher must apply the same gate — otherwise
+    /// older files that happen to be created or renamed into the directory after
+    /// the scan would slip through.
+    ///
+    /// Fail-open: files whose mtime cannot be read are always included so that
+    /// a permission-restricted metadata call never silently hides a log file.
+    pub modified_since: Option<DateTime<Utc>>,
 }
 
 impl Default for DirWatchConfig {
@@ -60,6 +74,7 @@ impl Default for DirWatchConfig {
                 .collect(),
             max_depth: constants::DEFAULT_MAX_DEPTH,
             poll_interval_ms: constants::DIR_WATCH_POLL_INTERVAL_MS,
+            modified_since: None,
         }
     }
 }
@@ -135,16 +150,19 @@ impl DirWatcher {
         self.progress_rx = None;
     }
 
-    /// Drain all pending messages from the background thread without blocking.
-    ///
-    /// Returns the accumulated messages since the last call.
+    /// Drain at most `max` pending messages from the background thread without
+    /// blocking.  Any messages beyond the budget remain in the channel and are
+    /// delivered on the next call (Rule 11: per-frame drain budget).
     /// Returns an empty `Vec` when the watcher is inactive.
-    pub fn poll_progress(&mut self) -> Vec<DirWatchProgress> {
+    pub fn poll_progress(&mut self, max: usize) -> Vec<DirWatchProgress> {
         let Some(rx) = &self.progress_rx else {
             return Vec::new();
         };
-        let mut messages = Vec::new();
+        let mut messages = Vec::with_capacity(max.min(8));
         loop {
+            if messages.len() >= max {
+                break;
+            }
             match rx.try_recv() {
                 Ok(msg) => messages.push(msg),
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -198,7 +216,15 @@ fn run_dir_watcher(
     let poll_interval = Duration::from_millis(config.poll_interval_ms);
     let cancel_check = Duration::from_millis(DIR_WATCH_CANCEL_CHECK_INTERVAL_MS);
     // Number of cancel-check sub-sleeps that make up one full poll interval.
-    let sub_iters: u32 = (poll_interval.as_millis() / cancel_check.as_millis()).max(1) as u32;
+    // The quotient is a u128; clamp to u32::MAX before casting so an extreme
+    // (misconfigured) poll interval cannot silently truncate to a tiny loop
+    // count (Rule 2: no silent truncation via `as` on fallible casts).
+    let sub_iters: u32 = u32::try_from(
+        (poll_interval.as_millis() / cancel_check.as_millis())
+            .max(1)
+            .min(u32::MAX as u128),
+    )
+    .unwrap_or(u32::MAX);
 
     tracing::debug!(
         root = %root.display(),
@@ -227,6 +253,7 @@ fn run_dir_watcher(
             &include_pats,
             &exclude_pats,
             config.max_depth,
+            config.modified_since,
         );
 
         if !new_files.is_empty() {
@@ -252,6 +279,9 @@ fn run_dir_watcher(
 /// 1. Are not already in `known_paths`.
 /// 2. Match at least one include pattern (or the include list is empty).
 /// 3. Do not match any exclude pattern.
+/// 4. Have an OS last-modified time on or after `modified_since` (if set).
+///    Files whose mtime cannot be read are included (fail-open) so that a
+///    permission-restricted metadata call never silently hides a log file.
 ///
 /// Per-entry I/O errors are silently skipped (non-fatal per Rule 11).
 fn walk_for_new_files(
@@ -260,6 +290,7 @@ fn walk_for_new_files(
     include_pats: &[Pattern],
     exclude_pats: &[Pattern],
     max_depth: usize,
+    modified_since: Option<DateTime<Utc>>,
 ) -> Vec<PathBuf> {
     let mut found = Vec::new();
 
@@ -295,9 +326,35 @@ fn walk_for_new_files(
         let matches_include =
             include_pats.is_empty() || include_pats.iter().any(|p| p.matches(&file_name));
 
-        if matches_include {
-            found.push(path);
+        if !matches_include {
+            continue;
         }
+
+        // Apply the modification-date filter: skip files modified before the
+        // requested start date.  Mirrors the identical check in
+        // `core::discovery::discover_files` so the watcher never adds a file
+        // that the initial scan would have rejected.  Fail-open when mtime is
+        // unreadable so permission errors do not silently suppress log files.
+        if let Some(since) = modified_since {
+            let mtime: Option<DateTime<Utc>> = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(DateTime::<Utc>::from);
+            if let Some(t) = mtime {
+                if t < since {
+                    tracing::trace!(
+                        file = %path.display(),
+                        mtime = %t,
+                        since = %since,
+                        "Dir-watcher: skipped new file (modified before date filter)"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        found.push(path);
     }
 
     found
@@ -321,14 +378,14 @@ mod tests {
         let exclude: Vec<Pattern> = vec![];
         let known = HashSet::new();
 
-        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5);
+        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, None);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], new_path);
 
         // If the file is already known it must not be reported again.
         let mut known2 = HashSet::new();
         known2.insert(new_path.clone());
-        let found2 = walk_for_new_files(dir.path(), &known2, &include, &exclude, 5);
+        let found2 = walk_for_new_files(dir.path(), &known2, &include, &exclude, 5, None);
         assert!(found2.is_empty());
     }
 
@@ -343,9 +400,50 @@ mod tests {
         let exclude: Vec<Pattern> = vec![];
         let known = HashSet::new();
 
-        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5);
+        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, None);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].file_name().unwrap().to_str().unwrap(), "app.log");
+    }
+
+    /// Newly-discovered files older than `modified_since` must be ignored;
+    /// files on or after the cutoff and files with unreadable mtime are included.
+    #[test]
+    fn test_walk_respects_modified_since() {
+        use chrono::TimeZone;
+        let dir = TempDir::new().expect("tmpdir");
+
+        // Three log files with controlled last-modified times can't easily be
+        // set via std::fs — use the current time as a proxy.  We test the
+        // filtering logic directly: pass a `since` in the future so the file's
+        // real mtime is before it, expecting it to be rejected.  Then pass a
+        // `since` in the past so the file is accepted.
+        //
+        // The assumption that a freshly created temp file has mtime < Utc::now()
+        // + 1 day is safe on all supported platforms.
+        let path = dir.path().join("new.log");
+        fs::write(&path, b"line").expect("write");
+
+        let include = vec![Pattern::new("*.log").unwrap()];
+        let exclude: Vec<Pattern> = vec![];
+        let known = HashSet::new();
+
+        // Cutoff far in the future: mtime of a freshly created file is before it
+        // → file should be rejected.
+        let future = Utc.with_ymd_and_hms(9999, 1, 1, 0, 0, 0).unwrap();
+        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, Some(future));
+        assert!(
+            found.is_empty(),
+            "file modified before the cutoff must be excluded"
+        );
+
+        // Cutoff far in the past: any file passes.
+        let past = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();
+        let found2 = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, Some(past));
+        assert_eq!(found2.len(), 1, "file after the cutoff must be included");
+
+        // No filter: all matching files are included regardless of mtime.
+        let found3 = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, None);
+        assert_eq!(found3.len(), 1, "no filter: file must be included");
     }
 
     /// DirWatcher: start and stop without panicking.

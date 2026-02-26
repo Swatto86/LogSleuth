@@ -124,6 +124,29 @@ pub const MAX_TAIL_READ_BYTES_PER_TICK: usize = 512 * 1_024; // 512 KiB
 pub const MAX_CLIPBOARD_ENTRIES: usize = 10_000;
 
 // =============================================================================
+// Per-frame UI message budgets (Rule 11: growing-collection bounds)
+// =============================================================================
+
+/// Maximum number of scan-progress messages processed by the UI update loop
+/// per frame.  Any remaining messages are left in the channel and processed
+/// on subsequent frames, preventing a burst from stalling the render loop.
+pub const MAX_SCAN_MESSAGES_PER_FRAME: usize = 500;
+
+/// Maximum number of live-tail messages processed per UI frame.
+/// Tail messages arrive at the tail-poll cadence; bursty writes can queue
+/// many messages before the next repaint.  This cap keeps frame times stable.
+pub const MAX_TAIL_MESSAGES_PER_FRAME: usize = 200;
+
+/// Maximum number of directory-watch messages processed per UI frame.
+/// Directory events are rare; a small cap is sufficient.
+pub const MAX_DIR_WATCH_MESSAGES_PER_FRAME: usize = 20;
+
+/// Maximum number of non-fatal warnings accumulated across a single scan
+/// session.  Prevents the warnings Vec from growing without bound when a
+/// large directory contains many unreadable or unparseable files.
+pub const MAX_WARNINGS: usize = 1_000;
+
+// =============================================================================
 // Profile limits
 // =============================================================================
 

@@ -44,28 +44,6 @@ pub fn severity_colour(severity: &Severity, dark_mode: bool) -> Color32 {
     }
 }
 
-/// Background highlight colour for a severity (subtle row tint).
-///
-/// Dark mode uses a stronger alpha so the tint is actually perceptible
-/// against the dark panel background. Light mode keeps a very subtle wash.
-pub fn severity_bg_colour(severity: &Severity, dark_mode: bool) -> Option<Color32> {
-    if dark_mode {
-        match severity {
-            Severity::Critical => Some(Color32::from_rgba_premultiplied(239, 68, 68, 55)),
-            Severity::Error => Some(Color32::from_rgba_premultiplied(220, 38, 38, 45)),
-            Severity::Warning => Some(Color32::from_rgba_premultiplied(217, 119, 6, 38)),
-            _ => None,
-        }
-    } else {
-        match severity {
-            Severity::Critical => Some(Color32::from_rgba_premultiplied(220, 38, 38, 25)),
-            Severity::Error => Some(Color32::from_rgba_premultiplied(185, 28, 28, 18)),
-            Severity::Warning => Some(Color32::from_rgba_premultiplied(217, 119, 6, 14)),
-            _ => None,
-        }
-    }
-}
-
 /// A palette of 24 visually distinct colours assigned to source files in the
 /// merged timeline. Chosen to differentiate files from one another and from
 /// the severity colour set above. Wraps around for scans with > 24 files.

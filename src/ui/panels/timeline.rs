@@ -110,16 +110,23 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     },
                 );
 
-                // Severity background tint — lowest priority layer, drawn first so
-                // that the correlated (teal) and bookmarked (gold) tints visually
-                // override it.  Only Critical / Error / Warning produce a tint;
-                // Info, Debug, and Unknown return None and paint nothing.
-                if let Some(sev_bg) = theme::severity_bg_colour(&entry.severity, state.dark_mode) {
-                    let tint_rect = egui::Rect::from_min_size(
-                        ui.cursor().min,
-                        egui::vec2(ui.available_width(), row_height),
+                // Severity accent underline — a 2 px strip at the bottom of the
+                // row in the severity colour.  Gives a clear visual cue without
+                // washing out the entire row background.
+                // Only Critical / Error / Warning get an underline.
+                let show_severity_accent = matches!(
+                    entry.severity,
+                    crate::core::model::Severity::Critical
+                        | crate::core::model::Severity::Error
+                        | crate::core::model::Severity::Warning
+                );
+                if show_severity_accent {
+                    let cursor = ui.cursor().min;
+                    let underline_rect = egui::Rect::from_min_size(
+                        egui::pos2(cursor.x, cursor.y + row_height - 2.0),
+                        egui::vec2(ui.available_width(), 2.0),
                     );
-                    ui.painter().rect_filled(tint_rect, 0.0, sev_bg);
+                    ui.painter().rect_filled(underline_rect, 0.0, sev_colour);
                 }
 
                 // Teal tint on correlated rows (drawn first so that the gold

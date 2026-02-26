@@ -379,16 +379,16 @@ impl AppState {
     /// Assign a palette colour to `path` if it does not already have one.
     /// Uses a round-robin index over the theme palette so each new file gets
     /// a distinct colour (wrapping after 12 files).
-    pub fn assign_file_colour(&mut self, path: &PathBuf) {
+    pub fn assign_file_colour(&mut self, path: &std::path::Path) {
         if !self.file_colours.contains_key(path) {
             let idx = self.file_colours.len();
             let colour = crate::ui::theme::file_colour(idx);
-            self.file_colours.insert(path.clone(), colour);
+            self.file_colours.insert(path.to_path_buf(), colour);
         }
     }
 
     /// Return the palette colour for `path`, or a neutral grey if not found.
-    pub fn colour_for_file(&self, path: &PathBuf) -> egui::Color32 {
+    pub fn colour_for_file(&self, path: &std::path::Path) -> egui::Color32 {
         self.file_colours
             .get(path)
             .copied()

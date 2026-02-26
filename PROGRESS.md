@@ -537,6 +537,25 @@ Expanded the Options dialog with three sections of user-configurable runtime set
 
 ---
 
+## Increment 28: DirWatcher Date Filter, Severity Underline, File List Perf, Select-All Fix
+**Status: COMPLETE**
+
+Four targeted improvements following an internal audit.
+
+### Changes
+
+- [x] `src/app/dir_watcher.rs` — `DirWatchConfig` gains `modified_since: Option<DateTime<Utc>>` (default `None`). `walk_for_new_files()` applies the same fail-open OS-mtime gate as `core::discovery::discover_files`: any newly detected file whose mtime predates `modified_since` is skipped; files whose mtime cannot be read are included. `gui.rs` passes `state.discovery_modified_since()` when starting the watcher so the live watcher always honours the date filter set in the discovery panel.
+- [x] `tests` — New `test_walk_respects_modified_since` regression test covering: future cutoff (file rejected), past cutoff (file accepted), `None` (file accepted). Existing tests updated for new 6-arg `walk_for_new_files` signature.
+- [x] `src/ui/panels/timeline.rs` — Replaced the full-row severity background tint (Critical/Error/Warning) with a **2 px underline** drawn at the bottom of the row in the row's `sev_colour`. Removes the visually heavy wash while preserving a clear per-row severity indicator.
+- [x] `src/ui/theme.rs` — Removed `severity_bg_colour()` function (only caller was `timeline.rs`). `severity_colour()` is now also used for the underline accent.
+- [x] `src/ui/panels/filters.rs` — Source-file checklist switched from `ScrollArea::show()` (lays out all N widgets every frame) to `ScrollArea::show_rows()` (virtual scroll). Per-frame rendering cost is now O(visible rows ≈ 9) regardless of how many files are loaded — a significant improvement when 1 000+ files are present.
+- [x] `src/ui/panels/filters.rs` — Fixed "Select All" button: it was calling `.remove()` on the whitelist `source_files` (treating it as a blacklist). Now builds a new whitelist of all visible files plus any previously-selected non-visible files, symmetric with the existing "None" handler. Compact all-pass form is used when the result covers all files.
+- [x] `ATLAS.md`, `README.md` — Updated status, Directory Watch domain concept, `dir_watcher.rs` / `timeline.rs` / `theme.rs` / `filters.rs` descriptions and the Directory Watch section in the README.
+
+**Test results: 62 unit tests + 17 E2E tests = 79 total, all passing. Zero clippy warnings.**
+
+---
+
 ### High Priority
 - [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*
 

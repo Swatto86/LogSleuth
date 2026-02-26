@@ -127,12 +127,20 @@ impl ScanManager {
         self.cancel_flag = None;
     }
 
-    /// Poll for progress messages without blocking. Returns all pending messages.
-    pub fn poll_progress(&self) -> Vec<ScanProgress> {
-        let mut messages = Vec::new();
+    /// Poll for progress messages without blocking.
+    ///
+    /// Drains at most `max` messages per call.  Any messages beyond the budget
+    /// remain in the channel and are delivered on the next call.  This prevents
+    /// a burst of queued messages from stalling the UI render loop for a whole
+    /// frame (Rule 11: per-frame drain budget).
+    pub fn poll_progress(&self, max: usize) -> Vec<ScanProgress> {
+        let mut messages = Vec::with_capacity(max.min(64));
         if let Some(ref rx) = self.progress_rx {
-            while let Ok(msg) = rx.try_recv() {
-                messages.push(msg);
+            while messages.len() < max {
+                match rx.try_recv() {
+                    Ok(msg) => messages.push(msg),
+                    Err(_) => break,
+                }
             }
         }
         messages

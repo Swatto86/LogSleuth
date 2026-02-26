@@ -9,6 +9,10 @@ use crate::app::state::AppState;
 use crate::app::tail::TailManager;
 use crate::core::discovery::DiscoveryConfig;
 use crate::ui;
+use crate::util::constants::{
+    MAX_DIR_WATCH_MESSAGES_PER_FRAME, MAX_SCAN_MESSAGES_PER_FRAME, MAX_TAIL_MESSAGES_PER_FRAME,
+    MAX_WARNINGS,
+};
 
 /// The LogSleuth application.
 pub struct LogSleuthApp {
@@ -41,8 +45,9 @@ impl eframe::App for LogSleuthApp {
             ctx.set_visuals(egui::Visuals::light());
         }
 
-        // Poll for scan progress
-        let messages = self.scan_manager.poll_progress();
+        // Poll for scan progress (capped at MAX_SCAN_MESSAGES_PER_FRAME so a
+        // burst of queued messages cannot stall the render loop — Rule 11).
+        let messages = self.scan_manager.poll_progress(MAX_SCAN_MESSAGES_PER_FRAME);
         let had_messages = !messages.is_empty();
         for msg in messages {
             match msg {
@@ -93,7 +98,22 @@ impl eframe::App for LogSleuthApp {
                         format!("Parsing files ({files_completed}/{total_files})...");
                 }
                 crate::core::model::ScanProgress::EntriesBatch { entries } => {
-                    self.state.entries.extend(entries);
+                    // Cap total entries at the configured limit on the UI thread as
+                    // well as on the background thread.  This matters for append
+                    // scans where the UI already holds entries from a previous scan
+                    // and the background thread cannot know the prior count.
+                    let cap = self.state.max_total_entries;
+                    let current = self.state.entries.len();
+                    let remaining = cap.saturating_sub(current);
+                    if remaining > 0 {
+                        if entries.len() <= remaining {
+                            self.state.entries.extend(entries);
+                        } else {
+                            self.state
+                                .entries
+                                .extend(entries.into_iter().take(remaining));
+                        }
+                    }
                 }
                 crate::core::model::ScanProgress::ParsingCompleted { summary } => {
                     let truncated = self.state.total_files_found > summary.total_files_discovered;
@@ -146,6 +166,11 @@ impl eframe::App for LogSleuthApp {
                             known,
                             DirWatchConfig {
                                 poll_interval_ms: self.state.dir_watch_poll_interval_ms,
+                                // Forward the date filter so the watcher rejects files
+                                // older than the cutoff used during the initial scan.
+                                // Without this, a file created or renamed into the
+                                // directory after the scan would bypass the filter.
+                                modified_since: self.state.discovery_modified_since(),
                                 ..DirWatchConfig::default()
                             },
                         );
@@ -161,7 +186,13 @@ impl eframe::App for LogSleuthApp {
                     }
                 }
                 crate::core::model::ScanProgress::Warning { message } => {
-                    self.state.warnings.push(message);
+                    // Bounded push: prevent the warnings Vec from growing beyond
+                    // MAX_WARNINGS (Rule 11 — resource bounds on growing collections).
+                    if self.state.warnings.len() < MAX_WARNINGS {
+                        self.state.warnings.push(message);
+                    } else {
+                        tracing::warn!("MAX_WARNINGS reached; suppressing further scan warnings");
+                    }
                 }
                 crate::core::model::ScanProgress::Failed { error } => {
                     self.state.status_message = format!("Scan failed: {error}");
@@ -178,8 +209,8 @@ impl eframe::App for LogSleuthApp {
             ctx.request_repaint();
         }
 
-        // Poll live tail progress.
-        let tail_messages = self.tail_manager.poll_progress();
+        // Poll live tail progress (capped at MAX_TAIL_MESSAGES_PER_FRAME — Rule 11).
+        let tail_messages = self.tail_manager.poll_progress(MAX_TAIL_MESSAGES_PER_FRAME);
         let had_tail = !tail_messages.is_empty();
         for msg in tail_messages {
             match msg {
@@ -187,13 +218,34 @@ impl eframe::App for LogSleuthApp {
                     tracing::info!(files = file_count, "Live tail active");
                 }
                 crate::core::model::TailProgress::NewEntries { entries } => {
-                    self.state.entries.extend(entries);
+                    // Cap total entries so live tail cannot grow state.entries past
+                    // the configured limit (Rule 11 — OOM guard for unbounded tail).
+                    let cap = self.state.max_total_entries;
+                    let current = self.state.entries.len();
+                    let remaining = cap.saturating_sub(current);
+                    if remaining == 0 {
+                        tracing::warn!(
+                            count = entries.len(),
+                            "Tail entry cap reached; new entries discarded"
+                        );
+                    } else if entries.len() <= remaining {
+                        self.state.entries.extend(entries);
+                    } else {
+                        self.state
+                            .entries
+                            .extend(entries.into_iter().take(remaining));
+                        tracing::warn!(
+                            "Tail entry cap reached; batch truncated to fit remaining capacity"
+                        );
+                    }
                     self.state.apply_filters();
                 }
                 crate::core::model::TailProgress::FileError { path, message } => {
                     let msg = format!("Tail warning — {}: {}", path.display(), message);
                     tracing::warn!("{}", msg);
-                    self.state.warnings.push(msg);
+                    if self.state.warnings.len() < MAX_WARNINGS {
+                        self.state.warnings.push(msg);
+                    }
                 }
                 crate::core::model::TailProgress::Stopped => {
                     self.state.tail_active = false;
@@ -209,11 +261,11 @@ impl eframe::App for LogSleuthApp {
             ));
         }
 
-        // Poll directory watcher for newly-created files.
-        // When new files are found they are appended to the current session
-        // (same path as "Add File(s)...") so filters, tail, and the timeline
-        // all update automatically.
-        let dir_watch_messages = self.dir_watcher.poll_progress();
+        // Poll directory watcher for newly-created files (capped at
+        // MAX_DIR_WATCH_MESSAGES_PER_FRAME — Rule 11).
+        let dir_watch_messages = self
+            .dir_watcher
+            .poll_progress(MAX_DIR_WATCH_MESSAGES_PER_FRAME);
         for msg in dir_watch_messages {
             match msg {
                 crate::core::model::DirWatchProgress::NewFiles(paths) => {

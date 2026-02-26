@@ -349,12 +349,32 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         if visible_count > 1 {
             ui.horizontal(|ui| {
                 if ui.small_button("Select all").clicked() {
-                    // Remove all visible paths from the exclusion set (include them)
-                    for (path, _) in &visible {
-                        state.filter_state.source_files.remove(path);
+                    // Build a new whitelist: all visible files PLUS any non-visible
+                    // files that were previously selected, so their state is preserved.
+                    // This is the symmetric counterpart of the "None" handler below.
+                    let prev_hide_all = state.filter_state.hide_all_sources;
+                    let visible_paths: std::collections::HashSet<&std::path::PathBuf> =
+                        visible.iter().map(|(p, _)| p).collect();
+                    // Seed with every visible file.
+                    let mut new_selected: std::collections::HashSet<std::path::PathBuf> =
+                        visible.iter().map(|(p, _)| (*p).clone()).collect();
+                    // Retain non-visible files that were previously in the whitelist.
+                    for (p, _) in &file_paths {
+                        if !visible_paths.contains(p) {
+                            let was_selected = !prev_hide_all
+                                && (state.filter_state.source_files.is_empty()
+                                    || state.filter_state.source_files.contains(p));
+                            if was_selected {
+                                new_selected.insert(p.clone());
+                            }
+                        }
                     }
+                    state.filter_state.source_files = new_selected;
                     state.filter_state.hide_all_sources = false;
-                    // If the set is now empty every file is included -- "all pass"
+                    // If every file is now selected, use the compact all-pass form.
+                    if state.filter_state.source_files.len() >= total {
+                        state.filter_state.source_files.clear();
+                    }
                     state.apply_filters();
                 }
                 if ui.small_button("None").clicked() {
@@ -393,95 +413,103 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             });
         }
 
-        // Fixed-height scrollable checklist (180 px regardless of item count)
-        egui::ScrollArea::vertical()
-            .id_salt("filter_file_list")
-            .max_height(180.0)
-            .show(ui, |ui| {
-                for (path, name) in &visible {
-                    // hide_all_sources overrides the whitelist: nothing is checked.
-                    // Otherwise: empty whitelist = all checked; else only those in set.
-                    let mut checked = !state.filter_state.hide_all_sources
-                        && (state.filter_state.source_files.is_empty()
-                            || state.filter_state.source_files.contains(path));
+        // Fixed-height scrollable checklist — virtual scroll via show_rows so
+        // only the rows currently in the 180 px viewport are laid out by egui.
+        // This keeps per-frame cost O(visible_rows ≈ 9) regardless of how many
+        // files are loaded, which is critical when 1000+ files are present.
+        if visible.is_empty() {
+            ui.label(egui::RichText::new("No files match.").small().weak());
+        } else {
+            let row_height = crate::ui::theme::ROW_HEIGHT;
+            egui::ScrollArea::vertical()
+                .id_salt("filter_file_list")
+                .max_height(180.0)
+                .show_rows(ui, row_height, visible.len(), |ui, row_range| {
+                    for display_idx in row_range {
+                        let (path, name) = &visible[display_idx];
+                        // hide_all_sources overrides the whitelist: nothing is checked.
+                        // Otherwise: empty whitelist = all checked; else only those in set.
+                        let mut checked = !state.filter_state.hide_all_sources
+                            && (state.filter_state.source_files.is_empty()
+                                || state.filter_state.source_files.contains(path));
 
-                    ui.horizontal(|ui| {
-                        // Coloured dot matching timeline file stripe.
-                        let dot_colour = state.colour_for_file(path);
-                        let (dot_rect, _) =
-                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                        ui.painter()
-                            .circle_filled(dot_rect.center(), 4.0, dot_colour);
+                        ui.horizontal(|ui| {
+                            // Coloured dot matching timeline file stripe.
+                            let dot_colour = state.colour_for_file(path);
+                            let (dot_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter()
+                                .circle_filled(dot_rect.center(), 4.0, dot_colour);
 
-                        let cb_resp = ui
-                            .checkbox(&mut checked, egui::RichText::new(name.as_str()).small())
-                            .on_hover_text(path.display().to_string());
-                        if cb_resp.changed() {
-                            if !checked {
-                                // Unchecking: seed the whitelist with all currently-selected
-                                // files (if it is empty/all-pass), then remove this one.
-                                if state.filter_state.source_files.is_empty()
-                                    && !state.filter_state.hide_all_sources
-                                {
-                                    for (other_path, _) in &file_paths {
-                                        state.filter_state.source_files.insert(other_path.clone());
+                            let cb_resp = ui
+                                .checkbox(&mut checked, egui::RichText::new(name.as_str()).small())
+                                .on_hover_text(path.display().to_string());
+                            if cb_resp.changed() {
+                                if !checked {
+                                    // Unchecking: seed the whitelist with all currently-selected
+                                    // files (if it is empty/all-pass), then remove this one.
+                                    if state.filter_state.source_files.is_empty()
+                                        && !state.filter_state.hide_all_sources
+                                    {
+                                        for (other_path, _) in &file_paths {
+                                            state
+                                                .filter_state
+                                                .source_files
+                                                .insert(other_path.clone());
+                                        }
+                                    }
+                                    state.filter_state.source_files.remove(path);
+                                    // If removing this file emptied the whitelist, engage
+                                    // hide_all_sources so the empty set is not misread as "all pass".
+                                    if state.filter_state.source_files.is_empty() {
+                                        state.filter_state.hide_all_sources = true;
+                                    }
+                                } else {
+                                    // Re-checking: add to whitelist, clear hide_all_sources.
+                                    state.filter_state.hide_all_sources = false;
+                                    state.filter_state.source_files.insert((*path).clone());
+                                    if state.filter_state.source_files.len() == total {
+                                        // All files now selected — use the compact all-pass form.
+                                        state.filter_state.source_files.clear();
                                     }
                                 }
-                                state.filter_state.source_files.remove(path);
-                                // If removing this file emptied the whitelist, engage
-                                // hide_all_sources so the empty set is not misread as "all pass".
-                                if state.filter_state.source_files.is_empty() {
-                                    state.filter_state.hide_all_sources = true;
-                                }
-                            } else {
-                                // Re-checking: add to whitelist, clear hide_all_sources.
-                                state.filter_state.hide_all_sources = false;
-                                state.filter_state.source_files.insert((*path).clone());
-                                if state.filter_state.source_files.len() == total {
-                                    // All files now selected — use the compact all-pass form.
-                                    state.filter_state.source_files.clear();
-                                }
+                                state.apply_filters();
                             }
-                            state.apply_filters();
-                        }
 
-                        // Solo button.
-                        let already_solo = !state.filter_state.hide_all_sources
-                            && state.filter_state.source_files.len() == 1
-                            && state.filter_state.source_files.contains(path);
-                        let solo_colour = if already_solo {
-                            egui::Color32::from_rgb(96, 165, 250)
-                        } else {
-                            egui::Color32::from_rgb(107, 114, 128)
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("solo").small().color(solo_colour),
+                            // Solo button.
+                            let already_solo = !state.filter_state.hide_all_sources
+                                && state.filter_state.source_files.len() == 1
+                                && state.filter_state.source_files.contains(path);
+                            let solo_colour = if already_solo {
+                                egui::Color32::from_rgb(96, 165, 250)
+                            } else {
+                                egui::Color32::from_rgb(107, 114, 128)
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("solo").small().color(solo_colour),
+                                    )
+                                    .small()
+                                    .frame(false),
                                 )
-                                .small()
-                                .frame(false),
-                            )
-                            .on_hover_text("Show only this file")
-                            .clicked()
-                        {
-                            if already_solo {
-                                state.filter_state.source_files.clear();
-                                state.filter_state.hide_all_sources = false;
-                            } else {
-                                state.filter_state.source_files.clear();
-                                state.filter_state.hide_all_sources = false;
-                                state.filter_state.source_files.insert((*path).clone());
+                                .on_hover_text("Show only this file")
+                                .clicked()
+                            {
+                                if already_solo {
+                                    state.filter_state.source_files.clear();
+                                    state.filter_state.hide_all_sources = false;
+                                } else {
+                                    state.filter_state.source_files.clear();
+                                    state.filter_state.hide_all_sources = false;
+                                    state.filter_state.source_files.insert((*path).clone());
+                                }
+                                state.apply_filters();
                             }
-                            state.apply_filters();
-                        }
-                    });
-                }
-
-                if visible.is_empty() {
-                    ui.label(egui::RichText::new("No files match.").small().weak());
-                }
-            });
+                        });
+                    }
+                });
+        }
     }
 
     // -------------------------------------------------------------------------

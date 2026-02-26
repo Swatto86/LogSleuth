@@ -80,6 +80,7 @@ When you open a directory, LogSleuth automatically starts a **directory watcher*
 - A blue **● WATCH** badge is shown in the status bar while the watcher is active.
 - Any new file that matches the active include patterns and recursion depth is detected within the configured poll interval (default: 2 seconds) and appended to the current session — filters, Live Tail, and the timeline all update instantly.
 - The watcher uses the same include/exclude patterns and recursion depth as the original scan so only relevant log files are picked up.
+- **The watcher honours the file-modified date filter** set in the discovery panel. If a date is specified, only files with an OS modification time on or after that date are added; older files that appear in the directory (e.g. copied from an archive) are silently ignored.
 - The watcher only runs for **directory-based sessions** — it is not started when you open individual files via **File > Open Log(s)…**.
 - The watcher stops automatically when you start a new scan or close the session.
 
