@@ -556,6 +556,92 @@ Four targeted improvements following an internal audit.
 
 ---
 
+## Increment 29: Sidebar Restructure — Tab-Based, Resizable, Unified File List
+**Status: COMPLETE**
+
+Replaced the cramped fixed-height 45/55 split sidebar with a tab-based, resizable layout that scales cleanly from small to large file sets.
+
+### Layout changes
+
+- [x] `src/ui/theme.rs` — `SIDEBAR_WIDTH` raised to **460 px** (default open width); sidebar is now resizable from 300 px to 800 px via `egui::SidePanel::left.default_width(460).min_width(300).max_width(800)`.
+- [x] `src/gui.rs` — Sidebar converted to a **tab bar** (`Files` | `Filters`). Each tab has a single `ScrollArea` filling the tab body — no more dual-scroll 45/55 height split. The `Filters` tab label displays a **●** bullet dot when any filter is active.
+- [x] `src/ui/panels/discovery.rs` — Files tab content restructured:
+  - Scan controls (path label, date-filter row, quick-fill buttons, Open Directory / Open Log(s) / Clear buttons) moved inside a **`CollapsingHeader`** (`default_open = true`) so the file list dominates once a scan has run.
+  - Duplicate source-file listing **eliminated** — the Files tab now shows a **single unified file list** with inline dot, checkbox, filename, solo button and profile label. Hovering a row shows full path + formatted size.
+  - `All` / `Live Tail` / search-box / `Select All` / `None` controls placed above the virtual-scroll list.
+  - Source-file filter state driven directly from this list (whitelist semantics unchanged).
+- [x] `src/ui/panels/filters.rs` — **Source-file filter section removed** (now lives in discovery.rs Files tab). Filters tab now contains only: quick-filter preset buttons, severity checkboxes, text/regex inputs, relative time section, correlation section, and entry-count footer.
+- [x] `src/app/state.rs` — Added `sidebar_tab: usize` field (0 = Files, 1 = Filters). Pure UI state; **not persisted in session.json** and **not cleared in `clear()`** so the user's tab position survives scans.
+
+### Date-input parsing
+
+- [x] `src/app/state.rs` — `discovery_modified_since() -> Option<DateTime<Utc>>` refactored to parse four input forms: *YYYY-MM-DD HH:MM:SS*, *YYYY-MM-DD HH:MM*, *YYYY-MM-DD* (interpreted as 00:00:00 UTC), and empty string (returns `None`). Returns `None` on any parse failure so bad input never silently corrupts the filter.
+- [x] 5 new unit tests in `src/app/state.rs`:
+  - `test_discovery_modified_since_date_only_midnight_utc`
+  - `test_discovery_modified_since_date_and_hour_minute`
+  - `test_discovery_modified_since_full_datetime_to_second`
+  - `test_discovery_modified_since_empty_returns_none`
+  - `test_discovery_modified_since_invalid_returns_none`
+
+### New E2E tests (10)
+
+Added a suite of `e2e_dlogs_*` tests exercising multi-file discovery, auto-detection, and timeline assembly:
+
+- `e2e_dlogs_discovers_many_files`
+- `e2e_dlogs_full_pipeline_smoke`
+- `e2e_dlogs_fresh_state_has_no_source_filter`
+- `e2e_dlogs_veeam_vbr_auto_detects`
+- `e2e_dlogs_vbr_severity_is_not_uniform_info`
+- `e2e_dlogs_vbr_multiple_files_each_contribute_entries`
+- `e2e_dlogs_vbo365_auto_detects`
+- `e2e_dlogs_syslog_auto_detects`
+- `e2e_dlogs_iis_w3c_auto_detects`
+- `e2e_dlogs_sql_agent_auto_detects`
+
+Also `e2e_vbr_service_log_filenames_detect_via_filename_match` — filename-bonus auto-detection regression.
+
+**Test results: 68 unit tests + 27 E2E tests = 95 total, all passing. Zero clippy warnings.**
+
+---
+
+## Increment 30: 5 Bug Fixes & Regression Tests
+**Status: COMPLETE**
+
+Five defects identified and fixed following the sidebar restructure, each with a regression test where testable.
+
+### Bug fixes
+
+1. **`File → Open Directory` ignored `discovery_date_input` date filter.** The menu-bar handler called `state.clear()` (which blanked `discovery_date_input`) and then read the date field — always reading an empty string. Fixed by reading `discovery_date_input` **before** calling `clear()`, then assigning it back after.
+   - Regression test: `e2e_discovery_date_filter_is_honoured_by_menu_open_directory` — opens a temp directory via the same code path and asserts only files modified on or after the supplied cutoff are discovered.
+
+2. **Append scans produced duplicate entry IDs.** `ScanManager::start_scan_files` called `run_parse_pipeline` with `entry_id_start = 0` — resetting the ID counter to zero on every append. Fixed by threading `entry_id_start` through both `start_scan_files` and `run_files_scan`, and having gui.rs pass `state.next_entry_id()`.
+   - Regression test: `e2e_append_scan_entry_ids_are_unique_across_parses` — runs two sequential parse pipelines with the correct `entry_id_start` value for the second call and asserts no ID is present in both result sets.
+
+3. **Ghost correlation highlights after filter changes.** `state.apply_filters()` recomputed `filtered_indices` but did not refresh `correlated_ids`, so entries removed from the filter continued to show a teal tint on the next render frame. Fixed by calling `self.update_correlation()` at the end of `apply_filters()`.
+   - Regression test: `test_apply_filters_clears_correlation_when_selected_entry_is_hidden` (unit) — selects an entry, activates correlation, applies a severity filter that hides the anchor entry, and asserts `correlated_ids` is empty.
+
+4. **`discovery_date_input` not persisted in session.** The field was set by the user in the discovery panel but never written to or read from `SessionData`, so filtering by modification date was silently lost on restart. Fixed by adding `discovery_date_input: String` (serde default `""`) to `SessionData`, serialising it in `save_session()`, and restoring it in `restore_from_session()`.
+   - Covered by the existing `e2e_session_save_restore_round_trip` test (updated to include the field).
+
+5. **Menu bar `File` items remained enabled during an active scan.** `File → Open Directory`, `File → Open Log(s)…`, and `File → Add File(s)…` were rendered unconditionally. Starting a new scan while one was already running could corrupt `state.entries`. Fixed with `ui.add_enabled(!scanning, ...)` wrappers; hover text explains why the items are disabled.
+   - UI-only change; no automated test.
+
+**Test results: 69 unit tests + 29 E2E tests = 98 total, all passing. Zero clippy warnings.**
+
+---
+
+## Increment 31: Font Pre-Load Fix (DevWorkflow Rule 16 Compliance)
+**Status: COMPLETE**
+
+Font file I/O was occurring inside the `eframe::run_native` creator closure — **after** the OS window was already open and displaying a white background — violating DevWorkflow Rule 16 ("All expensive initialisation MUST complete before calling `eframe::run_native()`").
+
+- [x] `src/main.rs` — Renamed `configure_fonts(ctx: &egui::Context)` → `build_font_definitions() -> egui::FontDefinitions`. All `std::fs::read` calls for Consolas, Segoe UI, Segoe UI Symbol, and Segoe UI Emoji now execute **before** `eframe::run_native`. The font byte data is loaded into a `FontDefinitions` struct and moved into the closure via capture.
+- [x] `src/main.rs` — The creator closure is now trivial: `cc.egui_ctx.set_fonts(font_defs)` followed by `Ok(Box::new(gui::LogSleuthApp::new(state)))`. No I/O, no computation — eliminates the white-flash startup artifact on Windows.
+
+**Test results: 69 unit tests + 29 E2E tests = 98 total, all passing. Zero clippy warnings.**
+
+---
+
 ### High Priority
 - [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*
 

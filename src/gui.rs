@@ -274,10 +274,15 @@ impl eframe::App for LogSleuthApp {
                     self.state.status_message =
                         format!("Directory watcher: {count} new file(s) detected, adding...");
                     self.state.scan_in_progress = true;
+                    // Pass next_entry_id() so appended entries never reuse IDs
+                    // already assigned during the initial scan (bookmarks /
+                    // correlation use entry IDs as stable keys).
+                    let id_start = self.state.next_entry_id();
                     self.scan_manager.start_scan_files(
                         paths,
                         self.state.profiles.clone(),
                         self.state.max_total_entries,
+                        id_start,
                     );
                 }
             }
@@ -351,20 +356,27 @@ impl eframe::App for LogSleuthApp {
             self.state.scan_path = None;
             self.state.scan_in_progress = true;
             self.state.status_message = format!("Opening {} file(s)...", files.len());
+            // State was just cleared so next_entry_id() is 0; pass it explicitly
+            // for clarity and future-proofing.
             self.scan_manager.start_scan_files(
                 files,
                 self.state.profiles.clone(),
                 self.state.max_total_entries,
+                0,
             );
         }
         // pending_single_files: user chose "Add File(s)" — append to session.
         if let Some(files) = self.state.pending_single_files.take() {
             self.state.scan_in_progress = true;
             self.state.status_message = format!("Adding {} file(s)...", files.len());
+            // Append scan: entry IDs must continue after the highest existing ID
+            // so bookmarks and correlation are not confused by duplicate IDs.
+            let id_start = self.state.next_entry_id();
             self.scan_manager.start_scan_files(
                 files,
                 self.state.profiles.clone(),
                 self.state.max_total_entries,
+                id_start,
             );
         }
         // request_cancel: a panel requested the current scan be cancelled.
@@ -461,10 +473,25 @@ impl eframe::App for LogSleuthApp {
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open Directory\u{2026}").clicked() {
+                    let scanning = self.state.scan_in_progress;
+                    let dir_btn =
+                        ui.add_enabled(!scanning, egui::Button::new("Open Directory\u{2026}"));
+                    if dir_btn
+                        .on_hover_text(if scanning {
+                            "Cannot open a directory while a scan is in progress"
+                        } else {
+                            "Scan a directory for log files"
+                        })
+                        .clicked()
+                    {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
                             self.dir_watcher.stop_watch();
                             self.state.dir_watcher_active = false;
+                            // Capture the date filter BEFORE clear() so the user's
+                            // setting is not lost.  clear() intentionally preserves
+                            // discovery_date_input, but modified_since must be read
+                            // before we wipe any other transient state.
+                            let modified_since = self.state.discovery_modified_since();
                             self.state.clear();
                             self.state.scan_path = Some(path.clone());
                             self.scan_manager.start_scan(
@@ -474,13 +501,23 @@ impl eframe::App for LogSleuthApp {
                                     max_files: self.state.max_files_limit,
                                     max_depth: self.state.max_scan_depth,
                                     max_total_entries: self.state.max_total_entries,
+                                    modified_since,
                                     ..DiscoveryConfig::default()
                                 },
                             );
                         }
                         ui.close_menu();
                     }
-                    if ui.button("Open Log(s)\u{2026}").clicked() {
+                    let open_logs_btn =
+                        ui.add_enabled(!scanning, egui::Button::new("Open Log(s)\u{2026}"));
+                    if open_logs_btn
+                        .on_hover_text(if scanning {
+                            "Cannot open files while a scan is in progress"
+                        } else {
+                            "Select individual log files to open as a new session"
+                        })
+                        .clicked()
+                    {
                         if let Some(files) = rfd::FileDialog::new()
                             .add_filter("Log files", &["log", "txt", "log.1", "log.2", "log.3"])
                             .pick_files()
@@ -489,7 +526,16 @@ impl eframe::App for LogSleuthApp {
                         }
                         ui.close_menu();
                     }
-                    if ui.button("Add File(s)\u{2026}").clicked() {
+                    let add_files_btn =
+                        ui.add_enabled(!scanning, egui::Button::new("Add File(s)\u{2026}"));
+                    if add_files_btn
+                        .on_hover_text(if scanning {
+                            "Cannot add files while a scan is in progress"
+                        } else {
+                            "Append individual log files to the current session"
+                        })
+                        .clicked()
+                    {
                         if let Some(files) = rfd::FileDialog::new()
                             .add_filter("Log files", &["log", "txt", "log.1", "log.2", "log.3"])
                             .pick_files()
@@ -677,6 +723,11 @@ impl eframe::App for LogSleuthApp {
             });
         });
 
+        // Local flag for WATCH badge toggle; consumed after the status bar closure
+        // so that `&mut self` is available to start/stop the watcher.
+        // Some(true) = resume, Some(false) = pause, None = no action.
+        let mut watch_toggle: Option<bool> = None;
+
         // Status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -692,17 +743,47 @@ impl eframe::App for LogSleuthApp {
                     );
                     ui.separator();
                 }
-                // WATCH badge — shown while the directory watcher is active.
+                // WATCH badge — shown while the directory watcher is active, or
+                // dimmed when paused but a directory session is loaded.
+                // Clicking toggles the watcher on/off.
+                let has_dir_session = self.state.scan_path.is_some()
+                    && !self.state.discovered_files.is_empty();
                 if self.state.dir_watcher_active {
-                    ui.label(
-                        egui::RichText::new(" \u{1f441} WATCH ")
-                            .strong()
-                            .color(egui::Color32::from_rgb(96, 165, 250)) // Blue 400
-                            .background_color(egui::Color32::from_rgba_premultiplied(
-                                96, 165, 250, 28,
-                            )),
-                    )
-                    .on_hover_text("Watching directory for new log files");
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(" \u{1f441} WATCH ")
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(96, 165, 250)) // Blue 400
+                                    .background_color(egui::Color32::from_rgba_premultiplied(
+                                        96, 165, 250, 28,
+                                    )),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Directory watch active — click to pause")
+                        .clicked()
+                    {
+                        watch_toggle = Some(false);
+                    }
+                    ui.separator();
+                } else if has_dir_session {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(" \u{1f441} WATCH ")
+                                    .strong()
+                                    .color(egui::Color32::from_rgba_premultiplied(
+                                        96, 165, 250, 110,
+                                    )),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Directory watch paused — click to resume")
+                        .clicked()
+                    {
+                        watch_toggle = Some(true);
+                    }
                     ui.separator();
                 }
                 ui.label(&self.state.status_message);
@@ -739,6 +820,38 @@ impl eframe::App for LogSleuthApp {
             });
         });
 
+        // Handle WATCH badge toggle action (deferred so that &mut self is available
+        // without conflicting with the status-bar panel closure borrow).
+        if let Some(start) = watch_toggle {
+            if start {
+                if let Some(dir) = self.state.scan_path.clone() {
+                    let known = self
+                        .state
+                        .discovered_files
+                        .iter()
+                        .map(|f| f.path.clone())
+                        .collect();
+                    self.dir_watcher.start_watch(
+                        dir,
+                        known,
+                        DirWatchConfig {
+                            poll_interval_ms: self.state.dir_watch_poll_interval_ms,
+                            modified_since: self.state.discovery_modified_since(),
+                            ..DirWatchConfig::default()
+                        },
+                    );
+                    self.state.dir_watcher_active = true;
+                    self.state.status_message = "Directory watch resumed.".to_string();
+                    tracing::info!("Directory watch resumed by user");
+                }
+            } else {
+                self.dir_watcher.stop_watch();
+                self.state.dir_watcher_active = false;
+                self.state.status_message = "Directory watch paused.".to_string();
+                tracing::info!("Directory watch paused by user");
+            }
+        }
+
         // Detail pane (bottom)
         egui::TopBottomPanel::bottom("detail_pane")
             .resizable(true)
@@ -747,31 +860,64 @@ impl eframe::App for LogSleuthApp {
                 ui::panels::detail::render(ui, &self.state);
             });
 
-        // Left sidebar — two independent scroll areas so the file list and
-        // filter controls each get proportional room and scroll independently.
-        // Fixed-width sidebar: non-resizable so the filter button rows always
-        // have enough space to render on one line without wrapping.
+        // Left sidebar — tab-based, resizable.
+        // 'Files' tab: collapsible scan controls + unified file list with
+        //              inline source-file filter checkboxes and solo buttons.
+        // 'Filters' tab: severity, text, regex, time, correlation controls.
+        // Resizable so users can widen it when file names are long.
         egui::SidePanel::left("sidebar")
-            .exact_width(ui::theme::SIDEBAR_WIDTH)
-            .resizable(false)
+            .default_width(ui::theme::SIDEBAR_WIDTH)
+            .min_width(300.0)
+            .max_width(800.0)
+            .resizable(true)
             .show(ctx, |ui| {
-                let available = ui.available_height();
-                // Discovery section: top ~45 % of the sidebar.
-                egui::ScrollArea::vertical()
-                    .id_salt("sidebar_discovery")
-                    .max_height(available * 0.45)
-                    .show(ui, |ui| {
-                        ui::panels::discovery::render(ui, &mut self.state);
-                    });
-
+                // Tab strip — Files tab shows the file count as a badge.
+                ui.horizontal(|ui| {
+                    let files_label = if self.state.discovered_files.is_empty() {
+                        "Files".to_string()
+                    } else {
+                        format!("Files ({})", self.state.discovered_files.len())
+                    };
+                    if ui
+                        .selectable_label(self.state.sidebar_tab == 0, files_label)
+                        .clicked()
+                    {
+                        self.state.sidebar_tab = 0;
+                    }
+                    // Show filter-active indicator on Filters tab label.
+                    let filter_active = !self.state.filter_state.source_files.is_empty()
+                        || self.state.filter_state.hide_all_sources
+                        || self.state.filter_state.relative_time_secs.is_some()
+                        || !self.state.filter_state.text_search.is_empty()
+                        || !self.state.filter_state.regex_pattern.is_empty()
+                        || self.state.filter_state.bookmarks_only
+                        || self.state.filter_state.severity_levels.len()
+                            != crate::core::model::Severity::all().len();
+                    let filters_label = if filter_active {
+                        "\u{25cf} Filters".to_string() // bullet dot = filter active
+                    } else {
+                        "Filters".to_string()
+                    };
+                    if ui
+                        .selectable_label(self.state.sidebar_tab == 1, filters_label)
+                        .clicked()
+                    {
+                        self.state.sidebar_tab = 1;
+                    }
+                });
                 ui.separator();
 
-                // Filters section: remaining space.
+                // Each tab gets the full remaining height in a single scroll area —
+                // no cramped 45/55 split, no dual scrollbars.
                 egui::ScrollArea::vertical()
-                    .id_salt("sidebar_filters")
+                    .id_salt("sidebar_main")
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
-                        ui::panels::filters::render(ui, &mut self.state);
+                        if self.state.sidebar_tab == 0 {
+                            ui::panels::discovery::render(ui, &mut self.state);
+                        } else {
+                            ui::panels::filters::render(ui, &mut self.state);
+                        }
                     });
             });
 

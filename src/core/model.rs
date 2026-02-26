@@ -250,7 +250,10 @@ impl FormatProfile {
             }
         }
 
-        Severity::Info // Default to Info for unclassified messages
+        // No keyword matched — return Unknown so entries without a
+        // recognisable severity token show as '???' rather than
+        // incorrectly inflating the Info count.
+        Severity::Unknown
     }
 
     /// Apply regex-based severity override patterns against `text`.

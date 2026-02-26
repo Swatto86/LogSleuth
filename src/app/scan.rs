@@ -95,11 +95,16 @@ impl ScanManager {
     /// entries are streamed via `EntriesBatch` and the file list is sent via
     /// `AdditionalFilesDiscovered` so the UI extends rather than replaces its
     /// current file list.
+    ///
+    /// `entry_id_start` must be set to `state.next_entry_id()` for append runs
+    /// so new entry IDs do not collide with IDs already assigned during the
+    /// initial scan.  Pass `0` for replace runs (fresh session after `clear()`).
     pub fn start_scan_files(
         &mut self,
         files: Vec<PathBuf>,
         profiles: Vec<FormatProfile>,
         max_total_entries: usize,
+        entry_id_start: u64,
     ) {
         self.cancel_scan();
 
@@ -112,7 +117,15 @@ impl ScanManager {
         let parse_config = ParseConfig::default();
 
         std::thread::spawn(move || {
-            run_files_scan(files, profiles, parse_config, tx, cancel, max_total_entries);
+            run_files_scan(
+                files,
+                profiles,
+                parse_config,
+                tx,
+                cancel,
+                max_total_entries,
+                entry_id_start,
+            );
         });
 
         tracing::info!("File append scan started");
@@ -223,6 +236,7 @@ fn run_scan(
         false,
         total_found,
         config.max_total_entries,
+        0, // fresh scan — always start IDs from zero
     );
 }
 
@@ -236,6 +250,10 @@ fn run_scan(
 /// `append`: when `true` the discovered-file list is sent as
 /// `AdditionalFilesDiscovered` (extends the UI list); when `false` it is sent
 /// as `FilesDiscovered` (replaces the UI list).
+///
+/// `entry_id_start`: the first entry ID to assign.  Must be `0` for fresh
+/// scans and `state.next_entry_id()` for append scans so IDs stay unique
+/// across the entire session (bookmarks and correlation use these IDs).
 #[allow(clippy::too_many_arguments)]
 fn run_parse_pipeline(
     mut discovered_files: Vec<crate::core::model::DiscoveredFile>,
@@ -249,6 +267,8 @@ fn run_parse_pipeline(
     total_found: usize,
     // Maximum total entries to ingest across all files in this pipeline run.
     max_total_entries: usize,
+    // Starting entry ID — 0 for fresh scans, state.next_entry_id() for appends.
+    entry_id_start: u64,
 ) {
     macro_rules! send {
         ($msg:expr) => {
@@ -326,7 +346,7 @@ fn run_parse_pipeline(
     let mut total_entries: usize = 0;
     let mut total_errors: usize = 0;
     let mut files_with_entries: usize = 0;
-    let mut entry_id: u64 = 0;
+    let mut entry_id: u64 = entry_id_start;
     // Collect all entries here; sort chronologically on this background thread
     // before streaming to the UI so the UI thread never blocks on a large sort.
     let mut all_entries: Vec<LogEntry> = Vec::new();
@@ -346,7 +366,7 @@ fn run_parse_pipeline(
 
         let files_completed = idx + 1;
 
-        let profile_id = match &file.profile_id {
+        let mut profile_id = match &file.profile_id {
             Some(id) => id.clone(),
             None => {
                 tracing::debug!(file = %file.path.display(), "No profile assigned, skipping");
@@ -387,6 +407,41 @@ fn run_parse_pipeline(
             &parse_config,
             entry_id,
         );
+
+        // Fallback: if the assigned profile produced zero entries but the file
+        // has content, the line_pattern did not match any line.  This happens
+        // when:
+        //   - A structured profile is assigned via filename-glob bonus alone
+        //     (content_match never ran against the actual lines).
+        //   - The file uses a format variant whose first line does not match
+        //     (e.g. UTF-8 BOM prefix, separator/header lines), and
+        //     multiline_mode = "continuation" silently drops everything because
+        //     `entries` is still empty when non-matching continuation lines
+        //     try to append to `entries.last_mut()`.
+        //
+        // Re-parsing with plain-text ensures every non-empty file contributes
+        // at least its raw line content to the timeline instead of disappearing.
+        // The profile_id check prevents an infinite loop if plain-text itself
+        // somehow produced 0 entries (e.g. a truly empty file).
+        if parse_result.entries.is_empty() && !content.trim().is_empty() {
+            if let Some(plain_profile) = profiles.iter().find(|p| p.id == "plain-text") {
+                if plain_profile.id != profile_id {
+                    tracing::debug!(
+                        file = %file.path.display(),
+                        assigned_profile = %profile_id,
+                        "Assigned profile yielded 0 entries; falling back to plain-text"
+                    );
+                    parse_result = parser::parse_content(
+                        &content,
+                        &file.path,
+                        plain_profile,
+                        &parse_config,
+                        entry_id,
+                    );
+                    profile_id = plain_profile.id.clone();
+                }
+            }
+        }
 
         // Stamp the source file's OS last-modified time on every entry.
         // The time-range filter uses file_modified (not the parsed log timestamp)
@@ -529,6 +584,7 @@ fn run_files_scan(
     tx: mpsc::Sender<ScanProgress>,
     cancel: Arc<AtomicBool>,
     max_total_entries: usize,
+    entry_id_start: u64,
 ) {
     use crate::util::constants::DEFAULT_LARGE_FILE_THRESHOLD;
     use chrono::DateTime;
@@ -580,6 +636,7 @@ fn run_files_scan(
         true,
         total_found,
         max_total_entries,
+        entry_id_start,
     );
 }
 

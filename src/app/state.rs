@@ -208,14 +208,22 @@ pub struct AppState {
     /// "no directory selected" state. Consumed and cleared by `gui.rs`.
     pub request_new_session: bool,
 
-    /// Date filter typed by the user in the "Open Directory" date-filter box.
+    /// Datetime filter typed by the user in the "Open Directory" date-filter box.
     ///
-    /// Expected format: `YYYY-MM-DD`.  An empty string means no date filter.
-    /// Parsed into a UTC midnight boundary by `discovery_modified_since()` and
-    /// passed as `DiscoveryConfig::modified_since` when a scan is started.
+    /// Accepted formats (most-specific first):
+    ///   `YYYY-MM-DD HH:MM:SS` — second precision
+    ///   `YYYY-MM-DD HH:MM`    — minute precision
+    ///   `YYYY-MM-DD`          — day precision (treated as 00:00:00 UTC)
+    ///
+    /// An empty string means no filter.  Parsed by `discovery_modified_since()`
+    /// and passed as `DiscoveryConfig::modified_since` when a scan is started.
     ///
     /// Persists across scans so the user does not have to re-enter it each time.
     pub discovery_date_input: String,
+
+    /// Which tab is active in the left sidebar.  0 = Files, 1 = Filters.
+    /// Pure UI state — not saved to the session file.
+    pub sidebar_tab: usize,
 }
 
 impl AppState {
@@ -265,6 +273,7 @@ impl AppState {
             pending_replace_files: None,
             request_new_session: false,
             discovery_date_input: String::new(),
+            sidebar_tab: 0,
         }
     }
 
@@ -310,6 +319,12 @@ impl AppState {
                 .iter()
                 .position(|&entry_idx| self.entries.get(entry_idx).is_some_and(|e| e.id == id))
         });
+
+        // Recompute the correlation overlay whenever the filter changes.
+        // Without this, if the selected entry is hidden by the new filter
+        // (selected_index → None), correlated_ids would still hold the old
+        // window, showing ghost teal highlights with no active selection.
+        self.update_correlation();
     }
 
     /// Recompute the correlation overlay from the currently selected entry.
@@ -616,18 +631,35 @@ impl AppState {
         self.status_message = "Ready. Open a directory to begin scanning.".to_string();
     }
 
-    /// Parse `discovery_date_input` into a UTC `DateTime` representing the
-    /// start of that calendar day (00:00:00 UTC).
+    /// Parse `discovery_date_input` into a UTC `DateTime`.
     ///
-    /// Returns `None` when the input is empty or cannot be parsed as YYYY-MM-DD.
+    /// Accepts three levels of precision (most-specific first):
+    ///   `YYYY-MM-DD HH:MM:SS`  — exact second boundary
+    ///   `YYYY-MM-DD HH:MM`     — minute boundary (seconds = 00)
+    ///   `YYYY-MM-DD`           — day boundary   (time  = 00:00:00 UTC)
+    ///
+    /// Returns `None` when the input is empty or does not match any format.
     /// The caller passes this to `DiscoveryConfig::modified_since` when starting
-    /// a scan so only files modified on or after that UTC midnight are ingested.
+    /// a scan so only files modified on or after that instant are ingested.
     pub fn discovery_modified_since(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        use chrono::NaiveDate;
+        use chrono::NaiveDateTime;
+
         let trimmed = self.discovery_date_input.trim();
         if trimmed.is_empty() {
             return None;
         }
-        chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+
+        // 1. Full datetime to the second: "YYYY-MM-DD HH:MM:SS"
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
+            return Some(ndt.and_utc());
+        }
+        // 2. Datetime to the minute: "YYYY-MM-DD HH:MM"
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M") {
+            return Some(ndt.and_utc());
+        }
+        // 3. Date only: "YYYY-MM-DD" — treat as start of day (00:00:00 UTC).
+        NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
             .ok()
             .and_then(|d| d.and_hms_opt(0, 0, 0))
             .map(|ndt| ndt.and_utc())
@@ -673,6 +705,7 @@ impl AppState {
             file_colours,
             bookmarks,
             correlation_window_secs: self.correlation_window_secs,
+            discovery_date_input: self.discovery_date_input.clone(),
         };
         if let Err(e) = crate::app::session::save(&data, session_path) {
             tracing::warn!(error = %e, "Failed to save session");
@@ -688,8 +721,14 @@ impl AppState {
         self.scan_path = data.scan_path;
         let f = &data.filter;
         self.filter_state.severity_levels = f.severity_levels.iter().copied().collect();
-        self.filter_state.source_files = f.source_files.iter().cloned().collect();
-        self.filter_state.hide_all_sources = f.hide_all_sources;
+        // NOTE: source_files and hide_all_sources are intentionally NOT
+        // restored from the session.  File-path whitelists are tightly coupled
+        // to a particular scan directory and become silently stale when a new
+        // scan runs over a different (or updated) directory.  Restoring them
+        // caused confusing states where only one file was visible after restart
+        // even though 400+ files had been discovered.
+        // The values ARE still serialised by PersistedFilter so old sessions
+        // round-trip without schema breakage, but we simply discard them here.
         self.filter_state.text_search = f.text_search.clone();
         self.filter_state.fuzzy = f.fuzzy;
         self.filter_state.relative_time_secs = f.relative_time_secs;
@@ -712,6 +751,9 @@ impl AppState {
         self.bookmarks = data.bookmarks.into_iter().collect();
         self.correlation_window_secs = data.correlation_window_secs;
         self.correlation_window_input = data.correlation_window_secs.to_string();
+        // Restore the date filter so the re-scan triggered by initial_scan
+        // applies the same modified_since cutoff as the original scan.
+        self.discovery_date_input = data.discovery_date_input;
     }
 }
 
@@ -875,6 +917,120 @@ mod tests {
             state.selected_index,
             Some(1),
             "after filter: selected_index must be 1 (id=3 is now at display position 1)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // discovery_modified_since — datetime parsing precision tests
+    // -------------------------------------------------------------------------
+
+    fn state_with_input(s: &str) -> AppState {
+        let mut st = AppState::new(vec![], false);
+        st.discovery_date_input = s.to_string();
+        st
+    }
+
+    #[test]
+    fn test_discovery_modified_since_empty_returns_none() {
+        let st = state_with_input("");
+        assert!(st.discovery_modified_since().is_none());
+    }
+
+    #[test]
+    fn test_discovery_modified_since_date_only_midnight_utc() {
+        let st = state_with_input("2025-03-14");
+        let dt = st.discovery_modified_since().expect("should parse");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2025-03-14 00:00:00"
+        );
+    }
+
+    #[test]
+    fn test_discovery_modified_since_date_and_hour_minute() {
+        let st = state_with_input("2025-03-14 09:30");
+        let dt = st.discovery_modified_since().expect("should parse");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2025-03-14 09:30:00"
+        );
+    }
+
+    #[test]
+    fn test_discovery_modified_since_full_datetime_to_second() {
+        let st = state_with_input("2025-03-14 09:30:45");
+        let dt = st.discovery_modified_since().expect("should parse");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2025-03-14 09:30:45"
+        );
+    }
+
+    #[test]
+    fn test_discovery_modified_since_invalid_returns_none() {
+        for bad in &["not-a-date", "2025/03/14", "14-03-2025", "2025-03-14T09:30"] {
+            let st = state_with_input(bad);
+            assert!(
+                st.discovery_modified_since().is_none(),
+                "'{bad}' should not parse"
+            );
+        }
+    }
+
+    /// Regression — Bug: `apply_filters()` did not call `update_correlation()`
+    /// after recomputing `selected_index`.  When a filter change excluded the
+    /// selected entry, `selected_index` became `None` but `correlated_ids` kept
+    /// its old content, leaving phantom teal highlights on entries with no
+    /// active selection.
+    #[test]
+    fn test_apply_filters_clears_correlation_when_selected_entry_is_hidden() {
+        let mut state = AppState::new(vec![], false);
+
+        // Three entries all at the same second (all fall inside a 30s window
+        // relative to any of them).
+        for id in 0u64..3 {
+            let mut e = make_entry(id, 0);
+            e.severity = if id == 1 {
+                Severity::Error
+            } else {
+                Severity::Info
+            };
+            state.entries.push(e);
+        }
+
+        // Start with no filter — all three pass.
+        state.apply_filters();
+        assert_eq!(state.filtered_indices.len(), 3);
+
+        // Select the Info entry at display position 0 (entries[0], id=0).
+        state.selected_index = Some(0);
+        state.correlation_active = true;
+        state.correlation_window_secs = 30;
+        state.update_correlation();
+
+        // All three entries share the same timestamp so all should be correlated.
+        assert_eq!(
+            state.correlated_ids.len(),
+            3,
+            "all entries are within the 30s window before any filter"
+        );
+
+        // Now apply an Error-only filter.  entries[0] (Info, id=0) is hidden.
+        // apply_filters() must:
+        //   (a) move selected_index to None (selected entry no longer visible), and
+        //   (b) clear correlated_ids via update_correlation() so no ghost highlights remain.
+        state.filter_state.severity_levels.clear();
+        state.filter_state.severity_levels.insert(Severity::Error);
+        state.apply_filters();
+
+        assert!(
+            state.selected_index.is_none(),
+            "selected_index must be None after the selected entry is hidden by a filter"
+        );
+        assert!(
+            state.correlated_ids.is_empty(),
+            "correlated_ids must be cleared when the selected entry is no longer visible \
+             (otherwise phantom teal highlights appear with no active selection)"
         );
     }
 }

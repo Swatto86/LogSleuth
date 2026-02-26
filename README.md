@@ -77,7 +77,7 @@ After a scan completes, click **● Live Tail** in the sidebar to watch all load
 
 When you open a directory, LogSleuth automatically starts a **directory watcher** alongside Live Tail. The watcher polls the scanned directory tree for newly-created log files and adds them to the session automatically — no manual "Add File(s)" step required.
 
-- A blue **● WATCH** badge is shown in the status bar while the watcher is active.
+- A blue **👁 WATCH** button is shown in the status bar while the watcher is active. **Click it to pause watching**; the badge turns dimmed to show it is paused. Click again to resume — the watcher picks up from the current file set with the same include/exclude and date-filter settings.
 - Any new file that matches the active include patterns and recursion depth is detected within the configured poll interval (default: 2 seconds) and appended to the current session — filters, Live Tail, and the timeline all update instantly.
 - The watcher uses the same include/exclude patterns and recursion depth as the original scan so only relevant log files are picked up.
 - **The watcher honours the file-modified date filter** set in the discovery panel. If a date is specified, only files with an OS modification time on or after that date are added; older files that appear in the directory (e.g. copied from an archive) are silently ignored.

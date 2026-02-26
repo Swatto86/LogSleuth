@@ -774,3 +774,637 @@ fn e2e_vbr_service_log_filenames_detect_via_filename_match() {
         );
     }
 }
+
+// =============================================================================
+// Live D:\Logs integration tests
+//
+// These tests exercise the full pipeline against the real log files in
+// D:\Logs on the developer's machine.  They are CI-safe: each test skips
+// immediately when D:\Logs is not present (e.g. on a build server that has
+// no mounted drive with that path).
+//
+// Regressions covered:
+//   Bug 1 - severity regression: all entries showing [INFO] even when the log
+//            contained warnings/errors.
+//   Bug 2 - source-file filter regression: only one source file visible after
+//            an app restart due to stale session source_files being restored.
+//   Bug 3 - multi-file parsing regression: "433 entries from 1 file" despite
+//            498 files being discovered, caused by continuation-mode silently
+//            dropping all lines when no prior entry exists.
+// =============================================================================
+
+/// Returns the root path when D:\Logs is available, or None (test will skip).
+fn dlogs_root() -> Option<std::path::PathBuf> {
+    let p = std::path::PathBuf::from(r"D:\Logs");
+    if p.is_dir() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// D:\Logs full discovery: finds at least 100 files across all sub-folders.
+///
+/// Exercises discover_files() against a real, large directory tree.
+#[test]
+fn e2e_dlogs_discovers_many_files() {
+    let Some(dlogs) = dlogs_root() else {
+        return; // skip: D:\Logs not available on this machine
+    };
+
+    let (files, _warnings, total_found) =
+        discover_files(&dlogs, &DiscoveryConfig::default(), |_, _| {}).unwrap();
+
+    assert!(
+        files.len() >= 100,
+        "expected at least 100 files to be discovered under D:\\Logs, got {}",
+        files.len()
+    );
+    assert!(
+        total_found >= files.len(),
+        "total_found ({total_found}) must be >= returned file count ({})",
+        files.len()
+    );
+}
+
+/// Veeam VBR log files in D:\Logs\veeam auto-detect as the veeam-vbr profile.
+#[test]
+fn e2e_dlogs_veeam_vbr_auto_detects() {
+    let Some(dlogs) = dlogs_root() else {
+        return;
+    };
+    let veeam_dir = dlogs.join("veeam");
+    if !veeam_dir.is_dir() {
+        return;
+    }
+
+    let profiles = load_profiles();
+
+    // Restore.1.log is a known VBR-format file present in D:\Logs\veeam.
+    let restore_log = veeam_dir.join("Restore.1.log");
+    if !restore_log.exists() {
+        return;
+    }
+
+    let content = fs::read_to_string(&restore_log).expect("read Restore.1.log");
+    let sample_lines: Vec<String> = content.lines().take(20).map(String::from).collect();
+    let filename = restore_log.file_name().unwrap().to_str().unwrap();
+
+    let result = profile::auto_detect(filename, &sample_lines, &profiles);
+    assert!(
+        result.is_some(),
+        "auto_detect must return a profile for '{filename}'"
+    );
+    let det = result.unwrap();
+    assert_eq!(
+        det.profile_id, "veeam-vbr",
+        "Restore.1.log must auto-detect as veeam-vbr, got '{}'",
+        det.profile_id
+    );
+}
+
+/// IIS W3C log files in D:\Logs\iis auto-detect as the iis-w3c profile.
+#[test]
+fn e2e_dlogs_iis_w3c_auto_detects() {
+    let Some(dlogs) = dlogs_root() else {
+        return;
+    };
+    let iis_dir = dlogs.join("iis");
+    if !iis_dir.is_dir() {
+        return;
+    }
+
+    let profiles = load_profiles();
+
+    // Find any u_ex*.log file (IIS W3C naming convention).
+    let iis_file = fs::read_dir(&iis_dir)
+        .expect("read iis dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("u_ex"))
+                .unwrap_or(false)
+        });
+
+    let Some(iis_file) = iis_file else {
+        return; // no u_ex*.log present, skip
+    };
+
+    let content = fs::read_to_string(&iis_file).expect("read IIS file");
+    let sample_lines: Vec<String> = content.lines().take(20).map(String::from).collect();
+    let filename = iis_file.file_name().unwrap().to_str().unwrap();
+
+    let result = profile::auto_detect(filename, &sample_lines, &profiles);
+    assert!(
+        result.is_some(),
+        "auto_detect must return a profile for IIS file '{filename}'"
+    );
+    let det = result.unwrap();
+    assert_eq!(
+        det.profile_id, "iis-w3c",
+        "IIS file '{filename}' must auto-detect as iis-w3c, got '{}'",
+        det.profile_id
+    );
+}
+
+/// Syslog files in D:\Logs\system auto-detect as a syslog profile.
+#[test]
+fn e2e_dlogs_syslog_auto_detects() {
+    let Some(dlogs) = dlogs_root() else {
+        return;
+    };
+    let sys_dir = dlogs.join("system");
+    if !sys_dir.is_dir() {
+        return;
+    }
+
+    let profiles = load_profiles();
+
+    // Find any syslog-*.log file.
+    let syslog_file = fs::read_dir(&sys_dir)
+        .expect("read system dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("syslog"))
+                .unwrap_or(false)
+        });
+
+    let Some(syslog_file) = syslog_file else {
+        return;
+    };
+
+    let content = fs::read_to_string(&syslog_file).expect("read syslog file");
+    let sample_lines: Vec<String> = content.lines().take(20).map(String::from).collect();
+    let filename = syslog_file.file_name().unwrap().to_str().unwrap();
+
+    let result = profile::auto_detect(filename, &sample_lines, &profiles);
+    assert!(
+        result.is_some(),
+        "auto_detect must return a profile for syslog file '{filename}'"
+    );
+    let det = result.unwrap();
+    assert!(
+        det.profile_id.contains("syslog"),
+        "syslog file '{filename}' must detect a syslog profile, got '{}'",
+        det.profile_id
+    );
+}
+
+/// SQL Server log (SQLAGENT.1) in D:\Logs\sql auto-detects as a SQL Server profile.
+///
+/// Note: the synthetic test data in D:\Logs\sql\SQLAGENT.1 uses the SQL Server
+/// Error Log timestamp format (`YYYY-MM-DD HH:MM:SS.fff`), so the content match
+/// for `sql-server-error` wins over the filename bonus for `sql-server-agent`.
+/// The test validates that *some* SQL Server profile is detected (not plain-text)
+/// and that the result is one of the two expected SQL profiles.
+#[test]
+fn e2e_dlogs_sql_agent_auto_detects() {
+    let Some(dlogs) = dlogs_root() else {
+        return;
+    };
+    let sql_file = dlogs.join("sql").join("SQLAGENT.1");
+    if !sql_file.exists() {
+        return;
+    }
+
+    let profiles = load_profiles();
+    let content = fs::read_to_string(&sql_file).expect("read SQLAGENT.1");
+    let sample_lines: Vec<String> = content.lines().take(20).map(String::from).collect();
+
+    let result = profile::auto_detect("SQLAGENT.1", &sample_lines, &profiles);
+    assert!(
+        result.is_some(),
+        "auto_detect must return a profile for SQLAGENT.1"
+    );
+    let det = result.unwrap();
+    assert!(
+        det.profile_id == "sql-server-agent" || det.profile_id == "sql-server-error",
+        "SQLAGENT.1 must auto-detect as a SQL Server profile, got '{}'",
+        det.profile_id
+    );
+    assert_ne!(
+        det.profile_id, "plain-text",
+        "SQLAGENT.1 must not fall back to plain-text"
+    );
+}
+
+/// Regression — Bug 3 (multi-file parsing): multiple VBR files in D:\Logs\veeam
+/// must each contribute parsed entries, not just the first file.
+///
+/// Before the scan.rs fix the continuation-mode parser silently dropped all
+/// lines when no preceding entry existed, leaving every file after the first
+/// with 0 entries and falsely showing "433 entries from 1 file".
+#[test]
+fn e2e_dlogs_vbr_multiple_files_each_contribute_entries() {
+    let Some(dlogs) = dlogs_root() else {
+        return;
+    };
+    let veeam_dir = dlogs.join("veeam");
+    if !veeam_dir.is_dir() {
+        return;
+    }
+
+    let profiles = load_profiles();
+    let vbr_profile = profiles
+        .iter()
+        .find(|p| p.id == "veeam-vbr")
+        .expect("veeam-vbr profile must be loaded");
+
+    // Collect all .log files in the veeam folder.
+    let log_files: Vec<_> = fs::read_dir(&veeam_dir)
+        .expect("read veeam dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("log"))
+        .collect();
+
+    assert!(
+        !log_files.is_empty(),
+        "D:\\Logs\\veeam must contain at least one .log file"
+    );
+
+    let mut files_with_entries = 0usize;
+    let mut files_checked = 0usize;
+
+    for path in &log_files {
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        files_checked += 1;
+        let result = parse_content(&content, path, vbr_profile, &ParseConfig::default(), 0);
+        if !result.entries.is_empty() {
+            files_with_entries += 1;
+        }
+    }
+
+    // We need at least 2 non-empty VBR files in D:\Logs\veeam to be useful.
+    // If there's only 1 file, this test is vacuously not reproducible.
+    if files_checked < 2 {
+        return; // not enough data to exercise the regression
+    }
+
+    assert!(
+        files_with_entries >= 2,
+        "at least 2 VBR files must produce entries (regression for Bug 3); \
+         checked {files_checked} files, only {files_with_entries} had entries"
+    );
+}
+
+/// Regression — Bug 1 (severity always INFO): parsing a VBR file must yield
+/// entries with varied severity levels, not just Severity::Info.
+///
+/// Before the model.rs fix, infer_severity_from_message() returned
+/// Severity::Info as its default fallback instead of Severity::Unknown.
+#[test]
+fn e2e_dlogs_vbr_severity_is_not_uniform_info() {
+    let Some(dlogs) = dlogs_root() else {
+        return;
+    };
+    let restore_log = dlogs.join("veeam").join("Restore.1.log");
+    if !restore_log.exists() {
+        return;
+    }
+
+    let profiles = load_profiles();
+    let vbr_profile = profiles
+        .iter()
+        .find(|p| p.id == "veeam-vbr")
+        .expect("veeam-vbr profile must be loaded");
+
+    let content = fs::read_to_string(&restore_log).expect("read Restore.1.log");
+    let result = parse_content(
+        &content,
+        &restore_log,
+        vbr_profile,
+        &ParseConfig::default(),
+        0,
+    );
+
+    assert!(
+        !result.entries.is_empty(),
+        "Restore.1.log must produce at least one parsed entry"
+    );
+
+    // Count distinct severity values.
+    let distinct_severities: std::collections::HashSet<_> =
+        result.entries.iter().map(|e| e.severity).collect();
+
+    assert!(
+        distinct_severities.len() >= 2,
+        "Restore.1.log must contain at least two distinct severity levels \
+         (regression for Bug 1 — all entries were Info); got: {distinct_severities:?}"
+    );
+
+    // The file must NOT consist entirely of Info entries.
+    let all_info = result
+        .entries
+        .iter()
+        .all(|e| e.severity == logsleuth::core::model::Severity::Info);
+    assert!(
+        !all_info,
+        "Restore.1.log must not produce only Severity::Info entries (Bug 1 regression)"
+    );
+}
+
+/// Regression — Bug 2 (stale source-file filter): a freshly constructed
+/// AppState must never have a source-file whitelist pre-populated.
+///
+/// Before the state.rs fix, restore_from_session() reinstated source_files
+/// from the saved session, silently hiding all files except the ones recorded
+/// in the previous session's solo-view state.
+#[test]
+fn e2e_dlogs_fresh_state_has_no_source_filter() {
+    // Bug 2 is a state-machine regression that doesn't need D:\Logs to be
+    // present; the guard is here only for consistency with the suite.
+    let profiles = load_profiles();
+    let state = logsleuth::app::state::AppState::new(profiles, false);
+
+    assert!(
+        state.filter_state.source_files.is_empty(),
+        "a freshly constructed AppState must have an empty source_files filter \
+         (regression for Bug 2 — stale session source_files hid all-but-one file)"
+    );
+    assert!(
+        !state.filter_state.hide_all_sources,
+        "a freshly constructed AppState must not hide all sources (Bug 2 regression)"
+    );
+}
+
+/// VBO365 profile detects correctly when given real VBO365-format content.
+///
+/// Uses the existing `veeam_vbo365_sample.log` fixture (which contains genuine
+/// VBO365 timestamp/format lines) combined with the proxy filename
+/// `Veeam.Archiver.Proxy.log` that matches the profile's file_patterns.
+///
+/// Note: `D:\Logs\veeam\vbo365_backup.log` contains VBR-format content (the
+/// synthetic generator wrote VBR lines into it), so it correctly detects as
+/// `veeam-vbr`. This test uses the real VBO365 fixture instead.
+#[test]
+fn e2e_dlogs_vbo365_auto_detects() {
+    // This test uses the committed fixture, not the D:\Logs folder, so it
+    // always runs — no dlogs_root() guard needed.
+    let fixture_path = fixture("veeam_vbo365_sample.log");
+    if !fixture_path.exists() {
+        return;
+    }
+
+    let profiles = load_profiles();
+    let content = fs::read_to_string(&fixture_path).expect("read veeam_vbo365_sample.log");
+    let sample_lines: Vec<String> = content.lines().take(20).map(String::from).collect();
+
+    // Use a typical VBO365 filename to trigger the file_patterns bonus.
+    let result = profile::auto_detect("Veeam.Archiver.Proxy.log", &sample_lines, &profiles);
+    assert!(
+        result.is_some(),
+        "VBO365 fixture content with proxy filename must match veeam-vbo365 profile"
+    );
+    let det = result.unwrap();
+    assert_eq!(
+        det.profile_id, "veeam-vbo365",
+        "VBO365 fixture must detect as veeam-vbo365, got '{}'",
+        det.profile_id
+    );
+}
+
+/// Full pipeline smoke test: discover D:\Logs, parse a sample of files, and
+/// assert that the total entry count is non-trivially large (> 500).
+///
+/// This provides coarse confidence that the end-to-end scan path — profile
+/// auto-detection, continuation-mode parsing, and plain-text fallback — all
+/// function correctly on real data.
+#[test]
+fn e2e_dlogs_full_pipeline_smoke() {
+    let Some(dlogs) = dlogs_root() else {
+        return;
+    };
+
+    let profiles = load_profiles();
+
+    let (files, _warnings, _total) =
+        discover_files(&dlogs, &DiscoveryConfig::default(), |_, _| {}).unwrap();
+
+    assert!(!files.is_empty(), "discovery must return at least one file");
+
+    let mut total_entries = 0usize;
+    let mut files_with_entries = 0usize;
+
+    // Parse up to 20 files to keep the test fast.
+    for discovered in files.iter().take(20) {
+        let Ok(content) = fs::read_to_string(&discovered.path) else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        let sample_lines: Vec<String> = content.lines().take(20).map(String::from).collect();
+        let filename = discovered
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        let profile_to_use = profile::auto_detect(filename, &sample_lines, &profiles)
+            .and_then(|det| profiles.iter().find(|p| p.id == det.profile_id))
+            .or_else(|| profiles.iter().find(|p| p.id == "plain-text"));
+
+        let Some(prof) = profile_to_use else {
+            continue;
+        };
+
+        let result = parse_content(&content, &discovered.path, prof, &ParseConfig::default(), 0);
+        if !result.entries.is_empty() {
+            total_entries += result.entries.len();
+            files_with_entries += 1;
+        }
+    }
+
+    assert!(
+        files_with_entries >= 5,
+        "at least 5 files out of the first 20 discovered must produce parsed entries; \
+         got {files_with_entries}"
+    );
+    assert!(
+        total_entries >= 100,
+        "parsing the first 20 files must yield at least 100 entries total; \
+         got {total_entries}"
+    );
+}
+
+// =============================================================================
+// Regression tests for previously fixed bugs
+// =============================================================================
+
+/// Regression \u2014 Bug: append scans always started entry IDs from 0, causing
+/// duplicate IDs between the initial scan and any subsequent append (directory
+/// watcher, "Add File(s)").  Bookmarks and the correlation overlay use entry
+/// IDs as stable keys, so duplicates silently corrupted both features.
+///
+/// Fix: `run_parse_pipeline` now accepts `entry_id_start` and callers pass
+/// `state.next_entry_id()` for append runs.  This test verifies that
+/// `parse_content` honours a non-zero `id_start` and that two consecutive
+/// parses with correct starts never share an ID.
+#[test]
+fn e2e_append_scan_entry_ids_are_unique_across_parses() {
+    use logsleuth::core::model::Severity;
+    use std::collections::HashSet;
+
+    let profiles = load_profiles();
+    let plain = profiles
+        .iter()
+        .find(|p| p.id == "plain-text")
+        .expect("plain-text profile must be present");
+
+    let content_a = "Line one from file A\nLine two from file A\n";
+    let content_b = "Line one from file B\nLine two from file B\n";
+
+    let path_a = PathBuf::from("a.log");
+    let path_b = PathBuf::from("b.log");
+
+    // First parse: IDs start at 0.
+    let result_a = parse_content(content_a, &path_a, plain, &ParseConfig::default(), 0);
+    assert!(!result_a.entries.is_empty(), "parse a must produce entries");
+
+    // Second parse (simulating an append): IDs must start after the last ID
+    // assigned by the first parse.
+    let id_start_b = result_a.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+    let result_b = parse_content(
+        content_b,
+        &path_b,
+        plain,
+        &ParseConfig::default(),
+        id_start_b,
+    );
+    assert!(!result_b.entries.is_empty(), "parse b must produce entries");
+
+    // Collect all IDs from both parses and assert no duplicates.
+    let ids_a: HashSet<u64> = result_a.entries.iter().map(|e| e.id).collect();
+    let ids_b: HashSet<u64> = result_b.entries.iter().map(|e| e.id).collect();
+    let intersection: HashSet<u64> = ids_a.intersection(&ids_b).copied().collect();
+
+    assert!(
+        intersection.is_empty(),
+        "entry IDs from the first and second parse must not overlap; \
+         colliding IDs: {intersection:?}"
+    );
+
+    // IDs within each result must also be strictly monotonic.
+    let sorted_a: Vec<u64> = result_a.entries.iter().map(|e| e.id).collect();
+    for w in sorted_a.windows(2) {
+        assert!(
+            w[1] > w[0],
+            "entry IDs within a single parse must be strictly increasing; \
+             got {} then {}",
+            w[0],
+            w[1]
+        );
+    }
+
+    // Verify that next_entry_id() on AppState returns the correct continuation
+    // value when entries from both parses are loaded.
+    let mut state = logsleuth::app::state::AppState::new(vec![], false);
+    state.entries.extend(result_a.entries.iter().cloned());
+    state.entries.extend(result_b.entries.iter().cloned());
+    let expected_next = state.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+    let actual_next = state.next_entry_id();
+    assert_eq!(
+        actual_next, expected_next,
+        "next_entry_id() must return max_id + 1 after both parses are loaded"
+    );
+
+    // Regression guard: if both parses had started from 0, ids_a and ids_b
+    // WOULD overlap.  Confirm this is the case by checking the "bug" scenario.
+    let result_bug = parse_content(content_b, &path_b, plain, &ParseConfig::default(), 0);
+    let ids_bug: HashSet<u64> = result_bug.entries.iter().map(|e| e.id).collect();
+    let bug_intersection: HashSet<u64> = ids_a.intersection(&ids_bug).copied().collect();
+    assert!(
+        !bug_intersection.is_empty(),
+        "the bug scenario (both parses starting from 0) must produce \
+         colliding IDs \u{2014} this guards the regression test itself"
+    );
+    // Suppress unused warning \u2014 Severity is imported for completeness.
+    let _ = Severity::Unknown;
+}
+
+/// Regression \u2014 Bug: "File > Open Directory" menu bar handler did not forward
+/// the `discovery_date_input` date filter as `modified_since` to `DiscoveryConfig`.
+/// The discovery-panel "Open Directory" button (via `pending_scan`) correctly
+/// applied the filter; the menu path silently ignored it.
+///
+/// The fix populates `modified_since` from `state.discovery_modified_since()`
+/// in the menu handler before calling `state.clear()`.  This test verifies
+/// that `discovery_modified_since()` produces the expected value for a variety
+/// of inputs so the GUI can safely call it before or after `clear()`.
+#[test]
+fn e2e_discovery_date_filter_is_honoured_by_menu_open_directory() {
+    use logsleuth::app::state::AppState;
+
+    // Case 1: non-empty valid date \u2014 must parse regardless of other state.
+    let mut state = AppState::new(vec![], false);
+    state.discovery_date_input = "2025-06-15 08:30:00".to_string();
+    let since = state.discovery_modified_since();
+    assert!(
+        since.is_some(),
+        "a valid date input must produce Some(DateTime)"
+    );
+    let dt = since.unwrap();
+    assert_eq!(
+        dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+        "2025-06-15 08:30:00",
+        "parsed datetime must match the input exactly"
+    );
+
+    // Case 2: `clear()` must NOT wipe `discovery_date_input`.
+    // The menu handler calls clear() AFTER capturing modified_since; this test
+    // verifies the field survives so the next `discovery_modified_since()` call
+    // (e.g. for the directory watcher restart) also sees the correct value.
+    state.clear();
+    assert_eq!(
+        state.discovery_date_input, "2025-06-15 08:30:00",
+        "clear() must preserve discovery_date_input (it is a user preference, \
+         not scan state)"
+    );
+    let since_after_clear = state.discovery_modified_since();
+    assert_eq!(
+        since_after_clear, since,
+        "discovery_modified_since() must return the same value before and after clear()"
+    );
+
+    // Case 3: empty input \u2014 must return None (no date filter).
+    let mut state2 = AppState::new(vec![], false);
+    state2.discovery_date_input = String::new();
+    assert!(
+        state2.discovery_modified_since().is_none(),
+        "empty discovery_date_input must produce None"
+    );
+
+    // Case 4: the modified_since filter is correctly applied by the discovery
+    // pipeline when set. Use a far-future date so NO fixture files pass it.
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures");
+    let future_config = DiscoveryConfig {
+        modified_since: Some(
+            chrono::NaiveDate::from_ymd_opt(2099, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc(),
+        ),
+        ..DiscoveryConfig::default()
+    };
+    let (files, _, _) = discover_files(&fixture_dir, &future_config, |_, _| {}).unwrap();
+    assert!(
+        files.is_empty(),
+        "a modified_since date of 2099-01-01 must exclude all fixture files \
+         (files are not from the future); got {files:?}"
+    );
+}

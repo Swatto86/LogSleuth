@@ -658,7 +658,7 @@ timestamp_format = "%Y"
         );
         assert_eq!(
             profile.infer_severity_from_message("Everything is fine"),
-            Severity::Info // Default when no keyword matches
+            Severity::Unknown // Default when no keyword matches — Unknown not Info
         );
     }
 

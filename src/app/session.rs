@@ -65,6 +65,14 @@ pub struct SessionData {
     /// Correlation window size in seconds (restored but overlay starts disabled).
     #[serde(default = "default_correlation_window")]
     pub correlation_window_secs: i64,
+
+    /// Date/time filter string typed by the user in the scan controls.
+    ///
+    /// Persisted so the filter is restored on next launch and the `initial_scan`
+    /// re-run applies the same cutoff as the original scan.
+    /// An empty string means no filter was set.
+    #[serde(default)]
+    pub discovery_date_input: String,
 }
 
 fn default_correlation_window() -> i64 {
@@ -217,6 +225,7 @@ mod tests {
             file_colours: vec![(PathBuf::from("/tmp/logs/app.log"), [255, 128, 0, 255])],
             bookmarks: vec![(42, "important".to_string()), (100, String::new())],
             correlation_window_secs: 60,
+            discovery_date_input: "2025-06-01 08:00:00".to_string(),
         }
     }
 
@@ -240,6 +249,12 @@ mod tests {
         assert_eq!(loaded.file_colours[0].1, [255, 128, 0, 255]);
         assert_eq!(loaded.bookmarks.len(), 2);
         assert_eq!(loaded.correlation_window_secs, 60);
+        // Regression — Bug: discovery_date_input was not included in SessionData,
+        // so the date filter was silently discarded on restart.
+        assert_eq!(
+            loaded.discovery_date_input, "2025-06-01 08:00:00",
+            "discovery_date_input must survive a save/load round-trip"
+        );
     }
 
     /// Load must return None when the file does not exist (first run).

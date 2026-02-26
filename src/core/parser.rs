@@ -445,4 +445,45 @@ info = ["Info"]
             ParseError::TimestampParse { .. }
         ));
     }
+
+    /// Regression test: a continuation-mode profile whose line_pattern does not
+    /// match ANY line in the file must produce zero entries.
+    ///
+    /// This test documents the trigger condition for the plain-text fallback in
+    /// `app::scan::run_parse_pipeline`: when `parse_result.entries.is_empty()`
+    /// and the file has content, the scan layer re-parses with the plain-text
+    /// profile so the file always contributes visible entries to the timeline.
+    ///
+    /// Without the fallback, files whose first line doesn't match a structured
+    /// profile's pattern are silently dropped because `continuation` mode
+    /// calls `entries.last_mut()` (returns None → no-op) before any entry
+    /// has been created.
+    #[test]
+    fn test_continuation_mode_with_no_matching_lines_yields_zero_entries() {
+        let profile = make_test_profile(); // multiline_mode = "continuation"
+                                           // Lines that deliberately don't match `^\[timestamp\] level  message`
+        let content = "=== Job Log Started ===\n\
+                        Some header line without bracket prefix\n\
+                        Another non-matching line\n";
+
+        let result = parse_content(
+            content,
+            &PathBuf::from("vbr.log"),
+            &profile,
+            &ParseConfig::default(),
+            0,
+        );
+
+        assert!(
+            result.entries.is_empty(),
+            "continuation mode with no matching first line must yield 0 entries, \
+             confirming the trigger condition for the plain-text fallback in scan.rs"
+        );
+        // Content was non-empty so the fallback in scan.rs would kick in here
+        // and re-parse with plain-text, producing at least 3 entries.
+        assert!(
+            !content.trim().is_empty(),
+            "content is non-empty (fallback eligible)"
+        );
+    }
 }

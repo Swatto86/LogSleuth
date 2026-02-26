@@ -70,7 +70,12 @@ fn placeholder_icon() -> egui::IconData {
     }
 }
 
-/// Configure fonts for the egui context.
+/// Pre-load system font definitions **before** `eframe::run_native` is called.
+///
+/// Doing all file I/O here (rather than inside the creator closure) satisfies
+/// DevWorkflow Rule 16: "All expensive initialisation MUST complete *before*
+/// calling `eframe::run_native()`" so the OS window never shows a white
+/// background while fonts are being read from disk.
 ///
 /// On Windows, loads:
 ///   - Consolas as the primary monospace font (excellent log-file readability,
@@ -83,8 +88,8 @@ fn placeholder_icon() -> egui::IconData {
 /// The built-in egui fonts (Hack, NotoSans) are retained as final fallbacks
 /// so no glyph is ever permanently lost regardless of what is installed.
 ///
-/// On non-Windows platforms the egui defaults are used unchanged.
-fn configure_fonts(ctx: &egui::Context) {
+/// On non-Windows platforms the egui defaults are returned unchanged.
+fn build_font_definitions() -> egui::FontDefinitions {
     #[cfg(target_os = "windows")]
     {
         let mut fonts = egui::FontDefinitions::default();
@@ -150,16 +155,17 @@ fn configure_fonts(ctx: &egui::Context) {
             }
         }
 
-        ctx.set_fonts(fonts);
         tracing::info!(
             loaded = ?loaded.iter().collect::<Vec<_>>(),
-            "Windows system fonts configured"
+            "Windows system fonts pre-loaded"
         );
+
+        fonts
     }
 
     // On non-Windows platforms the egui built-in fonts are used unchanged.
     #[cfg(not(target_os = "windows"))]
-    let _ = ctx;
+    egui::FontDefinitions::default()
 }
 
 /// LogSleuth - Cross-platform log file viewer and analyser.
@@ -282,6 +288,10 @@ fn main() {
     //      acts as the canonical source on Linux/macOS.
     let icon_data = load_icon();
 
+    // Pre-load font definitions before opening the OS window (Rule 16: no I/O
+    // inside the creator closure passed to run_native).
+    let font_defs = build_font_definitions();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!(
@@ -299,7 +309,8 @@ fn main() {
         util::constants::APP_NAME,
         native_options,
         Box::new(move |cc| {
-            configure_fonts(&cc.egui_ctx);
+            // Apply pre-loaded font definitions (file I/O completed before run_native).
+            cc.egui_ctx.set_fonts(font_defs);
             Ok(Box::new(gui::LogSleuthApp::new(state)))
         }),
     );
