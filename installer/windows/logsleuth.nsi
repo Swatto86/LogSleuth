@@ -15,7 +15,7 @@ SetCompressor /SOLID lzma
 ; ---------------------------------------------------------------------------
 
 !define PRODUCT_NAME      "LogSleuth"
-!define PRODUCT_VERSION   "1.0.2"
+!define PRODUCT_VERSION   "1.0.0"
 !define PRODUCT_PUBLISHER "Swatto"
 !define PRODUCT_URL       "https://github.com/swatto86/LogSleuth"
 !define PRODUCT_EXE       "logsleuth.exe"
