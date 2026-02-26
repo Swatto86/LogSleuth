@@ -126,7 +126,7 @@ LogSleuth/
 |   +-- plain_text.toml          # Fallback (no structure)
 +-- tests/
 |   +-- e2e_discovery.rs         # E2E: discovery pipeline, auto-detect, parse, timestamp, severity
-|   +-- fixtures/                # Sample log files per format for testing (veeam_vbr_sample.log, iis_w3c_sample.log)
+|   +-- fixtures/                # Sample log files per format for testing (veeam_vbr_sample.log, iis_w3c_sample.log, veeam_vbo365_sample.log)
 |   +-- profiles/                # Test profile TOML files
 +-- assets/
 |   +-- app.manifest             # Windows UAC/DPI manifest
@@ -189,7 +189,7 @@ LogSleuth/
 | `DirWatcher::poll_progress() -> Vec<DirWatchProgress>` | `app::dir_watcher` | UI layer (called from `eframe::App::update`) |
 | `discover_files(root, config, on_file_found) -> Result<(Vec<DiscoveredFile>, Vec<String>, usize)>` | `core::discovery` | `app::scan` background thread. Third element is raw file count before ingest limit. When count > limit, files are sorted by mtime descending and truncated. |
 | `parse_content(content, path, profile, config, id_start) -> ParseResult` | `core::parser` | `app::scan` background thread |
-| `profile::auto_detect(file_name, sample_lines, profiles) -> Option<DetectionResult>` | `core::profile` | `app::scan` background thread |
+| `profile::auto_detect(file_name, sample_lines, profiles) -> Option<DetectionResult>` | `core::profile` | `app::scan` background thread. Confidence = content_match ratio + `AUTO_DETECT_FILENAME_BONUS` (0.3) if filename glob matches; threshold is `AUTO_DETECT_MIN_CONFIDENCE` (0.3). A filename match alone is sufficient. |
 | `apply_filters(entries, state) -> Vec<usize>` | `core::filter` | App layer |
 | `load_all_profiles(user_dir) -> (Vec<FormatProfile>, Vec<ProfileError>)` | `app::profile_mgr` | `main.rs` at startup |
 | `export_csv(entries, path)` / `export_json(entries, path)` | `core::export` | App layer |

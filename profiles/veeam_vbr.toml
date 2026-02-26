@@ -24,7 +24,7 @@ log_locations = [
 
 [detection]
 file_patterns = [
-    # Service logs
+    # Service logs (Svc. prefix used by VBR service processes)
     "Svc.Veeam*.log",
     "Svc.Veeam*_[0-9]*.log",
     # Job logs
@@ -34,14 +34,20 @@ file_patterns = [
     "Agent.*.log",
     "EP.*.log",
     "Endpoint.*.log",
+    # WMI / infrastructure service logs present in every VBR installation
+    "WmiServer.*.log",
+    "WmiServer.log",
     # Named service logs
     "VeeamBackupManager.log",
     "VeeamPowerShell.log",
     "CatalogReplicationJob.log",
     "Veeam.WebApp.log",
+    # Deployer / updater logs
+    "VeeamDeployer*.log",
+    # Mount service logs
+    "Mount.*.log",
     # Catch-all for other top-level Veeam service logs whose names vary by version
     "Veeam*.log",
-    "Mount.*.log",
 ]
 # Matches the opening bracket-timestamp pattern unique to VBR logs
 content_match = '^\[\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2}\]\s<\d+>'

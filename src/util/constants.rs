@@ -139,6 +139,15 @@ pub const MAX_REGEX_PATTERN_LENGTH: usize = 4_096;
 /// Minimum confidence threshold (0.0-1.0) for auto-detection to accept a match.
 pub const AUTO_DETECT_MIN_CONFIDENCE: f64 = 0.3;
 
+/// Confidence bonus added when a file's name matches one of a profile's
+/// `file_patterns` globs.  Set to 0.3 so that an explicit filename match alone
+/// is sufficient to assign the profile even if the sampled content lines do not
+/// meet the content_match threshold (e.g. because the first N lines are
+/// separator/header lines).  The patterns in built-in profiles are product-
+/// specific enough (e.g. `Svc.Veeam*.log`) that false-positive assignments from
+/// filename alone are negligible.
+pub const AUTO_DETECT_FILENAME_BONUS: f64 = 0.3;
+
 // =============================================================================
 // UI defaults
 // =============================================================================

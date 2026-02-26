@@ -644,3 +644,133 @@ fn filtered_results_report_truncation() {
         "report must cite the limit value"
     );
 }
+
+// =============================================================================
+// VBO365 E2E tests
+// =============================================================================
+
+/// Auto-detection should identify the VBO365 format from the sample file.
+#[test]
+fn e2e_auto_detects_veeam_vbo365_profile() {
+    let profiles = load_profiles();
+    let fixture_path = fixture("veeam_vbo365_sample.log");
+
+    let content = fs::read_to_string(&fixture_path).expect("read vbo365 fixture");
+    let sample_lines: Vec<String> = content.lines().take(20).map(String::from).collect();
+
+    let result = profile::auto_detect("Veeam.Archiver.Proxy.log", &sample_lines, &profiles);
+
+    assert!(
+        result.is_some(),
+        "should detect a profile for a VBO365 archiver log"
+    );
+    let detection = result.unwrap();
+    assert_eq!(
+        detection.profile_id, "veeam-vbo365",
+        "should detect the veeam-vbo365 profile, got '{}'",
+        detection.profile_id
+    );
+}
+
+/// End-to-end parse of veeam_vbo365_sample.log using the VBO365 profile.
+#[test]
+fn e2e_parse_veeam_vbo365_sample() {
+    use logsleuth::core::parser::{parse_content, ParseConfig};
+
+    let profiles = load_profiles();
+    let fixture_path = fixture("veeam_vbo365_sample.log");
+    let content = fs::read_to_string(&fixture_path).expect("read vbo365 fixture");
+
+    let vbo_profile = profiles
+        .iter()
+        .find(|p| p.id == "veeam-vbo365")
+        .expect("veeam-vbo365 profile should be loaded");
+
+    let result = parse_content(
+        &content,
+        &fixture_path,
+        vbo_profile,
+        &ParseConfig::default(),
+        0,
+    );
+
+    assert!(
+        result.entries.len() >= 10,
+        "expected >= 10 parsed entries, got {}",
+        result.entries.len()
+    );
+
+    // All entries should reference the correct source file.
+    for entry in &result.entries {
+        assert_eq!(entry.source_file, fixture_path);
+    }
+
+    // Severity is inferred from message content for VBO365 (no explicit level field).
+    let has_error = result
+        .entries
+        .iter()
+        .any(|e| e.severity == logsleuth::core::model::Severity::Error);
+    assert!(has_error, "fixture should have Error-classified entries");
+
+    // No timestamp parse errors — the fixture uses clean M/D/YYYY H:MM:SS AM/PM format.
+    let ts_errors = result
+        .errors
+        .iter()
+        .filter(|e| matches!(e, logsleuth::util::error::ParseError::TimestampParse { .. }))
+        .count();
+    assert_eq!(
+        ts_errors, 0,
+        "VBO365 fixture timestamps should all parse cleanly; got {ts_errors} errors"
+    );
+}
+
+// =============================================================================
+// VBR filename-pattern regression tests (regression for filenames that
+// previously fell through to plain-text because the VBR profile's file_patterns
+// did not include them or the filename bonus was too small).
+// =============================================================================
+
+/// VBR filenames that must be auto-detected even when the sample content
+/// contains only header/separator lines (confidence from filename alone).
+///
+/// Regression guard: before the fix, WmiServer.BackupSrv.log had no matching
+/// glob pattern and the 0.2 filename bonus was below the 0.3 threshold, so
+/// these files fell back to plain-text regardless of content format.
+#[test]
+fn e2e_vbr_service_log_filenames_detect_via_filename_match() {
+    let profiles = load_profiles();
+
+    // Build a sample that contains at least a few genuine VBR-format lines
+    // as well as separator lines that would lower the raw content ratio.
+    let vbr_lines = vec![
+        "=======================================================".to_string(),
+        "Veeam Backup & Replication service starting".to_string(),
+        "[15.01.2024 14:30:22] <01> Info     Service initialized".to_string(),
+        "[15.01.2024 14:30:23] <01> Info     Loading configuration".to_string(),
+        "[15.01.2024 14:30:24] <02> Info     WMI provider ready".to_string(),
+        "-------------------------------------------------------".to_string(),
+    ];
+
+    let filenames = [
+        "WmiServer.BackupSrv.log",
+        "WmiServer.log",
+        "VeeamDeployerUpdater.log",
+        "Svc.VeeamBackup.log",
+        "Svc.Veeam.VBR.RESTAPI.log",
+        "Svc.VeeamMount.log",
+    ];
+
+    for filename in &filenames {
+        let result = profile::auto_detect(filename, &vbr_lines, &profiles);
+        assert!(
+            result.is_some(),
+            "Expected veeam-vbr profile for '{filename}', got None (file fell back to plain-text)"
+        );
+        let det = result.unwrap();
+        assert_eq!(
+            det.profile_id, "veeam-vbr",
+            "Expected veeam-vbr for '{filename}', got '{}'",
+            det.profile_id
+        );
+    }
+}

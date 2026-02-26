@@ -304,14 +304,18 @@ pub fn auto_detect(
 
         let mut confidence = matches as f64 / sample_lines.len() as f64;
 
-        // Bonus for filename pattern match (adds up to 0.2)
+        // Bonus for filename pattern match.
+        // Uses AUTO_DETECT_FILENAME_BONUS (0.3) so that an explicit filename
+        // match alone is sufficient to pass the 0.3 threshold — covering VBR
+        // service logs (e.g. WmiServer.BackupSrv.log) whose first sample lines
+        // may be separator/header text that won't match content_match.
         let filename_match = profile.file_patterns.iter().any(|pattern| {
             glob::Pattern::new(pattern)
                 .map(|p| p.matches(file_name))
                 .unwrap_or(false)
         });
         if filename_match {
-            confidence = (confidence + 0.2).min(1.0);
+            confidence = (confidence + constants::AUTO_DETECT_FILENAME_BONUS).min(1.0);
         }
 
         if confidence >= constants::AUTO_DETECT_MIN_CONFIDENCE
@@ -618,7 +622,7 @@ timestamp_format = "%Y"
         assert!(result.is_some());
         let det = result.unwrap();
         assert_eq!(det.profile_id, "test-profile");
-        // 2/3 lines match + 0.2 filename bonus
+        // 2/3 lines match + AUTO_DETECT_FILENAME_BONUS (0.3) filename bonus
         assert!(det.confidence > 0.5);
     }
 
