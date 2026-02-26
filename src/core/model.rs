@@ -308,9 +308,6 @@ pub struct ScanSummary {
     /// Total log entries parsed across all files.
     pub total_entries: usize,
 
-    /// Entries by severity level.
-    pub entries_by_severity: HashMap<Severity, usize>,
-
     /// Total parse errors (lines that could not be parsed).
     pub total_parse_errors: usize,
 

@@ -1,7 +1,7 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 22 complete — 22 built-in profiles, Explorer /select arg fix, per-frame ScanSummary clone fix
-> **Last updated**: 2026-02-25
+> **Status**: Increment 24 complete — 3 bug fixes (append-scan sort, selection ID preservation, Raw-mode error count), 2 dead-code removals, 1 regression test; also covers Inc 23 (CLI --filter-level applied, severity_bg_colour row tinting)
+> **Last updated**: 2026-02-26
 
 ---
 
@@ -59,15 +59,15 @@ LogSleuth is a cross-platform log file viewer and analyser that discovers, parse
 ```
 LogSleuth/
 +-- src/
-|   +-- main.rs                  # Entry point, CLI parsing, logging init, GUI launch; configure_fonts() loads Consolas (primary monospace), Segoe UI (primary proportional), Segoe UI Symbol + Emoji (Unicode fallbacks) on Windows
+|   +-- main.rs                  # Entry point, CLI parsing, logging init, GUI launch; configure_fonts() loads Consolas (primary monospace), Segoe UI (primary proportional), Segoe UI Symbol + Emoji (Unicode fallbacks) on Windows; --filter-level CLI arg populates severity_levels with the requested level and all more-severe variants before eframe launch
 |   +-- lib.rs                   # Library crate entry point (exposes modules for integration tests)
-|   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring; sidebar split into two independent ScrollAreas (discovery top ~45%, filters bottom)
+|   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring; sidebar split into two independent ScrollAreas (discovery top ~45%, filters bottom); ParsingCompleted handler calls sort_entries_chronologically() (not just apply_filters()) so append scans always produce a fully interleaved chronological timeline
 |   +-- app/
 |   |   +-- mod.rs
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
 |   |   +-- session.rs           # Session persistence: SessionData + PersistedFilter structs (serde JSON); session_path(), save() (atomic write via .json.tmp rename), load() (returns None on missing/corrupt/version-mismatch — never errors to user); SESSION_VERSION const for forward-compat
-|   |   +-- state.rs             # Application state; tail flags; show_log_summary; show_about; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), filtered_results_report() (bounded to MAX_CLIPBOARD_ENTRIES), update_correlation(), next_entry_id(), save_session(), restore_from_session()
+|   |   +-- state.rs             # Application state; tail flags (tail_active, tail_auto_scroll, request_start_tail, request_stop_tail); show_log_summary; show_about; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), filtered_results_report() (bounded to MAX_CLIPBOARD_ENTRIES), update_correlation(), next_entry_id(), save_session(), restore_from_session(); apply_filters() preserves the selected entry by stable entry ID (not by display-position integer) before and after filter recompute; sort_entries_chronologically() performs a stable sort across all entries then calls apply_filters()
 |   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo; file-selection filter applied before start (respects hide_all_sources + source_files whitelist)
 |   +-- core/
 |   |   +-- mod.rs
@@ -76,7 +76,7 @@ LogSleuth/
 |   |   +-- export.rs            # CSV/JSON serialisation
 |   |   +-- filter.rs            # Composable filter engine: severity, text (exact or fuzzy subsequence), regex, absolute/relative time window, source file whitelist (hide_all_sources flag for explicit "none" state); bookmark filter (bookmarks_only + bookmarked_ids populated by app layer)
 |   |   +-- profile.rs           # TOML profile parsing, validation, auto-detection scoring; SeverityOverrideDef TOML struct; override patterns compiled via compile_regex in validate_and_compile
-|   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing
+|   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing; MultilineMode::Raw emits every line as an entry and records no parse error; MultilineMode::Skip records an error for every non-matching line; MultilineMode::Continuation records an error only when no prior entry exists to attach the line to
 |   +-- ui/
 |   |   +-- mod.rs
 |   |   +-- panels/
@@ -84,7 +84,7 @@ LogSleuth/
 |   |   +-- about.rs         # About dialog: centred modal window (version from CARGO_PKG_VERSION, GitHub link, MIT licence); show_about flag on AppState; ⓘ button right-aligned in menu bar (placed AFTER File/View menus so layout allocation is correct)
 |   |   |   +-- discovery.rs     # Directory picker + Open Log(s) button, scan controls, file list (max_height 360 px); profile label shows log_locations as hover tooltip
 |   |   |   +-- options.rs       # Options dialog: runtime-configurable ingest limit (max_files_limit on AppState); logarithmic slider bounded by ABSOLUTE_MAX_FILES; opened via Edit > Options...
-|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
+|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; severity row tint (Critical/Error/Warning) painted as the lowest-priority background layer via theme::severity_bg_colour(); amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; teal tint on correlated rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
 |   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
@@ -280,7 +280,7 @@ These invariants MUST hold at all times. Violation is a defect.
 | INV-01 | Core layer has zero dependencies on UI, platform, or I/O |
 | INV-02 | No panics in library code; all errors propagated via `Result` |
 | INV-03 | Source log files are never modified, deleted, or locked exclusively |
-| INV-04 | UI thread never blocks on file I/O, parsing, or sorting operations; chronological sort runs on the background scan thread before entries are streamed |
+| INV-04 | UI thread never blocks on file I/O, parsing, or non-trivial sorting operations; background scan thread performs the initial chronological sort before streaming entries; append scans call sort_entries_chronologically() on the UI thread after all batches arrive (no I/O; sort only) |
 | INV-05 | All cross-thread communication uses channels; no shared mutable state. Applies equally to scan and tail managers. |
 | INV-06 | User-provided regex patterns are compiled with size/complexity limits |
 | INV-07 | Memory usage is bounded: streaming parser, bounded collections with MAX_SIZE constants |

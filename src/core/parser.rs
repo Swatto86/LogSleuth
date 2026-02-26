@@ -186,12 +186,20 @@ pub fn parse_content(
                 }
             }
 
-            // Track as parse error if this is a new line (not continuation)
+            // Track as parse error for un-handled non-matching lines.
+            // - Continuation mode: only an error when there is no previous entry to
+            //   append to (the first line should always match the pattern).
+            // - Skip mode: the line is silently discarded — counts as a parse error.
+            // - Raw mode: an unparsed entry was successfully created above, so the
+            //   line is handled; do NOT record an error or the scan summary will
+            //   show inflated error counts for every Raw-mode entry.
             if errors.len() < config.max_parse_errors_per_file {
-                // Only count as error if not handled by multiline
-                if profile.multiline_mode != crate::core::model::MultilineMode::Continuation
-                    || entries.is_empty()
-                {
+                let is_error = match profile.multiline_mode {
+                    crate::core::model::MultilineMode::Continuation => entries.is_empty(),
+                    crate::core::model::MultilineMode::Skip => true,
+                    crate::core::model::MultilineMode::Raw => false,
+                };
+                if is_error {
                     errors.push(ParseError::LineParse {
                         file: file_path.to_path_buf(),
                         line_number,

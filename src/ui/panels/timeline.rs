@@ -31,10 +31,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Stick to the bottom while live tail + auto-scroll are both active so
     // new entries scroll into view immediately as they arrive.
     let stick = state.tail_active && state.tail_auto_scroll;
-    // After one frame of sticking, clear the one-shot flag.
-    if state.tail_scroll_to_bottom {
-        state.tail_scroll_to_bottom = false;
-    }
 
     // Bookmark toggle and correlation refresh are collected here and applied
     // after show_rows so we do not mutable-borrow `state` while `entry` still

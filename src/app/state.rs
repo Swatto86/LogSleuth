@@ -96,11 +96,6 @@ pub struct AppState {
     /// entries arrive. The user can toggle this off to scroll back through history.
     pub tail_auto_scroll: bool,
 
-    /// Set to `true` by the gui.rs tail message handler whenever new entries
-    /// arrive. Consumed and cleared by `timeline.rs` after it triggers the
-    /// scroll-to-bottom, so scroll only fires on the frame new entries appear.
-    pub tail_scroll_to_bottom: bool,
-
     /// Set by a UI panel to request starting the live tail watcher.
     /// Consumed and cleared by `gui.rs` in the update loop each frame.
     pub request_start_tail: bool,
@@ -210,7 +205,6 @@ impl AppState {
             pending_single_files: None,
             tail_active: false,
             tail_auto_scroll: true,
-            tail_scroll_to_bottom: false,
             request_start_tail: false,
             request_stop_tail: false,
             bookmarks: HashMap::new(),
@@ -252,15 +246,24 @@ impl AppState {
             self.filter_state.bookmarked_ids.clear();
         }
 
+        // Capture the ID of the currently selected entry so we can restore the
+        // selection by identity after the filter is recomputed.  Without this,
+        // selected_index (a display-position integer) could silently drift to a
+        // different entry whenever the filtered set changes — causing the detail
+        // panel and correlation overlay to show the wrong entry.
+        let selected_id = self.selected_entry().map(|e| e.id);
+
         self.filtered_indices =
             crate::core::filter::apply_filters(&self.entries, &self.filter_state);
 
-        // Clear selection if it is out of range
-        if let Some(idx) = self.selected_index {
-            if idx >= self.filtered_indices.len() {
-                self.selected_index = None;
-            }
-        }
+        // Restore selection: find the new display position of the previously
+        // selected entry by ID.  If the entry is no longer in the filtered set
+        // (e.g. it was hidden by a new severity filter), clear the selection.
+        self.selected_index = selected_id.and_then(|id| {
+            self.filtered_indices
+                .iter()
+                .position(|&entry_idx| self.entries.get(entry_idx).is_some_and(|e| e.id == id))
+        });
     }
 
     /// Recompute the correlation overlay from the currently selected entry.
@@ -537,7 +540,6 @@ impl AppState {
         self.pending_single_files = None;
         // Stop tail on clear — a new scan starts fresh.
         self.tail_active = false;
-        self.tail_scroll_to_bottom = false;
         self.request_start_tail = false;
         self.request_stop_tail = false;
         // Bookmarks are cleared on scan clear.
@@ -754,6 +756,60 @@ mod tests {
         assert!(
             state.correlated_ids.is_empty(),
             "an anchor with no timestamp must produce an empty correlation set"
+        );
+    }
+
+    /// Regression test for Bug #2: `apply_filters()` must preserve the
+    /// selected entry by **entry ID**, not by display-position integer.
+    ///
+    /// Before the fix, applying a filter that shifted display positions would
+    /// silently point `selected_index` at a different (wrong) entry because
+    /// the old code only bounds-checked the integer index rather than
+    /// re-finding the previously selected entry by its stable ID.
+    #[test]
+    fn test_apply_filters_preserves_selection_by_id() {
+        let mut state = AppState::new(vec![], false);
+
+        // Five entries with alternating Info / Error severities.
+        // IDs: 0=Info, 1=Error, 2=Info, 3=Error, 4=Info
+        for id in 0u64..5 {
+            let mut e = make_entry(id, id as i64 * 60);
+            e.severity = if id % 2 == 0 {
+                Severity::Info
+            } else {
+                Severity::Error
+            };
+            state.entries.push(e);
+        }
+
+        // With no active filter every entry passes; display positions 0..4.
+        state.apply_filters();
+        assert_eq!(state.filtered_indices, vec![0, 1, 2, 3, 4]);
+
+        // Select display position 3 → entries[3] → id = 3 (Error).
+        state.selected_index = Some(3);
+        assert_eq!(
+            state.selected_entry().map(|e| e.id),
+            Some(3),
+            "pre-filter: selected entry must be id=3"
+        );
+
+        // Apply an Error-only filter.
+        // After filtering, filtered_indices = [1, 3] (the two Error entries),
+        // so entry id=3 is now at display position 1.
+        state.filter_state.severity_levels.clear();
+        state.filter_state.severity_levels.insert(Severity::Error);
+        state.apply_filters();
+
+        assert_eq!(
+            state.selected_entry().map(|e| e.id),
+            Some(3),
+            "after filter: selected entry must still be id=3 (not shifted to a different entry)"
+        );
+        assert_eq!(
+            state.selected_index,
+            Some(1),
+            "after filter: selected_index must be 1 (id=3 is now at display position 1)"
         );
     }
 }

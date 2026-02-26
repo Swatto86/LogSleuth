@@ -111,9 +111,13 @@ impl eframe::App for LogSleuthApp {
                     };
                     self.state.scan_summary = Some(summary);
                     self.state.scan_in_progress = false;
-                    // Entries were sorted chronologically by the background
-                    // thread before streaming, so only filters need applying.
-                    self.state.apply_filters();
+                    // Sort chronologically before applying filters.
+                    // For a fresh scan the entries are already sorted by the background
+                    // thread (cheap timsort no-op).  For append scans the new entries
+                    // are pre-sorted among themselves but must be interleaved with the
+                    // existing sorted entries — sort_entries_chronologically handles both
+                    // cases correctly and calls apply_filters() when done.
+                    self.state.sort_entries_chronologically();
                     // Persist the session so the next launch can restore this state.
                     self.state.save_session();
                 }
@@ -146,9 +150,6 @@ impl eframe::App for LogSleuthApp {
                 crate::core::model::TailProgress::NewEntries { entries } => {
                     self.state.entries.extend(entries);
                     self.state.apply_filters();
-                    if self.state.tail_auto_scroll {
-                        self.state.tail_scroll_to_bottom = true;
-                    }
                 }
                 crate::core::model::TailProgress::FileError { path, message } => {
                     let msg = format!("Tail warning — {}: {}", path.display(), message);

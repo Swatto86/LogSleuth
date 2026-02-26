@@ -444,6 +444,31 @@ Added an optional `log_locations` array field to all TOML format profiles. These
 
 ---
 
+## Increment 24: 3 Bug Fixes, 2 Dead-Code Removals, 1 Regression Test
+**Status: COMPLETE**
+
+### Bug fixes
+
+- [x] `src/gui.rs` — **Append scans broke chronological order in the unified timeline.** When "Add File(s)…" was used to append additional files to an existing session, the `ParsingCompleted` handler called `apply_filters()` instead of `sort_entries_chronologically()`. The background thread sorts entries within the newly appended batch, but `apply_filters()` does not re-sort entries already in `state.entries`. The result was all newly added entries appearing at the bottom of the timeline in a separate sorted block rather than being interleaved chronologically with existing entries. Fixed by calling `state.sort_entries_chronologically()` (which performs a stable sort across all of `state.entries`, then calls `apply_filters()`) so the full combined entry set is always in chronological order after every append.
+
+- [x] `src/app/state.rs` — **`apply_filters()` silently shifted the timeline selection to the wrong entry when a filter change altered display positions.** The code saved `selected_index` as a bare integer display-position before recomputing `filtered_indices`, then bounds-checked it against the new list length and used it directly. Any filter change that removed rows above the selected entry would point `selected_index` at a completely different entry with no indication. Fixed by capturing `selected_id = self.selected_entry().map(|e| e.id)` before the filter recompute and restoring `selected_index` afterwards by re-finding that ID via `.position(|&i| self.entries.get(i).is_some_and(|e| e.id == id))`, preserving the selection by stable entry ID.
+
+- [x] `src/core/parser.rs` — **`MultilineMode::Raw` produced a spurious `LineParse` error for every non-matching line.** Raw mode is designed to emit each line as a separate entry regardless of whether it matches the profile regex; any non-matching line is packaged as a plain-text entry. The old error-tracking condition (`if profile.multiline_mode != Continuation || entries.is_empty()`) treated Raw the same as Skip and recorded a `LineParse` error in addition to creating the entry. This inflated parse error counts and polluted the scan summary. Fixed with an explicit `match` on `multiline_mode`: `Raw => false` (no error), `Skip => true`, `Continuation => entries.is_empty()`.
+
+### Dead-code removal
+
+- [x] `src/app/state.rs` + `src/gui.rs` + `src/ui/panels/timeline.rs` — **`AppState::tail_scroll_to_bottom` was dead state that was never acted upon.** The field was set in `gui.rs` when new tail entries arrived with auto-scroll enabled, and cleared in `timeline.rs` — but `timeline.rs` never used its value to trigger anything. The actual auto-scroll behaviour has always been driven entirely by `ScrollArea::stick_to_bottom(tail_active && tail_auto_scroll)`. Removed the field from the struct, `new()`, and `clear()`; removed the conditional set in `gui.rs`; removed the unused read/clear block in `timeline.rs`.
+
+- [x] `src/core/model.rs` — **`ScanSummary::entries_by_severity: HashMap<Severity, usize>` was a dead field that was never populated or read.** The field was present on the struct (deriving `Default`) but `app::scan` always constructed `ScanSummary` via `..Default::default()`, leaving the map empty. Neither `ui::panels::summary` nor `ui::panels::log_summary` (nor any other UI panel) read it — both compute their own severity counts from `filtered_indices` at render time. Removed the field entirely; the `..Default::default()` construction in `scan.rs` continues to work without change.
+
+### Regression test
+
+- [x] `src/app/state.rs` — Added `test_apply_filters_preserves_selection_by_id`: creates five entries with alternating Info/Error severities, selects entry id=3 at display position 3 (unfiltered), applies an Error-only filter which shifts id=3 to display position 1, and asserts that `selected_entry().id == 3` and `selected_index == Some(1)`. This test fails on the pre-fix code and passes on the corrected `apply_filters()`.
+
+**Test results: 58 unit tests + 14 E2E tests = 72 total, all passing**
+
+---
+
 ## Future Enhancements
 
 ### High Priority
