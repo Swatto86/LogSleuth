@@ -46,7 +46,7 @@ fn e2e_discovers_fixture_log_files() {
         .join("fixtures");
 
     let config = DiscoveryConfig::default();
-    let (files, warnings) = discover_files(&fixtures_dir, &config, |_, _| {}).unwrap();
+    let (files, warnings, _) = discover_files(&fixtures_dir, &config, |_, _| {}).unwrap();
 
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -80,10 +80,10 @@ fn e2e_discovers_nonexistent_root_returns_error() {
     );
 }
 
-/// Discovery respects the max_files limit and returns MaxFilesExceeded.
+/// When more files exist than the limit, discovery succeeds and truncates
+/// to the `max_files` most recently modified entries, adding a warning.
 #[test]
-fn e2e_max_files_exceeded_returns_error() {
-    use logsleuth::util::error::DiscoveryError;
+fn e2e_max_files_truncates_to_most_recent() {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures");
@@ -92,11 +92,20 @@ fn e2e_max_files_exceeded_returns_error() {
         max_files: 1,
         ..Default::default()
     };
-    let result = discover_files(&fixtures_dir, &config, |_, _| {});
+    let (files, warnings, total_found) = discover_files(&fixtures_dir, &config, |_, _| {}).unwrap();
+
+    assert_eq!(files.len(), 1, "should return exactly 1 file");
     assert!(
-        matches!(result, Err(DiscoveryError::MaxFilesExceeded { .. })),
-        "expected MaxFilesExceeded, got {result:?}"
+        total_found >= 1,
+        "total_found must reflect files before truncation"
     );
+    // When there is more than one fixture file, a warning must be emitted.
+    if total_found > 1 {
+        assert!(
+            !warnings.is_empty(),
+            "a truncation warning must be present when files were dropped"
+        );
+    }
 }
 
 /// Excluded directory patterns prevent descent into those directories.
@@ -115,7 +124,7 @@ fn e2e_excludes_directory_by_pattern() {
         ..Default::default()
     };
 
-    let (files, _) = discover_files(root, &config, |_, _| {}).unwrap();
+    let (files, _, _) = discover_files(root, &config, |_, _| {}).unwrap();
     let names: Vec<_> = files
         .iter()
         .map(|f| f.path.file_name().unwrap().to_str().unwrap().to_string())

@@ -357,7 +357,15 @@ pub enum ScanProgress {
     FileDiscovered { path: PathBuf, files_found: usize },
 
     /// Discovery phase completed.
-    DiscoveryCompleted { total_files: usize },
+    ///
+    /// `total_files`  — files that will actually be processed (after the limit
+    ///                  is applied and truncation to most-recently-modified).
+    /// `total_found`  — raw count of matching files before any limit was applied.
+    ///                  Equals `total_files` when no truncation occurred.
+    DiscoveryCompleted {
+        total_files: usize,
+        total_found: usize,
+    },
 
     /// Parsing phase started.
     ParsingStarted { total_files: usize },

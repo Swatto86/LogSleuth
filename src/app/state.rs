@@ -55,6 +55,11 @@ pub struct AppState {
     /// Whether to show the About dialog.
     pub show_about: bool,
 
+    /// Whether the UI is rendering in dark mode (true) or light mode (false).
+    /// Persists across `clear()` calls — it is a user preference, not scan state.
+    /// Applied every frame via `ctx.set_visuals()` in `gui.rs`.
+    pub dark_mode: bool,
+
     /// Whether debug mode is enabled.
     pub debug_mode: bool,
 
@@ -150,6 +155,32 @@ pub struct AppState {
     /// Consumed by `gui.rs` WITHOUT calling `clear()` first (unlike `pending_scan`)
     /// so the restored filter/colour/bookmark state is preserved during the re-scan.
     pub initial_scan: Option<PathBuf>,
+
+    // -------------------------------------------------------------------------
+    // Options / ingest limits
+    // -------------------------------------------------------------------------
+    /// Maximum number of files to ingest in a single directory scan.
+    /// User-configurable via the Options dialog; defaults to DEFAULT_MAX_FILES.
+    /// Changes are applied to the next scan.
+    pub max_files_limit: usize,
+
+    /// Whether the Options dialog is currently open.
+    pub show_options: bool,
+
+    /// Total files found during the last discovery pass **before** the ingest
+    /// limit was applied. Equals `discovered_files.len()` when no truncation
+    /// occurred. Used to display "Found N, showing M" in the status bar.
+    pub total_files_found: usize,
+
+    /// Set by the discovery panel "Open Log(s)..." button to request starting
+    /// a fresh session with a user-selected list of individual files.
+    /// Consumed and cleared by `gui.rs` (calls `clear()` then `start_scan_files`).
+    pub pending_replace_files: Option<Vec<PathBuf>>,
+
+    /// Set by any UI panel to request a full session reset: clears all scan
+    /// results **and** the selected directory path, returning to the initial
+    /// "no directory selected" state. Consumed and cleared by `gui.rs`.
+    pub request_new_session: bool,
 }
 
 impl AppState {
@@ -170,6 +201,7 @@ impl AppState {
             show_summary: false,
             show_log_summary: false,
             show_about: false,
+            dark_mode: true, // default to dark; matches egui's own default
             debug_mode,
             pending_scan: None,
             request_cancel: false,
@@ -188,6 +220,11 @@ impl AppState {
             correlated_ids: HashSet::new(),
             session_path: None,
             initial_scan: None,
+            max_files_limit: crate::util::constants::DEFAULT_MAX_FILES,
+            show_options: false,
+            total_files_found: 0,
+            pending_replace_files: None,
+            request_new_session: false,
         }
     }
 
@@ -276,8 +313,18 @@ impl AppState {
     ///
     /// Used when starting the live tail watcher so tail entry IDs continue
     /// from where the scan left off and do not collide with existing IDs.
+    ///
+    /// Note: entries are sorted chronologically after a scan, so
+    /// `entries.last()` is the most recent by *timestamp*, not the
+    /// highest by *ID*. We must iterate all entries to find the true
+    /// maximum ID, otherwise tail entries can collide with scan entries.
     pub fn next_entry_id(&self) -> u64 {
-        self.entries.last().map(|e| e.id + 1).unwrap_or(0)
+        self.entries
+            .iter()
+            .map(|e| e.id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0)
     }
 
     /// Assign a palette colour to `path` if it does not already have one.
@@ -505,6 +552,19 @@ impl AppState {
         // tail_auto_scroll preference is intentionally preserved across clears.
         // initial_scan is cleared on each new scan; session_path is never cleared.
         self.initial_scan = None;
+        // Reset per-scan discovery counters.
+        self.total_files_found = 0;
+        self.pending_replace_files = None;
+        self.request_new_session = false;
+    }
+
+    /// Reset to the initial blank state: clears everything `clear()` clears
+    /// **plus** the selected scan path, leaving the app as if it was freshly
+    /// launched with no directory chosen.
+    pub fn new_session(&mut self) {
+        self.clear();
+        self.scan_path = None;
+        self.status_message = "Ready. Open a directory to begin scanning.".to_string();
     }
 
     // -------------------------------------------------------------------------

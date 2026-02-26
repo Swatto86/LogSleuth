@@ -35,15 +35,58 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         if ui.button("Cancel").clicked() {
             state.request_cancel = true;
         }
-    } else if ui
-        .add_enabled(
-            !state.scan_in_progress,
-            egui::Button::new("Open Directory\u{2026}"),
-        )
-        .clicked()
-    {
-        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            state.pending_scan = Some(path);
+    } else {
+        // Two open buttons on the same row.
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    !state.scan_in_progress,
+                    egui::Button::new("Open Directory\u{2026}"),
+                )
+                .on_hover_text("Scan a directory for log files")
+                .clicked()
+            {
+                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                    state.pending_scan = Some(path);
+                }
+            }
+            if ui
+                .add_enabled(
+                    !state.scan_in_progress,
+                    egui::Button::new("Open Log(s)\u{2026}"),
+                )
+                .on_hover_text("Select individual log files to open as a new session")
+                .clicked()
+            {
+                if let Some(files) = rfd::FileDialog::new()
+                    .add_filter("Log files", &["log", "txt", "log.1", "log.2", "log.3"])
+                    .pick_files()
+                {
+                    state.pending_replace_files = Some(files);
+                }
+            }
+        });
+
+        // Clear Session — resets everything including the selected directory.
+        // Disabled while a scan is running.
+        let has_session = state.scan_path.is_some() || !state.entries.is_empty();
+        if has_session {
+            ui.add_space(4.0);
+            if ui
+                .add_enabled(
+                    !state.scan_in_progress,
+                    egui::Button::new(
+                        egui::RichText::new("Clear Session")
+                            .small()
+                            .color(egui::Color32::from_rgb(156, 163, 175)),
+                    )
+                    .frame(false),
+                )
+                .on_hover_text("Reset to a blank state with no directory or files selected")
+                .clicked()
+            {
+                state.request_new_session = true;
+            }
         }
     }
 

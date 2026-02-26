@@ -84,12 +84,12 @@ impl Default for DiscoveryConfig {
 ///
 /// # Fatal errors
 /// Returns `Err` only if the root path is invalid (`RootNotFound`,
-/// `NotADirectory`) or the `max_files` limit is exceeded.
+/// `NotADirectory`).
 pub fn discover_files<F>(
     root: &Path,
     config: &DiscoveryConfig,
     mut on_file_found: F,
-) -> Result<(Vec<DiscoveredFile>, Vec<String>), DiscoveryError>
+) -> Result<(Vec<DiscoveredFile>, Vec<String>, usize), DiscoveryError>
 where
     F: FnMut(&Path, usize),
 {
@@ -192,11 +192,6 @@ where
             continue;
         }
 
-        // Enforce max_files *before* adding to the list.
-        if files.len() >= max_files {
-            return Err(DiscoveryError::MaxFilesExceeded { max: max_files });
-        }
-
         // Collect file metadata.
         let metadata = match entry.metadata() {
             Ok(m) => m,
@@ -236,13 +231,44 @@ where
         files.push(discovered);
     }
 
+    let total_found = files.len();
+
+    // If more files were found than the configured limit, keep only the
+    // `max_files` most recently modified ones so the user always sees the
+    // freshest content rather than an arbitrary subset.
+    if total_found > max_files {
+        // Sort descending by modification time (None floats to the end so
+        // files without an mtime are considered oldest and dropped first).
+        files.sort_unstable_by(|a, b| match (b.modified, a.modified) {
+            (Some(bm), Some(am)) => bm.cmp(&am),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        files.truncate(max_files);
+
+        warnings.push(format!(
+            "{total_found} log files were found but the ingest limit is {max_files}. \
+             Only the {max_files} most recently modified files have been loaded. \
+             Raise the limit in Options if you need more."
+        ));
+
+        tracing::info!(
+            total_found,
+            limit = max_files,
+            "File list truncated to most recently modified files"
+        );
+    }
+
     tracing::debug!(
-        files_found = files.len(),
+        total_found,
+        files_loaded = files.len(),
         warnings = warnings.len(),
         "Discovery complete"
     );
 
-    Ok((files, warnings))
+    // Third element: total files found before the limit was applied.
+    Ok((files, warnings, total_found))
 }
 
 // =============================================================================
@@ -334,7 +360,7 @@ mod tests {
     fn test_discovers_log_files() {
         let dir = make_temp_tree();
         let config = DiscoveryConfig::default();
-        let (files, warnings) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
+        let (files, warnings, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
 
         // Should find app.log, service.log, readme.txt, sub/sub.log
         // NOT backup.log.gz, NOT node_modules/module.log
@@ -367,7 +393,7 @@ mod tests {
             max_depth: 0,
             ..Default::default()
         };
-        let (files, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
+        let (files, _, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
         assert_eq!(files.len(), 0);
     }
 
@@ -378,7 +404,7 @@ mod tests {
             max_depth: 1, // root files only, no subdirectory descent
             ..Default::default()
         };
-        let (files, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
+        let (files, _, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
         let paths: Vec<_> = files
             .iter()
             .map(|f| f.path.file_name().unwrap().to_str().unwrap().to_string())
@@ -389,18 +415,33 @@ mod tests {
         );
     }
 
+    /// When more files are found than `max_files`, discovery must succeed (not
+    /// error), return exactly `max_files` entries, include them in a warning,
+    /// and expose the raw `total_found` count via the third tuple element.
     #[test]
-    fn test_max_files_exceeded() {
-        let dir = make_temp_tree();
+    fn test_max_files_truncates_gracefully() {
+        let dir = make_temp_tree(); // creates 4 matching files
         let config = DiscoveryConfig {
-            max_files: 1,
+            max_files: 2,
             ..Default::default()
         };
-        let result = discover_files(dir.path(), &config, |_, _| {});
-        assert!(matches!(
-            result,
-            Err(DiscoveryError::MaxFilesExceeded { .. })
-        ));
+        let (files, warnings, total_found) =
+            discover_files(dir.path(), &config, |_, _| {}).unwrap();
+        assert_eq!(files.len(), 2, "should return exactly max_files entries");
+        assert_eq!(
+            total_found, 4,
+            "total_found should count all 4 matching files"
+        );
+        assert!(
+            !warnings.is_empty(),
+            "a truncation warning must be emitted when files are dropped"
+        );
+        // Verify the warning mentions both the total and the limit.
+        let warning_text = warnings.join(" ");
+        assert!(
+            warning_text.contains('4') && warning_text.contains('2'),
+            "warning should mention total and limit, got: {warning_text}"
+        );
     }
 
     #[test]
@@ -427,7 +468,7 @@ mod tests {
         let dir = make_temp_tree();
         let config = DiscoveryConfig::default();
         let mut callback_count = 0usize;
-        let (files, _) = discover_files(dir.path(), &config, |_, _| {
+        let (files, _, _) = discover_files(dir.path(), &config, |_, _| {
             callback_count += 1;
         })
         .unwrap();
@@ -447,7 +488,7 @@ mod tests {
             large_file_threshold: 999_999_999, // absurdly large so no real file qualifies
             ..Default::default()
         };
-        let (files, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
+        let (files, _, _) = discover_files(dir.path(), &config, |_, _| {}).unwrap();
         assert!(
             !files[0].is_large,
             "tiny.log should not be flagged as large"
@@ -457,7 +498,7 @@ mod tests {
             large_file_threshold: 0, // everything is large
             ..Default::default()
         };
-        let (files2, _) = discover_files(dir.path(), &config2, |_, _| {}).unwrap();
+        let (files2, _, _) = discover_files(dir.path(), &config2, |_, _| {}).unwrap();
         assert!(
             files2[0].is_large,
             "all files should be large with threshold=0"
@@ -468,7 +509,7 @@ mod tests {
     fn test_file_metadata_collected() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("meta.log"), "hello world").unwrap();
-        let (files, _) =
+        let (files, _, _) =
             discover_files(dir.path(), &DiscoveryConfig::default(), |_, _| {}).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].size, 11, "size should match 'hello world'");

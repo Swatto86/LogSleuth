@@ -82,13 +82,14 @@ LogSleuth/
 |   |   +-- panels/
 |   |   |   +-- mod.rs
 |   |   +-- about.rs         # About dialog: centred modal window (version from CARGO_PKG_VERSION, GitHub link, MIT licence); show_about flag on AppState; ⓘ button right-aligned in menu bar (placed AFTER File/View menus so layout allocation is correct)
-|   |   |   +-- discovery.rs     # Directory picker, scan controls, file list (max_height 360 px); profile label shows log_locations as hover tooltip
+|   |   |   +-- discovery.rs     # Directory picker + Open Log(s) button, scan controls, file list (max_height 360 px); profile label shows log_locations as hover tooltip
+|   |   |   +-- options.rs       # Options dialog: runtime-configurable ingest limit (max_files_limit on AppState); logarithmic slider bounded by ABSOLUTE_MAX_FILES; opened via Edit > Options...
 |   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
 |   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
 |   |   |   +-- filters.rs       # Filter controls sidebar: two button rows (Row 1: severity presets — Errors only/Errors+Warn/Err+Warn+15m/Clear; Row 2: Summary/Bookmarks/clear bm); severity checkboxes; text/regex inputs; fuzzy ~ toggle; relative time quick-buttons (15m/1h/6h/24h) + custom input + rolling-window live indicator; source file checklist with coloured dot + Solo button + real-time search box (shown >8 files); Select All/None on visible subset; "● Rolling window (live)" indicator; "Copy" clipboard button at entry-count footer (disabled when empty)
-|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=380 (min_width enforced on SidePanel)
+|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=460 (exact_width, non-resizable SidePanel)
 |   +-- platform/
 |   |   +-- mod.rs
 |   |   +-- fs.rs                # FileReader trait + OS implementations
@@ -181,7 +182,7 @@ LogSleuth/
 | `TailManager::stop_tail()` | `app::tail` | UI layer |
 | `TailManager::is_active() -> bool` | `app::tail` | UI layer |
 | `TailManager::poll_progress() -> Vec<TailProgress>` | `app::tail` | UI layer (called from `eframe::App::update`) |
-| `discover_files(root, config, on_file_found) -> Result<(Vec<DiscoveredFile>, Vec<String>)>` | `core::discovery` | `app::scan` background thread |
+| `discover_files(root, config, on_file_found) -> Result<(Vec<DiscoveredFile>, Vec<String>, usize)>` | `core::discovery` | `app::scan` background thread. Third element is raw file count before ingest limit. When count > limit, files are sorted by mtime descending and truncated. |
 | `parse_content(content, path, profile, config, id_start) -> ParseResult` | `core::parser` | `app::scan` background thread |
 | `profile::auto_detect(file_name, sample_lines, profiles) -> Option<DetectionResult>` | `core::profile` | `app::scan` background thread |
 | `apply_filters(entries, state) -> Vec<usize>` | `core::filter` | App layer |

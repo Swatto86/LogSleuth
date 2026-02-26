@@ -178,7 +178,7 @@ fn run_scan(
     send!(ScanProgress::DiscoveryStarted);
 
     let tx_discovery = tx.clone();
-    let (discovered_files, warnings) =
+    let (discovered_files, warnings, total_found) =
         match discovery::discover_files(&root, &config, |path, count| {
             tracing::trace!(file = %path.display(), count, "File discovered");
             let _ = tx_discovery.send(ScanProgress::FileDiscovered {
@@ -201,7 +201,15 @@ fn run_scan(
 
     check_cancel!();
 
-    run_parse_pipeline(discovered_files, profiles, parse_config, tx, cancel, false);
+    run_parse_pipeline(
+        discovered_files,
+        profiles,
+        parse_config,
+        tx,
+        cancel,
+        false,
+        total_found,
+    );
 }
 
 // =============================================================================
@@ -221,6 +229,9 @@ fn run_parse_pipeline(
     tx: mpsc::Sender<ScanProgress>,
     cancel: Arc<AtomicBool>,
     append: bool,
+    // Total files found during discovery before any limit was applied.
+    // For user-selected file lists this equals `discovered_files.len()`.
+    total_found: usize,
 ) {
     macro_rules! send {
         ($msg:expr) => {
@@ -271,7 +282,10 @@ fn run_parse_pipeline(
         }
     }
 
-    send!(ScanProgress::DiscoveryCompleted { total_files });
+    send!(ScanProgress::DiscoveryCompleted {
+        total_files,
+        total_found,
+    });
 
     // Send file list. Append mode extends UI list; normal mode replaces it.
     if append {
@@ -496,7 +510,18 @@ fn run_files_scan(
         }
     }
 
-    run_parse_pipeline(discovered, profiles, parse_config, tx, cancel, true);
+    // For user-selected files there is no discovery limit, so total_found
+    // equals the number of files that were successfully stat'd.
+    let total_found = discovered.len();
+    run_parse_pipeline(
+        discovered,
+        profiles,
+        parse_config,
+        tx,
+        cancel,
+        true,
+        total_found,
+    );
 }
 
 // =============================================================================
@@ -522,7 +547,7 @@ fn read_sample_lines(path: &Path, max_lines: usize) -> Vec<String> {
     let lines: Vec<String> = BufReader::new(file)
         .lines()
         .take(max_lines)
-        .filter_map(|l| l.ok())
+        .filter_map(Result::ok)
         .collect();
 
     // If we got lines, we're done (UTF-8 file).
@@ -537,7 +562,7 @@ fn read_sample_lines(path: &Path, max_lines: usize) -> Vec<String> {
                 return content
                     .lines()
                     .take(max_lines)
-                    .map(|s| s.to_string())
+                    .map(ToString::to_string)
                     .collect();
             }
             Vec::new()
