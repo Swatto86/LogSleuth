@@ -24,14 +24,24 @@ log_locations = [
 
 [detection]
 file_patterns = [
+    # Service logs
     "Svc.Veeam*.log",
     "Svc.Veeam*_[0-9]*.log",
+    # Job logs
     "Job.*.log",
+    "BackupCopy.*.log",
+    # Agent and endpoint logs
     "Agent.*.log",
+    "EP.*.log",
+    "Endpoint.*.log",
+    # Named service logs
     "VeeamBackupManager.log",
     "VeeamPowerShell.log",
     "CatalogReplicationJob.log",
     "Veeam.WebApp.log",
+    # Catch-all for other top-level Veeam service logs whose names vary by version
+    "Veeam*.log",
+    "Mount.*.log",
 ]
 # Matches the opening bracket-timestamp pattern unique to VBR logs
 content_match = '^\[\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2}\]\s<\d+>'
@@ -44,7 +54,16 @@ multiline_mode = "continuation"
 
 [severity_mapping]
 critical = ["Critical", "Fatal"]
-error = ["Error", "Failed"]
+error = ["Error"]
 warning = ["Warning", "Warn"]
-info = ["Info"]
-debug = ["Debug", "Verbose"]
+info = ["Info", "Success"]
+debug = ["Debug", "Verbose", "Trace"]
+
+# Regex-based second-chance classification applied when the captured level
+# string is not in severity_mapping (e.g. vendor-specific tokens) or for
+# continuation lines that become plain message text.
+[severity_override]
+critical = ['\bFATAL\b', '\bCRITICAL\b']
+error    = ['\bFailed\b', '\bException\b', '\bError\b', 'Unable to', 'Cannot ']
+warning  = ['\bWarn(ing)?\b', '\bTimeout\b', '\bRetry\b']
+info     = ['\bSucceed\b', '\bCompleted\b']

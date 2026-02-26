@@ -363,13 +363,22 @@ fn run_parse_pipeline(
 
         check_cancel!();
 
-        let parse_result = parser::parse_content(
+        let mut parse_result = parser::parse_content(
             &content,
             &file.path,
             matched_profile,
             &parse_config,
             entry_id,
         );
+
+        // Stamp the source file's OS last-modified time on every entry.
+        // The time-range filter uses file_modified (not the parsed log timestamp)
+        // so filtering by "last 15 minutes" correctly includes plain-text entries
+        // and any log whose embedded timestamps are missing or malformed.
+        let file_mtime = file.modified;
+        for entry in &mut parse_result.entries {
+            entry.file_modified = file_mtime;
+        }
 
         let entry_count = parse_result.entries.len();
         let error_count = parse_result.errors.len();

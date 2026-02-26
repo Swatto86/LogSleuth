@@ -551,6 +551,7 @@ fn make_entry(id: u64, severity: Severity, message: &str, ts_offset_secs: i64) -
         thread: None,
         component: None,
         profile_id: "test".to_string(),
+        file_modified: None,
     }
 }
 

@@ -149,6 +149,7 @@ pub fn parse_content(
                 message,
                 raw_text: line.to_string(),
                 profile_id: profile.id.clone(),
+                file_modified: None, // set by app layer after parsing
             };
 
             entries.push(entry);
@@ -181,6 +182,7 @@ pub fn parse_content(
                         message: line.to_string(),
                         raw_text: line.to_string(),
                         profile_id: profile.id.clone(),
+                        file_modified: None, // set by app layer after parsing
                     });
                     current_id += 1;
                 }

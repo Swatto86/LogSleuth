@@ -197,17 +197,23 @@ fn matches_all(entry: &LogEntry, filter: &FilterState, text_lower: &str) -> bool
         return false;
     }
 
-    // Time range filter
+    // Time range filter — uses the source file's OS last-modified time, NOT the
+    // parsed log timestamp.  This means:
+    //   - Files modified within the window are fully included regardless of
+    //     whether their log lines have parseable timestamps.
+    //   - Plain-text / fallback entries (no timestamp capture) are included
+    //     whenever their file is active within the window.
+    //   - Severity and text filters still apply to the log content itself.
     if let Some(ref start) = filter.time_start {
-        match entry.timestamp {
-            Some(ts) if ts < *start => return false,
-            None => return false, // Entries without timestamps excluded from time filters
+        match entry.file_modified {
+            Some(mtime) if mtime < *start => return false,
+            None => return false, // No file-mtime — exclude from time-bounded views
             _ => {}
         }
     }
     if let Some(ref end) = filter.time_end {
-        match entry.timestamp {
-            Some(ts) if ts > *end => return false,
+        match entry.file_modified {
+            Some(mtime) if mtime > *end => return false,
             None => return false,
             _ => {}
         }
@@ -272,6 +278,7 @@ mod tests {
             message: message.to_string(),
             raw_text: message.to_string(),
             profile_id: "test".to_string(),
+            file_modified: None,
         }
     }
 
@@ -403,8 +410,9 @@ mod tests {
         let base = chrono::Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
         let mut old_entry = make_entry(1, Severity::Info, "old message");
         let mut new_entry = make_entry(2, Severity::Info, "new message");
-        old_entry.timestamp = Some(base);
-        new_entry.timestamp = Some(base + chrono::Duration::hours(1));
+        // Time filter uses file_modified (OS mtime), not the parsed log timestamp.
+        old_entry.file_modified = Some(base);
+        new_entry.file_modified = Some(base + chrono::Duration::hours(1));
         let entries = vec![old_entry, new_entry];
 
         let filter = FilterState {
@@ -412,26 +420,27 @@ mod tests {
             ..Default::default()
         };
         let result = apply_filters(&entries, &filter);
-        // Only the newer entry is after the start bound
+        // Only the newer file mtime is after the start bound
         assert_eq!(result, vec![1]);
     }
 
     #[test]
-    fn test_time_filter_excludes_entries_without_timestamps() {
+    fn test_time_filter_excludes_entries_without_file_mtime() {
         use chrono::TimeZone;
         let base = chrono::Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-        let mut ts_entry = make_entry(1, Severity::Info, "has timestamp");
-        let no_ts_entry = make_entry(2, Severity::Info, "no timestamp");
-        ts_entry.timestamp = Some(base + chrono::Duration::hours(1));
-        // no_ts_entry.timestamp stays None
-        let entries = vec![ts_entry, no_ts_entry];
+        let mut mtime_entry = make_entry(1, Severity::Info, "file has mtime");
+        let no_mtime_entry = make_entry(2, Severity::Info, "no file mtime");
+        // Time filter uses file_modified, not parsed timestamp.
+        mtime_entry.file_modified = Some(base + chrono::Duration::hours(1));
+        // no_mtime_entry.file_modified stays None
+        let entries = vec![mtime_entry, no_mtime_entry];
 
         let filter = FilterState {
             time_start: Some(base),
             ..Default::default()
         };
         let result = apply_filters(&entries, &filter);
-        // Entry without a timestamp must be excluded when a time bound is active
+        // Entry without a file mtime must be excluded when a time bound is active
         assert_eq!(result, vec![0]);
     }
 

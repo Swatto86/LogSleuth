@@ -469,7 +469,42 @@ Added an optional `log_locations` array field to all TOML format profiles. These
 
 ---
 
-## Future Enhancements
+## Increment 25: Live Tail Timestamp Fix, Date Filter UX, Veeam Profile Improvements
+**Status: COMPLETE**
+
+### Bug fixes
+
+- [x] `src/app/tail.rs` — **Live tail entries with no parsed timestamp were silently swallowed by the relative-time filter.** `filter.rs` unconditionally returns `false` for entries whose `timestamp` is `None` when a time filter (`time_start` / `time_end`) is active. Files assigned the `plain-text` fallback profile have no `timestamp` capture group, so every entry arrives with `timestamp: None`. With the "last 15 minutes" filter set, *all* plain-text tail entries were excluded — the user saw "watching N files" in the status bar but zero new entries appeared in the timeline. Fixed by back-filling `entry.timestamp = Some(Utc::now())` in `run_tail_watcher` for any entry where the parser produced `None`. This is accurate: the entry was just appended to the file, so the observation time is correct. The fix also improves sort order (these entries now appear chronologically with other recent events rather than sorted to end-of-timeline). Added `use chrono::Utc;` to imports.
+
+### UI improvements
+
+- [x] `src/ui/panels/discovery.rs` — **Date filter moved above the Open Directory / Open Log(s) buttons.** Previously the date filter appeared below the open buttons, so users would often miss it and skip setting it before triggering a scan. It now appears between the current-path label and the scan controls, matching the "configure before you scan" workflow. Added an explanatory sub-label: *"Only scans files modified on or after this date. Leave blank to scan all files."* Feedback label wording updated from "Files modified on or after… UTC" to "Scanning files modified on or after… UTC" for clarity.
+
+### Profile improvements
+
+- [x] `profiles/veeam_vbr.toml` — Expanded `[detection] file_patterns` to cover more Veeam Backup components found in `%ProgramData%\Veeam\Backup\`: added `BackupCopy.*.log`, `EP.*.log`, `Endpoint.*.log`, `Veeam*.log` (catches `VeeamCatalog.log`, `VeeamMount.log`, etc.), and `Mount.*.log`. The filename-pattern +0.2 confidence bonus now triggers for a much wider set of VBR-format files.
+- [x] `profiles/veeam_vbr.toml` — Added `[severity_override]` section with regex patterns (`\bFailed\b`, `\bException\b`, `Unable to`, `Cannot `, etc.) as a second-chance classifier. This handles: (a) continuation lines whose message text contains severity indicators, (b) level strings not in `severity_mapping` (e.g. "Success", "Trace"), and (c) Veeam log lines parsed by the plain-text fallback where `infer_severity_from_message` might produce `Info` instead of `Error`.
+- [x] `profiles/veeam_vbr.toml` — Moved `"Failed"` out of `severity_mapping.error` (where it could only match if the captured `level` field was literally "Failed", which VBR never emits) and into `severity_override` as a regex pattern `\bFailed\b` (where it correctly fires on message text). Added `"Success"` → Info and `"Trace"` → Debug to the severity mapping for completeness.
+
+**Test results: 58 unit tests + 14 E2E tests = 72 total, all passing**
+
+---
+
+## Increment 26: File-mtime-based Time Filtering
+**Status: COMPLETE**
+
+The relative-time filter (15m / 1h / 6h / 24h) now uses the **OS last-modified time of the source file** rather than the parsed log timestamp embedded in each log line.  All other filters (severity, text, regex, source-file) still operate on log content.
+
+- [x] `core/model.rs` — Added `file_modified: Option<DateTime<Utc>>` to `LogEntry` (`#[serde(skip)]`; not exported to CSV/JSON). All construction sites initialize to `None`; app layer stamps the real value post-parse.
+- [x] `core/filter.rs` — `matches_all()` time-range guard now compares `entry.file_modified` instead of `entry.timestamp`. An entry passes the time filter iff its source file was modified within the window.
+- [x] `core/parser.rs` — Both `LogEntry` construction sites initialize `file_modified: None` (app-layer responsibility, keeps core I/O-free).
+- [x] `app/scan.rs` — After `parse_content`, stamps `entry.file_modified = file.modified` (OS mtime captured at discovery time) on every entry for the file.
+- [x] `app/tail.rs` — Expands the per-tick `metadata()` call to capture both `.len()` and `.modified()`. All entries from a tail tick receive `entry.file_modified = current_file_mtime`. Timestamp back-fill (`Utc::now()` for `None`-timestamp entries) retained.
+- [x] All test `make_entry()` helpers updated; time-filter unit tests updated to set `file_modified`; test renamed `test_time_filter_excludes_entries_without_file_mtime`.
+
+**Test results: 58 unit tests + 14 E2E tests = 72 total, all passing**
+
+---
 
 ### High Priority
 - [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*

@@ -699,6 +699,7 @@ mod tests {
             message: String::new(),
             raw_text: String::new(),
             profile_id: "test".to_string(),
+            file_modified: None,
         }
     }
 

@@ -26,6 +26,7 @@
 
 use crate::core::model::{FormatProfile, TailProgress};
 use crate::core::parser::{self, ParseConfig};
+use chrono::Utc;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -225,10 +226,15 @@ fn run_tail_watcher(
             }
 
             // -----------------------------------------------------------------
-            // 1. Check current file size.
+            // 1. Check current file size and last-modified time.
+            //    Both come from a single metadata() call to avoid TOCTOU.
             // -----------------------------------------------------------------
-            let current_size = match std::fs::metadata(&state.path) {
-                Ok(m) => m.len(),
+            let (current_size, file_mtime) = match std::fs::metadata(&state.path) {
+                Ok(m) => {
+                    let size = m.len();
+                    let mtime: Option<chrono::DateTime<Utc>> = m.modified().ok().map(|t| t.into());
+                    (size, mtime)
+                }
                 Err(e) => {
                     let msg = format!("Cannot stat: {e}");
                     tracing::warn!(file = %state.path.display(), error = %e, "Tail: stat error");
@@ -316,7 +322,7 @@ fn run_tail_watcher(
             // -----------------------------------------------------------------
             // 7. Parse complete lines through the file's format profile.
             // -----------------------------------------------------------------
-            let result = parser::parse_content(
+            let mut result = parser::parse_content(
                 &complete_text,
                 &state.path,
                 &state.profile,
@@ -326,6 +332,25 @@ fn run_tail_watcher(
 
             if result.entries.is_empty() {
                 continue;
+            }
+
+            // Stamp entries with the file's OS mtime and back-fill a parsed
+            // timestamp if the profile has no timestamp capture group.
+            //
+            // file_modified: used by the time-range filter (e.g. last 15 min).
+            //   Files being actively written have a fresh mtime, so they always
+            //   pass a relative-time filter regardless of log line content.
+            //
+            // timestamp: back-filled with now() only when the profile produced
+            //   None (plain-text fallback). This keeps timeline sort order
+            //   correct and prevents tail entries from sinking to the bottom.
+            let now = Utc::now();
+            let effective_mtime = file_mtime.unwrap_or(now);
+            for entry in &mut result.entries {
+                entry.file_modified = Some(effective_mtime);
+                if entry.timestamp.is_none() {
+                    entry.timestamp = Some(now);
+                }
             }
 
             tracing::debug!(

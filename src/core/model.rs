@@ -51,6 +51,20 @@ pub struct LogEntry {
 
     /// ID of the format profile used to parse this entry.
     pub profile_id: String,
+
+    /// Last-modified time of the **source file** as recorded by the OS at scan
+    /// time (or at the tail-tick time for live-tail entries).
+    ///
+    /// Used as the time-range filter key instead of the parsed log timestamp so
+    /// that filtering works correctly for:
+    ///   - Profiles with no timestamp capture group (plain-text fallback)
+    ///   - Logs whose embedded timestamps are unreliable or in an unsupported
+    ///     timezone
+    ///   - Live-tail entries written right now whose log timestamps may lag
+    ///
+    /// Not serialised to CSV/JSON export (internal bookkeeping only).
+    #[serde(skip)]
+    pub file_modified: Option<DateTime<Utc>>,
 }
 
 // =============================================================================

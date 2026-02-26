@@ -27,6 +27,88 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     ui.add_space(4.0);
 
+    // -------------------------------------------------------------------------
+    // Date filter — limits the scan to files modified on or after a given date.
+    // Shown BEFORE the Open Directory button so the user sets it first.
+    // Persists across scans so the user can re-run with the same date in focus.
+    // -------------------------------------------------------------------------
+    ui.separator();
+    ui.label(
+        egui::RichText::new("File date filter (YYYY-MM-DD):")
+            .small()
+            .strong(),
+    );
+    ui.label(
+        egui::RichText::new(
+            "Only scans files modified on or after this date. \
+             Leave blank to scan all files.",
+        )
+        .small()
+        .weak(),
+    );
+    ui.horizontal(|ui| {
+        // Text input. Hint shows the expected format.
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut state.discovery_date_input)
+                .hint_text("e.g. 2025-03-14")
+                .desired_width(100.0),
+        );
+
+        // Validation feedback inline next to the input.
+        let input_trimmed = state.discovery_date_input.trim().to_string();
+        if !input_trimmed.is_empty() {
+            let valid = state.discovery_modified_since().is_some();
+            if valid {
+                ui.colored_label(egui::Color32::from_rgb(74, 222, 128), "\u{2713}");
+            } else {
+                ui.colored_label(egui::Color32::from_rgb(248, 113, 113), "\u{2717}");
+            }
+        }
+
+        let _ = resp; // response not otherwise used
+
+        // "Today" quick-fill — populates the input with today's local date.
+        if ui
+            .small_button("Today")
+            .on_hover_text("Set to today's date in local time")
+            .clicked()
+        {
+            let today = Local::now().format("%Y-%m-%d").to_string();
+            state.discovery_date_input = today;
+        }
+
+        // Clear button — only when a date has been entered.
+        if !state.discovery_date_input.trim().is_empty()
+            && ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("\u{d7}")
+                            .small()
+                            .color(egui::Color32::from_rgb(156, 163, 175)),
+                    )
+                    .small()
+                    .frame(false),
+                )
+                .on_hover_text("Clear date filter")
+                .clicked()
+        {
+            state.discovery_date_input.clear();
+        }
+    });
+
+    // Show the resolved start-of-day UTC value as feedback.
+    if let Some(since) = state.discovery_modified_since() {
+        ui.label(
+            egui::RichText::new(format!(
+                "Scanning files modified on or after {} UTC",
+                since.format("%Y-%m-%d 00:00")
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(96, 165, 250)),
+        );
+    }
+    ui.add_space(4.0);
+
     // Scan / cancel controls
     if state.scan_in_progress {
         ui.horizontal(|ui| {
@@ -89,80 +171,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 state.request_new_session = true;
             }
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // Date filter — limits the scan to files modified on or after a given date.
-    // Persists across scans so the user can re-run with the same date in focus.
-    // -------------------------------------------------------------------------
-    ui.add_space(6.0);
-    ui.separator();
-    ui.label(
-        egui::RichText::new("Date filter (YYYY-MM-DD):")
-            .small()
-            .strong(),
-    );
-    ui.horizontal(|ui| {
-        // Text input. Hint shows the expected format.
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut state.discovery_date_input)
-                .hint_text("e.g. 2025-03-14")
-                .desired_width(100.0),
-        );
-
-        // Validation feedback inline next to the input.
-        let input_trimmed = state.discovery_date_input.trim().to_string();
-        if !input_trimmed.is_empty() {
-            let valid = state.discovery_modified_since().is_some();
-            if valid {
-                ui.colored_label(egui::Color32::from_rgb(74, 222, 128), "\u{2713}");
-            } else {
-                ui.colored_label(egui::Color32::from_rgb(248, 113, 113), "\u{2717}");
-            }
-        }
-
-        let _ = resp; // response not otherwise used
-
-        // "Today" quick-fill — populates the input with today's local date.
-        if ui
-            .small_button("Today")
-            .on_hover_text("Set to today's date in local time")
-            .clicked()
-        {
-            let today = Local::now().format("%Y-%m-%d").to_string();
-            state.discovery_date_input = today;
-        }
-
-        // Clear button — only when a date has been entered.
-        if !state.discovery_date_input.trim().is_empty()
-            && ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new("\u{d7}")
-                            .small()
-                            .color(egui::Color32::from_rgb(156, 163, 175)),
-                    )
-                    .small()
-                    .frame(false),
-                )
-                .on_hover_text("Clear date filter")
-                .clicked()
-        {
-            state.discovery_date_input.clear();
-        }
-    });
-
-    // Show the resolved start-of-day UTC value as feedback so the user can
-    // confirm the filter will match the entries they are investigating.
-    if let Some(since) = state.discovery_modified_since() {
-        ui.label(
-            egui::RichText::new(format!(
-                "Files modified on or after {} UTC",
-                since.format("%Y-%m-%d 00:00")
-            ))
-            .small()
-            .color(egui::Color32::from_rgb(96, 165, 250)),
-        );
     }
 
     // Discovered file list (shown after scan completes or while scanning)

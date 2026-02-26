@@ -96,6 +96,7 @@ mod tests {
             message: message.to_string(),
             raw_text: message.to_string(),
             profile_id: "test".to_string(),
+            file_modified: None,
         }
     }
 

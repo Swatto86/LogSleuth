@@ -74,7 +74,7 @@ LogSleuth/
 |   |   +-- model.rs             # LogEntry, Severity, FormatProfile structs; FormatProfile includes severity_override: HashMap<Severity,Vec<Regex>> + apply_severity_override() method
 |   |   +-- discovery.rs         # Recursive traversal (walkdir), glob include/exclude, filter_entry dir exclusion, metadata
 |   |   +-- export.rs            # CSV/JSON serialisation
-|   |   +-- filter.rs            # Composable filter engine: severity, text (exact or fuzzy subsequence), regex, absolute/relative time window, source file whitelist (hide_all_sources flag for explicit "none" state); bookmark filter (bookmarks_only + bookmarked_ids populated by app layer)
+|   |   +-- filter.rs            # Composable filter engine: severity, text (exact or fuzzy subsequence), regex, **file-mtime-based** time window (uses LogEntry::file_modified — OS last-modified time of the source file — not the parsed log timestamp), source file whitelist (hide_all_sources flag for explicit "none" state); bookmark filter (bookmarks_only + bookmarked_ids populated by app layer)
 |   |   +-- profile.rs           # TOML profile parsing, validation, auto-detection scoring; SeverityOverrideDef TOML struct; override patterns compiled via compile_regex in validate_and_compile
 |   |   +-- parser.rs            # Stream-oriented log parsing, multi-line handling, chrono timestamp parsing; MultilineMode::Raw emits every line as an entry and records no parse error; MultilineMode::Skip records an error for every non-matching line; MultilineMode::Continuation records an error only when no prior entry exists to attach the line to
 |   +-- ui/
@@ -82,7 +82,7 @@ LogSleuth/
 |   |   +-- panels/
 |   |   |   +-- mod.rs
 |   |   +-- about.rs         # About dialog: centred modal window (version from CARGO_PKG_VERSION, GitHub link, MIT licence); show_about flag on AppState; ⓘ button right-aligned in menu bar (placed AFTER File/View menus so layout allocation is correct)
-|   |   |   +-- discovery.rs     # Directory picker + Open Log(s) button, scan controls, file list (max_height 360 px); profile label shows log_locations as hover tooltip
+|   |   |   +-- discovery.rs     # Directory picker + Open Log(s) button, scan controls, file list (max_height 360 px); profile label shows log_locations as hover tooltip; date filter (YYYY-MM-DD) placed ABOVE open buttons with explanatory sub-label — only scans files modified on or after date
 |   |   |   +-- options.rs       # Options dialog: runtime-configurable ingest limit (max_files_limit on AppState); logarithmic slider bounded by ABSOLUTE_MAX_FILES; opened via Edit > Options...
 |   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; severity row tint (Critical/Error/Warning) painted as the lowest-priority background layer via theme::severity_bg_colour(); amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; teal tint on correlated rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
