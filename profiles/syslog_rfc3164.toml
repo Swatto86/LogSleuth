@@ -24,6 +24,11 @@ file_patterns = ["syslog", "syslog.[0-9]*", "messages", "messages.[0-9]*", "auth
 content_match = '^[A-Z][a-z]{2}\s[\s\d]\d\s\d{2}:\d{2}:\d{2}\s\S+'
 
 [parsing]
+# TIMESTAMP LIMITATION: BSD syslog (RFC 3164) timestamps do not include a year
+# (e.g. "Jan 15 14:30:22").  The parser injects the current UTC year so entries
+# land at the correct position in a live timeline.  Log files that span a
+# year boundary (entries from late December viewed in January) will show
+# incorrect year values for the pre-rollover entries.
 line_pattern = '^(?P<timestamp>[A-Z][a-z]{2}\s[\s\d]\d\s\d{2}:\d{2}:\d{2})\s(?P<component>\S+)\s(?P<source>[^\[:\s]+)(?:\[(?P<thread>\d+)\])?:\s*(?P<message>.+)$'
 timestamp_format = "%b %d %H:%M:%S"
 multiline_mode = "continuation"

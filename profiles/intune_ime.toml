@@ -13,11 +13,6 @@
 #   2 = Warning
 #   3 = Error
 #
-# NOTE: The `date=` attribute is not captured in the `timestamp` group because
-# it appears after `time=` in the line, making a single combined capture
-# impractical.  The `timestamp` group captures HH:MM:SS (second-precision)
-# which is sufficient for ordering and time-range filtering within a session.
-# The file name typically encodes the session date for context.
 #
 # Covered log files:
 #   IntuneManagementExtension.log / IntuneManagementExtension-<date>.log
@@ -54,12 +49,17 @@ content_match = '^\<!\[LOG\['
 [parsing]
 # Named groups:
 #   message   — log text between <![LOG[  and  ]LOG]!>
-#   timestamp — HH:MM:SS extracted from the time= attribute (second precision)
+#   timestamp — M-D-YYYY from the date= attribute (date precision).
+#               The time= attribute appears first in the line, making a single
+#               combined date+time capture impractical with a regex alone.
+#               Date-only precision is sufficient for day-level timeline
+#               placement and daily filtering.  Hour/minute precision requires
+#               a future parser enhancement (multi-group timestamp assembly).
 #   component — component name from the component= attribute
 #   level     — numeric severity from the type= attribute (1/2/3)
 #   thread    — thread ID from the thread= attribute
-line_pattern = '^\<!\[LOG\[(?P<message>.*?)\]LOG\]!\>\<time="(?P<timestamp>\d{2}:\d{2}:\d{2})\.\d+[^"]*"\s+date="[^"]+"\s+component="(?P<component>[^"]*)"\s+context="[^"]*"\s+type="(?P<level>\d)"\s+thread="(?P<thread>[^"]*)"\s+file="[^"]*"\>$'
-timestamp_format = "%H:%M:%S"
+line_pattern = '^\<!\[LOG\[(?P<message>.*?)\]LOG\]!\>\<time="[^"]+"\s+date="(?P<timestamp>\d{1,2}-\d{1,2}-\d{4})"\s+component="(?P<component>[^"]*)"\s+context="[^"]*"\s+type="(?P<level>\d)"\s+thread="(?P<thread>[^"]*)"\s+file="[^"]*"\>$'
+timestamp_format = "%m-%d-%Y"
 multiline_mode = "skip"
 
 [severity_mapping]
