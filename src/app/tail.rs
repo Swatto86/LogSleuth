@@ -51,6 +51,16 @@ pub struct TailFileInfo {
     pub path: PathBuf,
     /// Format profile used to parse new lines from this file.
     pub profile: FormatProfile,
+    /// Byte offset to start reading from on the first poll tick.
+    ///
+    /// Should be set to the file size recorded at the end of the initial scan
+    /// (`DiscoveredFile::size`) so that any bytes appended between the scan
+    /// completing and Live Tail being activated are picked up on the first poll
+    /// — eliminating the "gap" where new entries are silently skipped.
+    ///
+    /// `None` falls back to the old behaviour of seeking to the current EOF at
+    /// tail-activation time (safe but lossy when tailing is started late).
+    pub initial_offset: Option<u64>,
 }
 
 // =============================================================================
@@ -191,15 +201,24 @@ fn run_tail_watcher(
 
     let parse_config = ParseConfig::default();
 
-    // Initialise per-file state. Offset is seeded to the *current* file end so
-    // we only surface content written *after* tail was activated.
+    // Initialise per-file state.
+    //
+    // Offset priority:
+    //   1. `initial_offset` supplied by the caller (the file size at scan-end).
+    //      Using the scan-end size means the first poll tick catches any bytes
+    //      appended between scan completion and tail activation — the "gap".
+    //   2. Fallback: current EOF (stat the file now).  Used when no scan-end
+    //      offset is available (e.g. files opened via Open Log(s)...).
     let mut states: Vec<FileState> = files
         .into_iter()
         .map(|info| {
-            let offset = std::fs::metadata(&info.path).map(|m| m.len()).unwrap_or(0);
+            let offset = info
+                .initial_offset
+                .unwrap_or_else(|| std::fs::metadata(&info.path).map(|m| m.len()).unwrap_or(0));
             tracing::debug!(
                 file = %info.path.display(),
                 offset,
+                from_scan = info.initial_offset.is_some(),
                 "Tail: seeding initial offset"
             );
             FileState {

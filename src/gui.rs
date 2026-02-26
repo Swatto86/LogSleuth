@@ -422,6 +422,10 @@ impl eframe::App for LogSleuthApp {
                     Some(crate::app::tail::TailFileInfo {
                         path: f.path.clone(),
                         profile,
+                        // Seed from file size at scan time so the first poll
+                        // tick catches any entries appended after the scan
+                        // completed but before tail was activated (the gap).
+                        initial_offset: Some(f.size),
                     })
                 })
                 .collect();

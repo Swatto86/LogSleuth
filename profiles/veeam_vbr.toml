@@ -49,18 +49,35 @@ file_patterns = [
     # Catch-all for other top-level Veeam service logs whose names vary by version
     "Veeam*.log",
 ]
-# Matches the opening bracket-timestamp pattern unique to VBR logs
-content_match = '^\[\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2}\]\s<\d+>'
+# Matches the opening bracket-timestamp pattern common to all Veeam log variants.
+# The (?:\.\\d+)? handles optional fractional seconds in NFS/transport logs.
+# Stops at < (without requiring \d+ immediately) to allow < 10580> style threads.
+content_match = '^\[\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2}(?:\.\d+)?\]\s<'
 
 [parsing]
 # Named groups: timestamp, thread, level, message
-line_pattern = '^\[(?P<timestamp>\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2})\]\s<(?P<thread>\d+)>\s(?P<level>\w+)\s+(?P<message>.+)$'
+#
+# Handles two Veeam log variants:
+#
+#   VBR service logs (Job.*, Svc.VeeamBackup.*, etc):
+#     [23.11.2016 23:07:16] <01> Info     ------- Job Started -------
+#
+#   NFS / transport service logs (Svc.VeeamNFS.log, Svc.VeeamTransport.log):
+#     [26.02.2026 22:07:56.535] < 10580> nfstcps | ERR |Error occurred...
+#
+# Key regex changes vs the original VBR-only pattern:
+#   (?:\.\d+)?          -- optional fractional seconds (.535)
+#   <\s*...\s*>         -- optional whitespace inside thread brackets (< 10580>)
+#   (?:level_kw\s+)?    -- level field is optional; uses an explicit keyword
+#                          list so component names (nfstcps) are NOT captured
+#                          as the severity, allowing severity_override to fire.
+line_pattern = '^\[(?P<timestamp>\d{2}\.\d{2}\.\d{4}\s\d{2}:\d{2}:\d{2})(?:\.\d+)?\]\s<\s*(?P<thread>\d+)\s*>\s(?:(?P<level>Info|Warning|Warn|Error|Err|Fatal|Critical|Debug|Verbose|Success|Trace)\s+)?(?P<message>.+)$'
 timestamp_format = "%d.%m.%Y %H:%M:%S"
 multiline_mode = "continuation"
 
 [severity_mapping]
 critical = ["Critical", "Fatal"]
-error = ["Error"]
+error = ["Error", "Err"]
 warning = ["Warning", "Warn"]
 info = ["Info", "Success"]
 debug = ["Debug", "Verbose", "Trace"]
@@ -68,8 +85,9 @@ debug = ["Debug", "Verbose", "Trace"]
 # Regex-based second-chance classification applied when the captured level
 # string is not in severity_mapping (e.g. vendor-specific tokens) or for
 # continuation lines that become plain message text.
+# (?i) enables case-insensitive matching so ERR, WARN, FAILED, etc. all fire.
 [severity_override]
-critical = ['\bFATAL\b', '\bCRITICAL\b']
-error    = ['\bFailed\b', '\bException\b', '\bError\b', 'Unable to', 'Cannot ']
-warning  = ['\bWarn(ing)?\b', '\bTimeout\b', '\bRetry\b']
-info     = ['\bSucceed\b', '\bCompleted\b']
+critical = ['(?i)\bFATAL\b', '(?i)\bCRITICAL\b']
+error    = ['(?i)\bFailed\b', '(?i)\bException\b', '(?i)\bError\b', '(?i)Unable to', '(?i)Cannot ']
+warning  = ['(?i)\bWarn(ing)?\b', '(?i)\bTimeout\b', '(?i)\bRetry\b']
+info     = ['(?i)\bSucceed\b', '(?i)\bCompleted\b']
