@@ -1,7 +1,7 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 24 complete — 3 bug fixes (append-scan sort, selection ID preservation, Raw-mode error count), 2 dead-code removals, 1 regression test; also covers Inc 23 (CLI --filter-level applied, severity_bg_colour row tinting)
-> **Last updated**: 2026-02-26
+> **Status**: Increment 27 complete — (1) Options dialog expanded with 3 new sections (Ingest Limits adds max_total_entries + max_scan_depth; Live Tail poll interval; Directory Watch poll interval); (2) all 4 new settings threaded end-to-end from constants → state → gui → scan/tail/dir_watcher; (3) README.md updated with Directory Watch and Options sections. Covers all prior increments.
+> **Last updated**: 2026-03-25
 
 ---
 
@@ -28,6 +28,7 @@ LogSleuth is a cross-platform log file viewer and analyser that discovers, parse
 | **File Colour** | Each source file is assigned a unique colour from a 24-entry palette; a coloured stripe on every timeline row and a coloured dot in the file list identify the origin file visually (CMTrace-style) |
 | **Correlation** | Viewing entries across multiple log files within a time window centred on a selected entry |
 | **Scan** | A complete discovery + parse operation on a target directory |
+| **Directory Watch** | Background polling of the scan directory (`DIR_WATCH_POLL_INTERVAL_MS = 2 s`) by `app::dir_watcher::DirWatcher`. Detects newly created log files and triggers an append scan so they appear in the live timeline automatically. Only active for directory-based sessions (not for file-only "Open Log(s)..." sessions). A blue WATCH badge is shown in the status bar while the watcher is running. |
 
 ---
 
@@ -61,14 +62,15 @@ LogSleuth/
 +-- src/
 |   +-- main.rs                  # Entry point, CLI parsing, logging init, GUI launch; configure_fonts() loads Consolas (primary monospace), Segoe UI (primary proportional), Segoe UI Symbol + Emoji (Unicode fallbacks) on Windows; --filter-level CLI arg populates severity_levels with the requested level and all more-severe variants before eframe launch
 |   +-- lib.rs                   # Library crate entry point (exposes modules for integration tests)
-|   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring; sidebar split into two independent ScrollAreas (discovery top ~45%, filters bottom); ParsingCompleted handler calls sort_entries_chronologically() (not just apply_filters()) so append scans always produce a fully interleaved chronological timeline
+|   +-- gui.rs                   # eframe::App implementation, scan progress routing, panel wiring; sidebar split into two independent ScrollAreas (discovery top ~45%, filters bottom); ParsingCompleted handler calls sort_entries_chronologically() (not just apply_filters()) so append scans always produce a fully interleaved chronological timeline; after each ParsingCompleted on a directory session, DirWatcher is (re)started with the updated known-paths set; if tail was active before an append, tail is restarted to include any new files
 |   +-- app/
 |   |   +-- mod.rs
+|   |   +-- dir_watcher.rs       # Recursive directory watcher: DirWatcher struct (start_watch/stop_watch/poll_progress), DirWatchConfig (include/exclude glob patterns + max_depth + **poll_interval_ms** — default DIR_WATCH_POLL_INTERVAL_MS, user-configurable via Options), background run_dir_watcher() polling thread uses config.poll_interval_ms; walk_for_new_files() uses walkdir with filter_entry to prune excluded subtrees; new files reported via DirWatchProgress::NewFiles channel message; known_paths updated immediately after send to prevent re-reporting on next poll cycle
 |   |   +-- profile_mgr.rs       # Profile loading (built-in + user), override logic
 |   |   +-- scan.rs              # Scan lifecycle: background thread, cancel (AtomicBool), retry backoff, UTF-16 BOM detection, plain-text fallback, background chronological sort before streaming batches
 |   |   +-- session.rs           # Session persistence: SessionData + PersistedFilter structs (serde JSON); session_path(), save() (atomic write via .json.tmp rename), load() (returns None on missing/corrupt/version-mismatch — never errors to user); SESSION_VERSION const for forward-compat
-|   |   +-- state.rs             # Application state; tail flags (tail_active, tail_auto_scroll, request_start_tail, request_stop_tail); show_log_summary; show_about; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), filtered_results_report() (bounded to MAX_CLIPBOARD_ENTRIES), update_correlation(), next_entry_id(), save_session(), restore_from_session(); apply_filters() preserves the selected entry by stable entry ID (not by display-position integer) before and after filter recompute; sort_entries_chronologically() performs a stable sort across all entries then calls apply_filters()
-|   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (500 ms), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo; file-selection filter applied before start (respects hide_all_sources + source_files whitelist)
+|   |   +-- state.rs             # Application state; tail flags (tail_active, tail_auto_scroll, request_start_tail, request_stop_tail); dir_watcher_active: bool (set when directory watcher is running); **user-preference option fields (not cleared on clear())**: max_files_limit, max_total_entries (entry cap), max_scan_depth, tail_poll_interval_ms, dir_watch_poll_interval_ms — all initialised from constants in new(), all configurable via the Options dialog; show_log_summary; show_about; bookmarks: HashMap<u64,String>; correlation_active, correlation_window_secs, correlated_ids: HashSet<u64>; session_path: Option<PathBuf> (never cleared); initial_scan: Option<PathBuf> (startup re-scan without clear()); toggle_bookmark(), is_bookmarked(), bookmark_count(), clear_bookmarks(), bookmarks_report(), filtered_results_report() (bounded to MAX_CLIPBOARD_ENTRIES), update_correlation(), next_entry_id(), save_session(), restore_from_session(); apply_filters() preserves the selected entry by stable entry ID (not by display-position integer) before and after filter recompute; sort_entries_chronologically() performs a stable sort across all entries then calls apply_filters()
+|   |   +-- tail.rs              # Live tail: TailManager + run_tail_watcher poll loop (**poll_interval_ms parameter**, default TAIL_POLL_INTERVAL_MS=500 ms, user-configurable via Options), per-file byte-offset tracking, partial-line buffer, rotation/truncation detection, TailFileInfo; file-selection filter applied before start (respects hide_all_sources + source_files whitelist); start_tail() now accepts poll_interval_ms: u64
 |   +-- core/
 |   |   +-- mod.rs
 |   |   +-- model.rs             # LogEntry, Severity, FormatProfile structs; FormatProfile includes severity_override: HashMap<Severity,Vec<Regex>> + apply_severity_override() method
@@ -83,13 +85,13 @@ LogSleuth/
 |   |   |   +-- mod.rs
 |   |   +-- about.rs         # About dialog: centred modal window (version from CARGO_PKG_VERSION, GitHub link, MIT licence); show_about flag on AppState; ⓘ button right-aligned in menu bar (placed AFTER File/View menus so layout allocation is correct)
 |   |   |   +-- discovery.rs     # Directory picker + Open Log(s) button, scan controls, file list (max_height 360 px); profile label shows log_locations as hover tooltip; date filter (YYYY-MM-DD) placed ABOVE open buttons with explanatory sub-label — only scans files modified on or after date
-|   |   |   +-- options.rs       # Options dialog: runtime-configurable ingest limit (max_files_limit on AppState); logarithmic slider bounded by ABSOLUTE_MAX_FILES; opened via Edit > Options...
-|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; severity row tint (Critical/Error/Warning) painted as the lowest-priority background layer via theme::severity_bg_colour(); amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; teal tint on correlated rows; bookmark toggle applied after ScrollArea to avoid borrow conflict
+|   |   +-- options.rs       # Options dialog: 3 sections — (1) Ingest Limits: max_files_limit (logarithmic slider, ABSOLUTE_MAX_FILES), max_total_entries (logarithmic, MIN_MAX_TOTAL_ENTRIES–ABSOLUTE_MAX_TOTAL_ENTRIES), max_scan_depth (linear, 1–ABSOLUTE_MAX_DEPTH); (2) Live Tail: tail_poll_interval_ms (logarithmic, MIN–MAX_TAIL_POLL_INTERVAL_MS); (3) Directory Watch: dir_watch_poll_interval_ms (logarithmic, MIN–MAX_DIR_WATCH_POLL_INTERVAL_MS). Each row has a Reset button; opened via Edit > Options...; all limits from util::constants
+|   |   |   +-- timeline.rs      # Virtual-scrolling unified timeline; 4 px coloured left stripe per row; severity row tint (Critical/Error/Warning) painted as the lowest-priority background layer via theme::severity_bg_colour(); amber star button (★/☆) per row for bookmarking; gold tint on bookmarked rows; teal tint on correlated rows; bookmark toggle applied after ScrollArea to avoid borrow conflict; **LayoutJob** splits each row into a severity-coloured badge ([CRIT]/[ERR ] etc.) and a high-contrast body (white in dark mode, near-black in light mode via theme::row_text_colour()) to ensure readability on tinted rows
 |   |   |   +-- detail.rs        # Entry detail pane (no height cap); Show in Folder button (Windows: explorer /select,; macOS: open -R; Linux: xdg-open)
 |   |   |   +-- summary.rs       # Scan summary dialog (overall statistics + per-file breakdown)
 |   |   |   +-- log_summary.rs   # Log-entry summary panel: severity breakdown table + collapsible message preview lists (max 50 rows/severity), colour-coded; opened via View menu or Filters "Summary" button
 |   |   |   +-- filters.rs       # Filter controls sidebar: two button rows (Row 1: severity presets — Errors only/Errors+Warn/Err+Warn+15m/Clear; Row 2: Summary/Bookmarks/clear bm); severity checkboxes; text/regex inputs; fuzzy ~ toggle; relative time quick-buttons (15m/1h/6h/24h) + custom input + rolling-window live indicator; source file checklist with coloured dot + Solo button + real-time search box (shown >8 files); Select All/None on visible subset; "● Rolling window (live)" indicator; "Copy" clipboard button at entry-count footer (disabled when empty)
-|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=460 (exact_width, non-resizable SidePanel)
+|   |   +-- theme.rs             # Colours, severity mapping, layout constants; 24-entry FILE_COLOUR_PALETTE for per-file stripes; SIDEBAR_WIDTH=460 (exact_width, non-resizable SidePanel); **row_text_colour(dark_mode) -> Color32** returns WHITE in dark mode and Slate-950 in light mode for timeline body text
 |   +-- platform/
 |   |   +-- mod.rs
 |   |   +-- fs.rs                # FileReader trait + OS implementations
@@ -98,7 +100,7 @@ LogSleuth/
 |       +-- mod.rs
 |       +-- error.rs             # LogSleuthError enum, error chain helpers
 |       +-- logging.rs           # tracing setup, debug mode activation
-|       +-- constants.rs         # Named constants (limits, defaults, versions); includes MAX_CLIPBOARD_ENTRIES (clipboard export row cap)
+|       +-- constants.rs         # Named constants (limits, defaults, versions); includes MAX_CLIPBOARD_ENTRIES (clipboard export row cap); **DIR_WATCH_POLL_INTERVAL_MS=2000**, **DIR_WATCH_CANCEL_CHECK_INTERVAL_MS=100**, **MIN_DIR_WATCH_POLL_INTERVAL_MS=1000**, **MAX_DIR_WATCH_POLL_INTERVAL_MS=60000**; **TAIL_POLL_INTERVAL_MS=500**, **TAIL_CANCEL_CHECK_INTERVAL_MS=100**, **MIN_TAIL_POLL_INTERVAL_MS=100**, **MAX_TAIL_POLL_INTERVAL_MS=10000**; **MAX_TOTAL_ENTRIES=1_000_000**, **MIN_MAX_TOTAL_ENTRIES=10_000**, **ABSOLUTE_MAX_TOTAL_ENTRIES=MAX_TOTAL_ENTRIES**; **MIN_MAX_FILES=1**, **DEFAULT_MAX_DEPTH=10**, **ABSOLUTE_MAX_DEPTH=50**
 +-- profiles/
 |   +-- veeam_vbr.toml           # Veeam Backup & Replication
 |   +-- veeam_vbo365.toml        # Veeam Backup for M365
@@ -182,6 +184,9 @@ LogSleuth/
 | `TailManager::stop_tail()` | `app::tail` | UI layer |
 | `TailManager::is_active() -> bool` | `app::tail` | UI layer |
 | `TailManager::poll_progress() -> Vec<TailProgress>` | `app::tail` | UI layer (called from `eframe::App::update`) |
+| `DirWatcher::start_watch(root, known_paths, config)` | `app::dir_watcher` | UI layer (`gui.rs`) — called after scan ParsingCompleted on directory sessions |
+| `DirWatcher::stop_watch()` | `app::dir_watcher` | UI layer — called on new-session, open-logs, and app exit |
+| `DirWatcher::poll_progress() -> Vec<DirWatchProgress>` | `app::dir_watcher` | UI layer (called from `eframe::App::update`) |
 | `discover_files(root, config, on_file_found) -> Result<(Vec<DiscoveredFile>, Vec<String>, usize)>` | `core::discovery` | `app::scan` background thread. Third element is raw file count before ingest limit. When count > limit, files are sorted by mtime descending and truncated. |
 | `parse_content(content, path, profile, config, id_start) -> ParseResult` | `core::parser` | `app::scan` background thread |
 | `profile::auto_detect(file_name, sample_lines, profiles) -> Option<DetectionResult>` | `core::profile` | `app::scan` background thread |

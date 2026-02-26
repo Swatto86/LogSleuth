@@ -54,6 +54,13 @@ pub struct DiscoveryConfig {
     /// Use `chrono::NaiveDate::and_hms_opt(…).and_utc()` to derive the start of
     /// a calendar day in UTC, or `chrono::Local::today()` for local midnight.
     pub modified_since: Option<DateTime<Utc>>,
+
+    /// Maximum total log entries to load across all files.
+    ///
+    /// Once this cap is reached the scan stops ingesting further entries and
+    /// emits a warning.  Decoupled from `max_files` so users can tune either
+    /// limit independently (e.g. allow 5 000 files but cap entries at 100 000).
+    pub max_total_entries: usize,
 }
 
 impl Default for DiscoveryConfig {
@@ -72,6 +79,7 @@ impl Default for DiscoveryConfig {
                 .collect(),
             large_file_threshold: constants::DEFAULT_LARGE_FILE_THRESHOLD,
             modified_since: None,
+            max_total_entries: constants::MAX_TOTAL_ENTRIES,
         }
     }
 }

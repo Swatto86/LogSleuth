@@ -73,6 +73,18 @@ After a scan completes, click **● Live Tail** in the sidebar to watch all load
 
 > **Note**: Live tail decodes new bytes as UTF-8. UTF-16 log files (rare Windows system logs) are not supported for incremental tail; load them via a normal scan instead.
 
+## Directory Watch
+
+When you open a directory, LogSleuth automatically starts a **directory watcher** alongside Live Tail. The watcher polls the scanned directory tree for newly-created log files and adds them to the session automatically — no manual "Add File(s)" step required.
+
+- A blue **● WATCH** badge is shown in the status bar while the watcher is active.
+- Any new file that matches the active include patterns and recursion depth is detected within the configured poll interval (default: 2 seconds) and appended to the current session — filters, Live Tail, and the timeline all update instantly.
+- The watcher uses the same include/exclude patterns and recursion depth as the original scan so only relevant log files are picked up.
+- The watcher only runs for **directory-based sessions** — it is not started when you open individual files via **File > Open Log(s)…**.
+- The watcher stops automatically when you start a new scan or close the session.
+
+> **Tip**: For log sources that write to new rolling files (e.g. nightly rotated IIS logs), Directory Watch ensures each new file appears in the timeline without you having to manually add it.
+
 ## Bookmarks
 
 Star any timeline entry with the **★/☆** button on the left of every row to bookmark it:
@@ -137,6 +149,34 @@ Use **View > Scan Summary** after a scan to see:
 ## Cancel a Scan
 
 A **Cancel** button appears in the status bar during an active scan. Cancellation is cooperative and completes any in-flight file cleanly.
+
+## Options
+
+Open **Edit > Options…** to configure runtime settings. Changes persist for the session but are not yet saved across restarts.
+
+### Ingest Limits
+
+These settings take effect on the **next scan**.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Max files per scan | 500 | Maximum number of log files loaded from a directory scan. When more files are found, only the most recently modified ones are loaded. Range: 1–10,000. |
+| Max total entries | 1,000,000 | Hard cap on the total number of log entries held in memory. Prevents out-of-memory crashes when scanning large or numerous log files. Range: 10,000–1,000,000. |
+| Max scan depth | 10 | Maximum directory recursion depth for scans and the directory watcher. Reduce to avoid descending into deep folder hierarchies. Range: 1–50. |
+
+### Live Tail
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Poll interval | 500 ms | How often the background thread checks watched files for new content. Lower values give faster updates; higher values reduce CPU/disk use. Applied when the next tail session starts. Range: 100–10,000 ms. |
+
+### Directory Watch
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Poll interval | 2,000 ms (2 s) | How often the directory watcher scans for newly-created log files. Lower values detect new files sooner at the cost of more frequent directory walks. Applied when the next watch session starts. Range: 1,000–60,000 ms. |
+
+Each setting has a **Reset** button that restores it to the built-in default.
 
 ## Built-in Format Profiles
 

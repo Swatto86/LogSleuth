@@ -23,6 +23,9 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Maximum directory recursion depth during discovery.
 pub const DEFAULT_MAX_DEPTH: usize = 10;
 
+/// Minimum sensible value for the max-files limit (controls must be non-zero).
+pub const MIN_MAX_FILES: usize = 1;
+
 /// Maximum number of files to discover in a single scan.
 pub const DEFAULT_MAX_FILES: usize = 500;
 
@@ -71,6 +74,12 @@ pub const MAX_TOTAL_PARSE_ERRORS: usize = 10_000;
 /// narrow the scope of the scan.
 pub const MAX_TOTAL_ENTRIES: usize = 1_000_000;
 
+/// Minimum user-configurable entry cap.
+pub const MIN_MAX_TOTAL_ENTRIES: usize = 10_000;
+
+/// Maximum user-configurable entry cap (same as the absolute hard limit).
+pub const ABSOLUTE_MAX_TOTAL_ENTRIES: usize = MAX_TOTAL_ENTRIES;
+
 // =============================================================================
 // Live tail limits
 // =============================================================================
@@ -81,6 +90,29 @@ pub const TAIL_POLL_INTERVAL_MS: u64 = 500;
 /// How often the cancel flag is checked within each poll sleep interval (ms).
 /// The background thread wakes every this many ms to check for cancellation.
 pub const TAIL_CANCEL_CHECK_INTERVAL_MS: u64 = 100;
+
+/// Minimum user-configurable tail poll interval (ms).
+pub const MIN_TAIL_POLL_INTERVAL_MS: u64 = 100;
+
+/// Maximum user-configurable tail poll interval (ms).
+pub const MAX_TAIL_POLL_INTERVAL_MS: u64 = 10_000; // 10 s
+
+// =============================================================================
+// Directory watcher limits
+// =============================================================================
+
+/// How often the directory watcher polls for new files (ms).
+/// Balances responsiveness against CPU overhead from repeated directory walks.
+pub const DIR_WATCH_POLL_INTERVAL_MS: u64 = 2_000;
+
+/// How often the cancel flag is checked within each directory watch poll sleep (ms).
+pub const DIR_WATCH_CANCEL_CHECK_INTERVAL_MS: u64 = 100;
+
+/// Minimum user-configurable directory watch poll interval (ms).
+pub const MIN_DIR_WATCH_POLL_INTERVAL_MS: u64 = 1_000; // 1 s
+
+/// Maximum user-configurable directory watch poll interval (ms).
+pub const MAX_DIR_WATCH_POLL_INTERVAL_MS: u64 = 60_000; // 60 s
 
 /// Maximum bytes read from a single file in one poll tick.
 /// Prevents a large burst of new content from stalling the entire poll loop.

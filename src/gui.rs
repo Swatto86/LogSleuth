@@ -3,6 +3,7 @@
 // Top-level eframe::App implementation.
 // Wires together all UI panels and manages the scan lifecycle.
 
+use crate::app::dir_watcher::{DirWatchConfig, DirWatcher};
 use crate::app::scan::ScanManager;
 use crate::app::state::AppState;
 use crate::app::tail::TailManager;
@@ -14,6 +15,9 @@ pub struct LogSleuthApp {
     pub state: AppState,
     pub scan_manager: ScanManager,
     pub tail_manager: TailManager,
+    /// Background thread that polls the scan directory for newly created log
+    /// files and reports them so they can be appended to the live session.
+    pub dir_watcher: DirWatcher,
 }
 
 impl LogSleuthApp {
@@ -23,6 +27,7 @@ impl LogSleuthApp {
             state,
             scan_manager: ScanManager::new(),
             tail_manager: TailManager::new(),
+            dir_watcher: DirWatcher::new(),
         }
     }
 }
@@ -120,6 +125,40 @@ impl eframe::App for LogSleuthApp {
                     self.state.sort_entries_chronologically();
                     // Persist the session so the next launch can restore this state.
                     self.state.save_session();
+
+                    // (Re-)start the recursive directory watcher whenever a scan over
+                    // a known directory completes.  This covers both the initial scan
+                    // and any append scan triggered by the watcher itself, keeping the
+                    // watcher's known-paths set in sync with the current session.
+                    //
+                    // Only started for directory sessions (scan_path is Some).
+                    // File-only sessions (pending_replace_files) clear scan_path first,
+                    // so they correctly skip this branch.
+                    if let Some(ref dir) = self.state.scan_path.clone() {
+                        let known: std::collections::HashSet<std::path::PathBuf> = self
+                            .state
+                            .discovered_files
+                            .iter()
+                            .map(|f| f.path.clone())
+                            .collect();
+                        self.dir_watcher.start_watch(
+                            dir.clone(),
+                            known,
+                            DirWatchConfig {
+                                poll_interval_ms: self.state.dir_watch_poll_interval_ms,
+                                ..DirWatchConfig::default()
+                            },
+                        );
+                        self.state.dir_watcher_active = true;
+                        tracing::info!(dir = %dir.display(), "Directory watcher (re)started after scan");
+                    }
+
+                    // If Live Tail was active before the append scan completed,
+                    // restart it so the newly added files are watched too.
+                    if self.state.tail_active {
+                        self.tail_manager.stop_tail();
+                        self.state.request_start_tail = true;
+                    }
                 }
                 crate::core::model::ScanProgress::Warning { message } => {
                     self.state.warnings.push(message);
@@ -166,7 +205,36 @@ impl eframe::App for LogSleuthApp {
         // Keep repainting while tail is active so new entries appear promptly.
         if had_tail || self.state.tail_active {
             ctx.request_repaint_after(std::time::Duration::from_millis(
-                crate::util::constants::TAIL_POLL_INTERVAL_MS,
+                self.state.tail_poll_interval_ms,
+            ));
+        }
+
+        // Poll directory watcher for newly-created files.
+        // When new files are found they are appended to the current session
+        // (same path as "Add File(s)...") so filters, tail, and the timeline
+        // all update automatically.
+        let dir_watch_messages = self.dir_watcher.poll_progress();
+        for msg in dir_watch_messages {
+            match msg {
+                crate::core::model::DirWatchProgress::NewFiles(paths) => {
+                    let count = paths.len();
+                    tracing::info!(count, "Directory watcher: adding new files to session");
+                    self.state.status_message =
+                        format!("Directory watcher: {count} new file(s) detected, adding...");
+                    self.state.scan_in_progress = true;
+                    self.scan_manager.start_scan_files(
+                        paths,
+                        self.state.profiles.clone(),
+                        self.state.max_total_entries,
+                    );
+                }
+            }
+        }
+        // Keep repainting while the dir watcher is active so new files appear
+        // promptly (poll at the same cadence as the watcher thread).
+        if self.state.dir_watcher_active {
+            ctx.request_repaint_after(std::time::Duration::from_millis(
+                self.state.dir_watch_poll_interval_ms,
             ));
         }
 
@@ -181,6 +249,10 @@ impl eframe::App for LogSleuthApp {
         // ---- Handle flags set by discovery panel ----
         // pending_scan: a panel requested a new scan via Open Directory button.
         if let Some(path) = self.state.pending_scan.take() {
+            // Stop any current dir watcher before starting the new scan.
+            // It will be restarted automatically when ParsingCompleted fires.
+            self.dir_watcher.stop_watch();
+            self.state.dir_watcher_active = false;
             // Capture the date filter BEFORE clear() — clear() does not reset
             // discovery_date_input intentionally (user preference, not scan state).
             let modified_since = self.state.discovery_modified_since();
@@ -191,6 +263,8 @@ impl eframe::App for LogSleuthApp {
                 self.state.profiles.clone(),
                 DiscoveryConfig {
                     max_files: self.state.max_files_limit,
+                    max_depth: self.state.max_scan_depth,
+                    max_total_entries: self.state.max_total_entries,
                     modified_since,
                     ..DiscoveryConfig::default()
                 },
@@ -206,6 +280,8 @@ impl eframe::App for LogSleuthApp {
                 self.state.profiles.clone(),
                 DiscoveryConfig {
                     max_files: self.state.max_files_limit,
+                    max_depth: self.state.max_scan_depth,
+                    max_total_entries: self.state.max_total_entries,
                     modified_since,
                     ..DiscoveryConfig::default()
                 },
@@ -213,18 +289,31 @@ impl eframe::App for LogSleuthApp {
         }
         // pending_replace_files: user chose "Open Log(s)..." — clear and load selected files.
         if let Some(files) = self.state.pending_replace_files.take() {
+            // Explicitly stop the directory watcher and clear scan_path so the watcher
+            // is NOT restarted after the file-only scan completes (Rule 17 pre-flight).
+            self.dir_watcher.stop_watch();
+            self.state.dir_watcher_active = false;
             self.state.clear();
+            // scan_path must be None for file-only sessions so the dir watcher is
+            // not started in the ParsingCompleted handler.
+            self.state.scan_path = None;
             self.state.scan_in_progress = true;
             self.state.status_message = format!("Opening {} file(s)...", files.len());
-            self.scan_manager
-                .start_scan_files(files, self.state.profiles.clone());
+            self.scan_manager.start_scan_files(
+                files,
+                self.state.profiles.clone(),
+                self.state.max_total_entries,
+            );
         }
         // pending_single_files: user chose "Add File(s)" — append to session.
         if let Some(files) = self.state.pending_single_files.take() {
             self.state.scan_in_progress = true;
             self.state.status_message = format!("Adding {} file(s)...", files.len());
-            self.scan_manager
-                .start_scan_files(files, self.state.profiles.clone());
+            self.scan_manager.start_scan_files(
+                files,
+                self.state.profiles.clone(),
+                self.state.max_total_entries,
+            );
         }
         // request_cancel: a panel requested the current scan be cancelled.
         if self.state.request_cancel {
@@ -278,7 +367,8 @@ impl eframe::App for LogSleuthApp {
             } else {
                 let watching = files.len();
                 let start_id = self.state.next_entry_id();
-                self.tail_manager.start_tail(files, start_id);
+                self.tail_manager
+                    .start_tail(files, start_id, self.state.tail_poll_interval_ms);
                 self.state.tail_active = true;
                 self.state.status_message =
                     format!("Live tail active — watching {watching} file(s).");
@@ -300,6 +390,9 @@ impl eframe::App for LogSleuthApp {
             if self.state.tail_active {
                 self.tail_manager.stop_tail();
             }
+            // Stop the directory watcher.
+            self.dir_watcher.stop_watch();
+            self.state.dir_watcher_active = false;
             // Cancel any in-flight scan so the background thread stops sending
             // EntriesBatch / ParsingCompleted messages that would immediately
             // re-populate the state we are about to clear.
@@ -318,6 +411,8 @@ impl eframe::App for LogSleuthApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open Directory\u{2026}").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                            self.dir_watcher.stop_watch();
+                            self.state.dir_watcher_active = false;
                             self.state.clear();
                             self.state.scan_path = Some(path.clone());
                             self.scan_manager.start_scan(
@@ -325,6 +420,8 @@ impl eframe::App for LogSleuthApp {
                                 self.state.profiles.clone(),
                                 DiscoveryConfig {
                                     max_files: self.state.max_files_limit,
+                                    max_depth: self.state.max_scan_depth,
+                                    max_total_entries: self.state.max_total_entries,
                                     ..DiscoveryConfig::default()
                                 },
                             );
@@ -543,6 +640,19 @@ impl eframe::App for LogSleuthApp {
                     );
                     ui.separator();
                 }
+                // WATCH badge — shown while the directory watcher is active.
+                if self.state.dir_watcher_active {
+                    ui.label(
+                        egui::RichText::new(" \u{1f441} WATCH ")
+                            .strong()
+                            .color(egui::Color32::from_rgb(96, 165, 250)) // Blue 400
+                            .background_color(egui::Color32::from_rgba_premultiplied(
+                                96, 165, 250, 28,
+                            )),
+                    )
+                    .on_hover_text("Watching directory for new log files");
+                    ui.separator();
+                }
                 ui.label(&self.state.status_message);
                 // Cancel button visible only while a scan is running
                 if self.state.scan_in_progress && ui.small_button("Cancel").clicked() {
@@ -629,6 +739,9 @@ impl eframe::App for LogSleuthApp {
     ///
     /// Saves the current session so the next launch can restore it.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Stop background threads cleanly before the process exits.
+        self.dir_watcher.stop_watch();
+        self.tail_manager.stop_tail();
         self.state.save_session();
     }
 }

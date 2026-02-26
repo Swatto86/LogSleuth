@@ -5,9 +5,17 @@
 // Uses egui's `ScrollArea::show_rows` which renders only the rows currently
 // visible in the viewport, giving O(1) rendering cost regardless of entry count.
 // Rule 16 compliance: selection is always valid; row clicks update state directly.
+//
+// Text contrast: each row is rendered with a LayoutJob that colours only the
+// severity badge prefix ([CRIT], [ERR ], etc.) with the severity-specific hue,
+// while the timestamp / filename / message body uses `theme::row_text_colour`
+// (white in dark mode, near-black in light mode).  This guarantees that text
+// remains readable even when a Critical or Error severity background tint is
+// applied to the row (red-on-red contrast is avoided).
 
 use crate::app::state::AppState;
 use crate::ui::theme;
+use egui::text::{LayoutJob, TextFormat};
 
 /// Render the timeline panel (central area).
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
@@ -57,30 +65,50 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 let is_bookmarked = state.is_bookmarked(entry_id);
                 let is_correlated = state.correlated_ids.contains(&entry_id);
 
-                // Format: [SEV ] HH:MM:SS | filename.log | first line of message
+                // Build a LayoutJob so the severity badge ([CRIT], [ERR ], etc.)
+                // keeps its severity-specific hue while the rest of the row
+                // (timestamp, filename, message) uses a high-contrast foreground
+                // colour: white in dark mode, near-black in light mode.
+                // This prevents red-on-red readability problems on Critical/Error
+                // rows that carry a severity background tint.
                 let ts = entry
                     .timestamp
                     .map(|t| t.format("%H:%M:%S").to_string())
                     .unwrap_or_else(|| "--:--:--".to_string());
-
                 let file_name = entry
                     .source_file
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("?");
-
                 let first_line = entry.message.lines().next().unwrap_or(&entry.message);
 
-                let row_text = egui::RichText::new(format!(
-                    "[{:<4}] {} | {:>16} | {}",
-                    entry.severity.short_label(),
-                    ts,
-                    truncate_filename(file_name, 16),
-                    first_line,
-                ))
-                .color(sev_colour)
-                .monospace()
-                .size(12.0);
+                let font = egui::FontId::monospace(12.0);
+                let body_colour = theme::row_text_colour(state.dark_mode);
+
+                let mut row_job = LayoutJob::default();
+                row_job.append(
+                    &format!("[{:<4}] ", entry.severity.short_label()),
+                    0.0,
+                    TextFormat {
+                        font_id: font.clone(),
+                        color: sev_colour,
+                        ..Default::default()
+                    },
+                );
+                row_job.append(
+                    &format!(
+                        "{} | {:>16} | {}",
+                        ts,
+                        truncate_filename(file_name, 16),
+                        first_line
+                    ),
+                    0.0,
+                    TextFormat {
+                        font_id: font,
+                        color: body_colour,
+                        ..Default::default()
+                    },
+                );
 
                 // Severity background tint — lowest priority layer, drawn first so
                 // that the correlated (teal) and bookmarked (gold) tints visually
@@ -159,7 +187,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                             bookmark_toggle = Some(entry_id);
                         }
 
-                        ui.selectable_label(is_selected, row_text)
+                        ui.selectable_label(is_selected, row_job)
                     })
                     .inner;
 

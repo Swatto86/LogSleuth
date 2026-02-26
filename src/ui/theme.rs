@@ -98,6 +98,23 @@ const FILE_COLOUR_PALETTE: &[Color32] = &[
     Color32::from_rgb(236, 72, 153),  // Pink 500
 ];
 
+/// Text colour used for the body of timeline rows.
+///
+/// In dark mode this returns pure white so every row — including those with a
+/// Critical/Error severity background tint — remains fully readable.
+/// In light mode this returns near-black (Slate 950) for the same reason.
+///
+/// The severity badge prefix `[CRIT]` etc. is still rendered with
+/// `severity_colour` for visual distinctiveness; this function controls the
+/// timestamp, filename, and message text that follow the badge.
+pub fn row_text_colour(dark_mode: bool) -> Color32 {
+    if dark_mode {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(15, 23, 42) // Slate 950 — near-black
+    }
+}
+
 /// Return the nth colour from the file palette (wraps for > 24 files).
 pub fn file_colour(index: usize) -> Color32 {
     FILE_COLOUR_PALETTE[index % FILE_COLOUR_PALETTE.len()]

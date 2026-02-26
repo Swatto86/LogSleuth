@@ -38,9 +38,7 @@ use std::time::Duration;
 // here via the constant names; the actual values live in constants.rs).
 // =============================================================================
 
-use crate::util::constants::{
-    MAX_TAIL_READ_BYTES_PER_TICK, TAIL_CANCEL_CHECK_INTERVAL_MS, TAIL_POLL_INTERVAL_MS,
-};
+use crate::util::constants::{MAX_TAIL_READ_BYTES_PER_TICK, TAIL_CANCEL_CHECK_INTERVAL_MS};
 
 // =============================================================================
 // Public types
@@ -85,7 +83,15 @@ impl TailManager {
     ///
     /// `entry_id_start` is the next available monotonic entry ID so that tail
     /// entries do not collide with IDs assigned during the initial scan.
-    pub fn start_tail(&mut self, files: Vec<TailFileInfo>, entry_id_start: u64) {
+    /// `poll_interval_ms` controls how often each watched file is checked for
+    /// new content.  Lower values give faster tail updates at the cost of more
+    /// I/O; higher values reduce CPU/disk overhead.
+    pub fn start_tail(
+        &mut self,
+        files: Vec<TailFileInfo>,
+        entry_id_start: u64,
+        poll_interval_ms: u64,
+    ) {
         self.stop_tail();
 
         let (tx, rx) = mpsc::channel();
@@ -96,10 +102,10 @@ impl TailManager {
 
         let file_count = files.len();
         std::thread::spawn(move || {
-            run_tail_watcher(files, entry_id_start, tx, cancel);
+            run_tail_watcher(files, entry_id_start, tx, cancel, poll_interval_ms);
         });
 
-        tracing::info!(files = file_count, "Live tail started");
+        tracing::info!(files = file_count, poll_interval_ms, "Live tail started");
     }
 
     /// Request the background tail thread to stop.
@@ -160,13 +166,14 @@ struct FileState {
 // Background tail watcher
 // =============================================================================
 
-/// Background poll loop. Checks each file every `TAIL_POLL_INTERVAL_MS` for
+/// Background poll loop. Checks each file every `poll_interval_ms` ms for
 /// new content and sends parsed entries back to the UI via `tx`.
 fn run_tail_watcher(
     files: Vec<TailFileInfo>,
     entry_id_start: u64,
     tx: mpsc::Sender<TailProgress>,
     cancel: Arc<AtomicBool>,
+    poll_interval_ms: u64,
 ) {
     macro_rules! send {
         ($msg:expr) => {
@@ -206,8 +213,8 @@ fn run_tail_watcher(
     let mut next_id = entry_id_start;
 
     // Sub-divide each poll interval into cancel-check slices.
-    // Total sleep = TAIL_POLL_INTERVAL_MS; wake every TAIL_CANCEL_CHECK_INTERVAL_MS.
-    let slices = (TAIL_POLL_INTERVAL_MS / TAIL_CANCEL_CHECK_INTERVAL_MS).max(1);
+    // Total sleep = poll_interval_ms; wake every TAIL_CANCEL_CHECK_INTERVAL_MS.
+    let slices = (poll_interval_ms / TAIL_CANCEL_CHECK_INTERVAL_MS).max(1);
 
     loop {
         // Interruptible sleep: check cancel flag between slices.

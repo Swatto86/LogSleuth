@@ -95,7 +95,12 @@ impl ScanManager {
     /// entries are streamed via `EntriesBatch` and the file list is sent via
     /// `AdditionalFilesDiscovered` so the UI extends rather than replaces its
     /// current file list.
-    pub fn start_scan_files(&mut self, files: Vec<PathBuf>, profiles: Vec<FormatProfile>) {
+    pub fn start_scan_files(
+        &mut self,
+        files: Vec<PathBuf>,
+        profiles: Vec<FormatProfile>,
+        max_total_entries: usize,
+    ) {
         self.cancel_scan();
 
         let (tx, rx) = mpsc::channel();
@@ -107,7 +112,7 @@ impl ScanManager {
         let parse_config = ParseConfig::default();
 
         std::thread::spawn(move || {
-            run_files_scan(files, profiles, parse_config, tx, cancel);
+            run_files_scan(files, profiles, parse_config, tx, cancel, max_total_entries);
         });
 
         tracing::info!("File append scan started");
@@ -209,6 +214,7 @@ fn run_scan(
         cancel,
         false,
         total_found,
+        config.max_total_entries,
     );
 }
 
@@ -222,6 +228,7 @@ fn run_scan(
 /// `append`: when `true` the discovered-file list is sent as
 /// `AdditionalFilesDiscovered` (extends the UI list); when `false` it is sent
 /// as `FilesDiscovered` (replaces the UI list).
+#[allow(clippy::too_many_arguments)]
 fn run_parse_pipeline(
     mut discovered_files: Vec<crate::core::model::DiscoveredFile>,
     profiles: Vec<FormatProfile>,
@@ -232,6 +239,8 @@ fn run_parse_pipeline(
     // Total files found during discovery before any limit was applied.
     // For user-selected file lists this equals `discovered_files.len()`.
     total_found: usize,
+    // Maximum total entries to ingest across all files in this pipeline run.
+    max_total_entries: usize,
 ) {
     macro_rules! send {
         ($msg:expr) => {
@@ -421,8 +430,7 @@ fn run_parse_pipeline(
         // Enforce the hard entry cap (Rule 11: bounded collections).
         // All entries from this file are still counted in file_summaries so
         // the scan summary accurately reflects what was found vs. what was loaded.
-        let remaining_capacity =
-            crate::util::constants::MAX_TOTAL_ENTRIES.saturating_sub(all_entries.len());
+        let remaining_capacity = max_total_entries.saturating_sub(all_entries.len());
         if remaining_capacity == 0 {
             // Cap already hit before this file; entries were skipped above.
             // This branch should not be reached now that the loop breaks early,
@@ -433,7 +441,7 @@ fn run_parse_pipeline(
             // Partial ingest: take as many entries as fit, then trigger the cap.
             all_entries.extend(parse_result.entries.into_iter().take(remaining_capacity));
             entry_cap_reached = true;
-            let cap = crate::util::constants::MAX_TOTAL_ENTRIES;
+            let cap = max_total_entries;
             let msg = format!(
                 "Entry limit reached: {cap} entries loaded. \
                  Remaining files in this scan have been skipped to prevent an out-of-memory crash. \
@@ -512,6 +520,7 @@ fn run_files_scan(
     parse_config: ParseConfig,
     tx: mpsc::Sender<ScanProgress>,
     cancel: Arc<AtomicBool>,
+    max_total_entries: usize,
 ) {
     use crate::util::constants::DEFAULT_LARGE_FILE_THRESHOLD;
     use chrono::DateTime;
@@ -562,6 +571,7 @@ fn run_files_scan(
         cancel,
         true,
         total_found,
+        max_total_entries,
     );
 }
 

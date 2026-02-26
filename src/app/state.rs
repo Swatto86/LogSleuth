@@ -87,6 +87,17 @@ pub struct AppState {
     pub pending_single_files: Option<Vec<PathBuf>>,
 
     // -------------------------------------------------------------------------
+    // Directory watcher state
+    // -------------------------------------------------------------------------
+    /// Whether the recursive directory watcher background thread is currently
+    /// running.  Set to `true` when the watcher is started after a directory
+    /// scan completes; cleared on `clear()` / `new_session()`.
+    ///
+    /// The watcher monitors the scan directory for newly created log files and
+    /// automatically adds them to the session in real time.
+    pub dir_watcher_active: bool,
+
+    // -------------------------------------------------------------------------
     // Live tail state
     // -------------------------------------------------------------------------
     /// Whether the live tail watcher is currently running.
@@ -159,6 +170,26 @@ pub struct AppState {
     /// Changes are applied to the next scan.
     pub max_files_limit: usize,
 
+    /// Maximum total log entries to hold in memory across all scanned files.
+    /// User-configurable via the Options dialog; defaults to MAX_TOTAL_ENTRIES.
+    /// Changes are applied to the next scan.
+    pub max_total_entries: usize,
+
+    /// Maximum directory recursion depth for scans and the directory watcher.
+    /// User-configurable via the Options dialog; defaults to DEFAULT_MAX_DEPTH.
+    /// Changes are applied to the next scan/watch start.
+    pub max_scan_depth: usize,
+
+    /// How often the live tail background thread polls watched files (ms).
+    /// User-configurable via the Options dialog; defaults to TAIL_POLL_INTERVAL_MS.
+    /// Applied when a new tail session is started.
+    pub tail_poll_interval_ms: u64,
+
+    /// How often the directory watcher polls for new files (ms).
+    /// User-configurable via the Options dialog; defaults to DIR_WATCH_POLL_INTERVAL_MS.
+    /// Applied when a new directory watch session is started.
+    pub dir_watch_poll_interval_ms: u64,
+
     /// Whether the Options dialog is currently open.
     pub show_options: bool,
 
@@ -212,6 +243,7 @@ impl AppState {
             file_list_search: String::new(),
             file_colours: HashMap::new(),
             pending_single_files: None,
+            dir_watcher_active: false,
             tail_active: false,
             tail_auto_scroll: true,
             request_start_tail: false,
@@ -224,6 +256,10 @@ impl AppState {
             session_path: None,
             initial_scan: None,
             max_files_limit: crate::util::constants::DEFAULT_MAX_FILES,
+            max_total_entries: crate::util::constants::MAX_TOTAL_ENTRIES,
+            max_scan_depth: crate::util::constants::DEFAULT_MAX_DEPTH,
+            tail_poll_interval_ms: crate::util::constants::TAIL_POLL_INTERVAL_MS,
+            dir_watch_poll_interval_ms: crate::util::constants::DIR_WATCH_POLL_INTERVAL_MS,
             show_options: false,
             total_files_found: 0,
             pending_replace_files: None,
@@ -548,7 +584,8 @@ impl AppState {
         self.file_list_search.clear();
         self.file_colours.clear();
         self.pending_single_files = None;
-        // Stop tail on clear — a new scan starts fresh.
+        // Stop tail and dir watcher on clear — a new scan starts fresh.
+        self.dir_watcher_active = false;
         self.tail_active = false;
         self.request_start_tail = false;
         self.request_stop_tail = false;

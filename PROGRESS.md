@@ -506,6 +506,37 @@ The relative-time filter (15m / 1h / 6h / 24h) now uses the **OS last-modified t
 
 ---
 
+## Increment 27: Configurable Options Dialog + Documentation Update
+**Status: COMPLETE**
+
+Expanded the Options dialog with three sections of user-configurable runtime settings, threaded all values end-to-end through the scan/tail/dir-watch pipeline, and brought README + ATLAS current.
+
+### New settings
+
+| Setting | Default | Where applied |
+|---------|---------|---------------|
+| Max total entries | 1,000,000 | Next scan — stops ingesting once cap reached |
+| Max scan depth | 10 | Next scan + directory watch start |
+| Tail poll interval | 500 ms | Next Live Tail session start |
+| Dir watch poll interval | 2,000 ms | Next Directory Watch session start |
+
+### File changes
+
+- [x] `src/util/constants.rs` — Added `MIN_MAX_FILES`, `MIN_MAX_TOTAL_ENTRIES`, `ABSOLUTE_MAX_TOTAL_ENTRIES`, `MIN_TAIL_POLL_INTERVAL_MS`, `MAX_TAIL_POLL_INTERVAL_MS`, `MIN_DIR_WATCH_POLL_INTERVAL_MS`, `MAX_DIR_WATCH_POLL_INTERVAL_MS` as named-constant bounds for the new sliders.
+- [x] `src/core/discovery.rs` — Added `max_total_entries: usize` field to `DiscoveryConfig`; default initialised to `constants::MAX_TOTAL_ENTRIES`.
+- [x] `src/app/scan.rs` — `run_parse_pipeline` now accepts `max_total_entries: usize` parameter (replaces hardcoded constant); threaded through from `run_scan` (using `config.max_total_entries`) and `run_files_scan` (using passed value). `start_scan_files` now accepts `max_total_entries: usize`. `#[allow(clippy::too_many_arguments)]` on `run_parse_pipeline`.
+- [x] `src/app/tail.rs` — `start_tail(&mut self, files, entry_id_start, poll_interval_ms: u64)` and `run_tail_watcher(..., poll_interval_ms: u64)`; removed unused `TAIL_POLL_INTERVAL_MS` import.
+- [x] `src/app/dir_watcher.rs` — Added `poll_interval_ms: u64` to `DirWatchConfig` (default: `DIR_WATCH_POLL_INTERVAL_MS`); `run_dir_watcher` uses `config.poll_interval_ms` instead of the constant; removed unused `DIR_WATCH_POLL_INTERVAL_MS` import.
+- [x] `src/app/state.rs` — Added 4 new option fields: `max_total_entries`, `max_scan_depth`, `tail_poll_interval_ms`, `dir_watch_poll_interval_ms`; all initialised in `new()` from constants; **excluded from `clear()`** (user preferences survive session resets).
+- [x] `src/gui.rs` — All `DiscoveryConfig` constructions now set `max_depth` and `max_total_entries` from state; `start_tail` call passes `state.tail_poll_interval_ms`; `dir_watcher.start_watch` passes `DirWatchConfig { poll_interval_ms: state.dir_watch_poll_interval_ms, ..default() }`; repaint intervals use state values instead of constants; all three `start_scan_files` call sites pass `state.max_total_entries`.
+- [x] `src/ui/panels/options.rs` — Full rewrite: 3 sections (Ingest Limits, Live Tail, Directory Watch) each with logarithmic sliders and Reset buttons.
+- [x] `README.md` — New "Directory Watch" section; new "Options" section with tables for all configurable settings.
+- [x] `ATLAS.md` — Status bumped to Increment 27; `options.rs`, `constants.rs`, `state.rs`, `tail.rs`, `dir_watcher.rs` descriptions updated.
+
+**Test results: 61 unit tests + 14 E2E tests = 75 total, all passing. Zero clippy warnings.**
+
+---
+
 ### High Priority
 - [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*
 
@@ -514,7 +545,7 @@ The relative-time filter (15m / 1h / 6h / 24h) now uses the **OS last-modified t
 - [ ] **Export retains filter** -- Optionally export the full entry set (pre-filter) alongside the filtered export.
 - [ ] **Profile editor UI** -- In-app wizard to create and test a new TOML profile without leaving LogSleuth.
 - [x] **Additional built-in profiles** -- Increments 17/18/20/21 added SQL Server, Apache, nginx, DHCP, Intune IME, Windows Cluster, Kubernetes klog, Exchange tracking, PostgreSQL, Tomcat/Catalina, SCCM CMTrace, Windows Firewall. Remaining candidates: Windows Event Log XML exports, Docker/podman JSON logs (use json-lines profile), systemd journal exports (use syslog profile).
-- [ ] **Configurable max files / max entries** -- Surface `DEFAULT_MAX_FILES` and any entry cap as editable config values in the UI rather than compile-time constants only.
+- [x] **Configurable max files / max entries** -- Max files, max total entries, max scan depth, tail poll interval, and directory watch poll interval are all now user-configurable via Edit > Options… and apply on the next scan/session start. *(Increment 27)*
 
 ### Low Priority / Research
 - [ ] **Parallel file parsing** -- Use rayon to parse multiple files concurrently on the background thread; the sort step already handles out-of-order results.

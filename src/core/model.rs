@@ -420,6 +420,17 @@ pub enum ScanProgress {
 }
 
 // =============================================================================
+// Directory Watch Progress (for real-time new-file notifications)
+// =============================================================================
+
+/// Progress messages sent from the directory watcher thread to the UI thread.
+#[derive(Debug, Clone)]
+pub enum DirWatchProgress {
+    /// One or more new log files were detected in the watched directory tree.
+    NewFiles(Vec<std::path::PathBuf>),
+}
+
+// =============================================================================
 // Tail Progress (for live tail UI updates)
 // =============================================================================
 
