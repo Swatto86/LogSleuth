@@ -691,6 +691,96 @@ Font file I/O was occurring inside the `eframe::run_native` creator closure — 
 
 ---
 
+## Increment 34: Timestamp Robustness — Profile Fixes, parse_timestamp Fallbacks, sniff_timestamp
+**Status: COMPLETE**
+
+Comprehensive hardening of timestamp parsing to handle the wide variety of real-world log formats that either have no year, use non-standard separators, or fall outside the profile's declared `timestamp_format`.
+
+### Profile bugs fixed
+
+1. **`profiles/veeam_vbr.toml`** — `Svc.VeeamNFS.log` lines use `[DD.MM.YYYY HH:MM:SS.mmm] < thread>` (milliseconds present, thread ID space-padded). The original regex required no milliseconds and no space before the thread ID, so every NFS line folded silently as continuation text onto the previous entry. Fixed: `(?:\.\d+)?` for optional ms, `<\s*...\s*>` for space-padded thread, level keyword group made optional, `"Err"` added to `severity_mapping`, `(?i)` added to all `severity_override` patterns.
+
+2. **`profiles/sccm_cmtrace.toml` + `profiles/intune_ime.toml`** — These profiles captured `time="HH:MM:SS"` only; `NaiveDateTime` always failed (no date component), so every SCCM/Intune entry displayed `--:--:--`. Fixed: regex now captures `date="M-D-YYYY"` attribute, `timestamp_format = "%m-%d-%Y"` — giving day-level precision.
+
+3. **`profiles/syslog_rfc3164.toml`** — `%b %d %H:%M:%S` has no year; `NaiveDateTime` always failed. Handled by the new year-injection fallback in `parse_timestamp`; profile updated with a limitation comment.
+
+### parse_timestamp fallback chain extended
+
+- **4th fallback** — Separator normalisation: replaces `/` with `-` and `T` with ` ` in the timestamp string, then retries `NaiveDateTime` and `NaiveDate` parse. Fixes slash-separated dates (`2024/01/15`) and ISO `T`-separator variants when the profile format uses `-` and space.
+- **5th fallback** — Year injection: if the format string contains no `%Y`, prepends the current UTC year and retries. Fixes BSD syslog RFC 3164 (`Jan 15 14:30:22`), klog (`MMDD HH:MM:SS.mmm`), and similar year-less formats across all profiles.
+- `use chrono::Datelike` added to imports.
+- 3 new regression tests: `test_parse_timestamp_slash_separated_date`, `test_parse_timestamp_t_separator`, `test_parse_timestamp_syslog_yearless`.
+
+### sniff_timestamp — universal post-parse fallback (12 tiers)
+
+A new `pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>>` uses a `OnceLock<Vec<Sniffer>>` (lazily compiled) to try 12 common timestamp patterns against any raw log line, returning the first match. Applied in `parse_content()` as a post-parse sweep over all entries with `timestamp: None` before `ParseResult` is returned.
+
+| Tier | Pattern | Example |
+|------|---------|---------|
+| 1 | RFC 3339 / ISO 8601 + explicit timezone | `2024-01-15T14:30:22Z`, `+05:30` |
+| 2 | log4j comma-milliseconds | `2024-01-15 14:30:22,999` |
+| 3 | ISO space/T, optional dot-millis | `2024-01-15 14:30:22.123` |
+| 4 | Slash year-first | `2024/01/15 14:30:22` |
+| 5 | Dot day-first (Veeam) | `26.02.2026 22:07:56.535` |
+| 6 | Apache combined log | `15/Jan/2024:14:30:22 +0000` |
+| 7 | Slash YYYY (US/GB disambiguation — see Inc 35) | `01/15/2024 14:30:22` |
+| 8 | Windows DHCP two-digit year (disambiguation) | `01/15/24,14:30:22` |
+| 9 | Month-name 4-digit year | `Jan 15, 2024 14:30:22` |
+| 10 | BSD syslog year-less (year injected) | `Jan 15 14:30:22` |
+| 11 | Compact ISO | `20240115T143022` |
+| 12 | Unix epoch at line start | `1705329022` |
+
+Benefits: plain-text (raw-mode) files with embedded timestamps now have them extracted automatically; continuation-mode entries where the profile timestamp_format didn't match also get timestamps; any profile where the primary parse failed gets a second chance.
+
+17 new regression tests covering each tier plus negative and integration cases. `test_plain_text_entries_get_sniffed_timestamps` verifies the post-parse pass on a synthetic plain-text profile.
+
+**Test results: 91 unit tests + 29 E2E tests = 120 total, all passing. Zero clippy warnings.**
+
+---
+
+## Increment 35: US vs GB Date Disambiguation in Timestamp Sniffer
+**Status: COMPLETE**
+
+Tiers 7 and 8 of `sniff_timestamp` previously assumed US `MM/DD/YYYY` ordering unconditionally, misinterpreting unambiguous GB dates like `15/01/2024` (15 January) as invalid or wrong dates.
+
+**Disambiguation logic** (applied identically to both tiers):
+- First numeric field > 12 → unambiguously `DD/MM` (day cannot be a month)
+- Second numeric field > 12 → unambiguously `MM/DD` (second field cannot be a month)
+- Both ≤ 12 → ambiguous; US `MM/DD` tried first, GB `DD/MM` as fallback. Documented in code: for truly ambiguous dates (e.g. `01/02/2024` could be Jan 2 or Feb 1) a profile with an explicit `timestamp_format` is the reliable solution.
+
+**Changes**:
+- `src/core/parser.rs` — Tier 7 and Tier 8 `parse` closures replaced with field-extraction + conditional logic.
+- Test suite: `test_sniff_us_slash` split into `test_sniff_us_slash_unambiguous` (second field 15 > 12), `test_sniff_gb_slash_unambiguous` (first field 15 > 12), and `test_sniff_slash_ambiguous_defaults_to_us` (both fields ≤ 12, Jan 2 result). DHCP tier: `test_sniff_dhcp_comma` split into `test_sniff_dhcp_comma_us` and `test_sniff_dhcp_comma_gb`.
+
+**Test results: 94 unit tests + 29 E2E tests = 123 total, all passing. Zero clippy warnings.**
+
+---
+
+## Increment 36: Live mtime Display in File List
+**Status: COMPLETE**
+
+The file list in the Files tab now shows a live last-modified timestamp next to each file, updated dynamically as the directory watcher detects writes — no rescan required.
+
+### Changes
+
+- [x] `src/core/model.rs` — Added `FileMtimeUpdates(Vec<(PathBuf, DateTime<Utc>)>)` variant to `DirWatchProgress`.  Each element is `(path, new_mtime)`.
+
+- [x] `src/app/dir_watcher.rs` — Background thread seeds `tracked_mtimes: HashMap<PathBuf, SystemTime>` from `known_paths` at startup. After each poll cycle (walk for new files), stats every known path and collects those whose `SystemTime` mtime differs from the tracked value. Changed entries are sent as `DirWatchProgress::FileMtimeUpdates`; `tracked_mtimes` is updated immediately so the next cycle compares against the new baseline. New files added to `known_paths` during the walk are seeded into `tracked_mtimes` via `entry().or_insert(mtime)` to prevent a spurious change event on the very next poll. Per-file stat errors are silently skipped (Rule 11).
+
+- [x] `src/gui.rs` — New `DirWatchProgress::FileMtimeUpdates` arm in the dir-watch message handler: for each `(path, mtime)`, finds the matching `DiscoveredFile` in `state.discovered_files` and updates `f.modified = Some(mtime)` in-place. The UI repaints at the dir-watch poll cadence anyway, so the display refreshes automatically.
+
+- [x] `src/ui/panels/discovery.rs` — Added `mtime_text: String` (6th field) to the `file_entries` pre-collected tuple. Computed by a new `format_mtime(Option<DateTime<Utc>>) -> String` helper:
+  - Same day (local): `HH:MM:SS`
+  - Same calendar year: `D Mon HH:MM` (e.g. `26 Feb 14:30`)
+  - Prior year: `YYYY-MM-DD`
+  - `None`: empty string (nothing displayed)
+
+  In each row the mtime is rendered as small dim text in the `right_to_left` layout block, to the left of the profile label. Hover tooltip extended with `Modified: <mtime_text>`.
+
+**Test results: 94 unit tests + 29 E2E tests = 123 total, all passing. Zero clippy warnings.**
+
+---
+
 ### High Priority
 - [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*
 
