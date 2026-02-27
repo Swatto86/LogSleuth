@@ -198,11 +198,15 @@ impl eframe::App for LogSleuthApp {
                             known,
                             DirWatchConfig {
                                 poll_interval_ms: self.state.dir_watch_poll_interval_ms,
-                                // Forward the date filter so the watcher rejects files
-                                // older than the cutoff used during the initial scan.
-                                // Without this, a file created or renamed into the
-                                // directory after the scan would bypass the filter.
-                                modified_since: self.state.discovery_modified_since(),
+                                // Do NOT forward modified_since to the watcher.  The date
+                                // filter governs which existing files are loaded on the
+                                // initial scan.  For live watching the rule is simpler: any
+                                // file not yet in known_paths is genuinely new and must be
+                                // added.  Applying the mtime gate here causes silent misses
+                                // when the remote server's clock is behind the filter cutoff,
+                                // or when a pre-existing file starts receiving new writes
+                                // after the scan ran.
+                                modified_since: None,
                                 ..DirWatchConfig::default()
                             },
                         );
@@ -920,7 +924,7 @@ impl eframe::App for LogSleuthApp {
                         known,
                         DirWatchConfig {
                             poll_interval_ms: self.state.dir_watch_poll_interval_ms,
-                            modified_since: self.state.discovery_modified_since(),
+                            modified_since: None,
                             ..DirWatchConfig::default()
                         },
                     );

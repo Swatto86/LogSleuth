@@ -199,7 +199,7 @@ pub const MAX_CORRELATION_WINDOW_SECS: i64 = 3_600;
 pub const DEFAULT_FILTER_DEBOUNCE_MS: u64 = 300;
 
 /// Default UI body font size in points.
-pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+pub const DEFAULT_FONT_SIZE: f32 = 14.5;
 
 /// Minimum user-configurable UI font size (points).
 pub const MIN_FONT_SIZE: f32 = 10.0;
