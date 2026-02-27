@@ -28,7 +28,13 @@ impl PlatformPaths {
     pub fn resolve() -> Self {
         if let Some(proj_dirs) = ProjectDirs::from("", "", constants::APP_ID) {
             let config_dir = proj_dirs.config_dir().to_path_buf();
-            let user_profiles_dir = config_dir.join(constants::PROFILES_DIR_NAME);
+            // Profiles live one level above config/ so the user-visible path is
+            // %APPDATA%\LogSleuth\profiles\ rather than the deeper
+            // %APPDATA%\LogSleuth\config\profiles\.
+            let user_profiles_dir = config_dir
+                .parent()
+                .unwrap_or(&config_dir)
+                .join(constants::PROFILES_DIR_NAME);
             let data_dir = proj_dirs.data_dir().to_path_buf();
 
             tracing::debug!(

@@ -564,6 +564,24 @@ impl eframe::App for LogSleuthApp {
             self.state.save_session();
         }
 
+        // request_reload_profiles: re-scan the external profiles directory and
+        // merge updated/new profiles with the built-ins. Preserves all current
+        // scan, filter, and session state.
+        if self.state.request_reload_profiles {
+            self.state.request_reload_profiles = false;
+            let dir = self.state.user_profiles_dir.clone();
+            let (profiles, errors) = crate::app::profile_mgr::load_all_profiles(dir.as_deref());
+            for err in &errors {
+                tracing::warn!(error = %err, "Profile reload warning");
+            }
+            let total = profiles.len();
+            let external = profiles.iter().filter(|p| !p.is_builtin).count();
+            self.state.profiles = profiles;
+            self.state.status_message =
+                format!("Profiles reloaded — {total} total ({external} external).");
+            tracing::info!(total, external, "Profiles reloaded via Options panel");
+        }
+
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {

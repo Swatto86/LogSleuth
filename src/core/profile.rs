@@ -279,14 +279,26 @@ pub struct DetectionResult {
 /// exceeds the minimum confidence threshold.
 ///
 /// For profiles with `file_patterns`, a filename match adds a bonus to confidence.
+/// Filename matching is **case-insensitive** so Windows paths do not require
+/// patterns to enumerate every casing variant.
+///
+/// Empty sample lines (file not yet written, permission denied on sample read,
+/// etc.) do NOT short-circuit detection: filename patterns are still checked
+/// and can assign the correct profile with the `AUTO_DETECT_FILENAME_BONUS`
+/// alone.  Without this, a Veeam PerfLog or Satellite log that is empty at
+/// scan time would fall through to plain-text even though its name uniquely
+/// identifies it.
 pub fn auto_detect(
     file_name: &str,
     sample_lines: &[String],
     profiles: &[FormatProfile],
 ) -> Option<DetectionResult> {
-    if sample_lines.is_empty() || profiles.is_empty() {
+    if profiles.is_empty() {
         return None;
     }
+
+    // Lowercase once for case-insensitive filename matching below.
+    let file_name_lower = file_name.to_lowercase();
 
     let mut best: Option<DetectionResult> = None;
 
@@ -296,22 +308,29 @@ pub fn auto_detect(
             continue;
         }
 
-        // Count how many sample lines match the content_match regex
-        let matches = sample_lines
-            .iter()
-            .filter(|line| profile.content_match.is_match(line))
-            .count();
+        // Content confidence: ratio of sample lines matching content_match.
+        // When there are no sample lines the ratio is 0.0 (not NaN from 0/0)
+        // so that a filename pattern bonus can still lift the total above the
+        // detection threshold for empty / not-yet-written files.
+        let mut confidence = if sample_lines.is_empty() {
+            0.0_f64
+        } else {
+            let matches = sample_lines
+                .iter()
+                .filter(|line| profile.content_match.is_match(line))
+                .count();
+            matches as f64 / sample_lines.len() as f64
+        };
 
-        let mut confidence = matches as f64 / sample_lines.len() as f64;
-
-        // Bonus for filename pattern match.
+        // Bonus for filename pattern match (case-insensitive).
         // Uses AUTO_DETECT_FILENAME_BONUS (0.3) so that an explicit filename
         // match alone is sufficient to pass the 0.3 threshold — covering VBR
-        // service logs (e.g. WmiServer.BackupSrv.log) whose first sample lines
-        // may be separator/header text that won't match content_match.
+        // service logs (e.g. WmiServer.BackupSrv.log, Satellite_Console.log)
+        // whose first sample lines may be separator/header text that won't
+        // match content_match, or whose file is empty at scan time.
         let filename_match = profile.file_patterns.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
-                .map(|p| p.matches(file_name))
+            glob::Pattern::new(&pattern.to_lowercase())
+                .map(|p| p.matches(&file_name_lower))
                 .unwrap_or(false)
         });
         if filename_match {
@@ -640,6 +659,44 @@ timestamp_format = "%Y"
 
         let result = auto_detect("random.dat", &sample_lines, &[profile]);
         assert!(result.is_none());
+    }
+
+    /// A file that matches a `file_patterns` glob but has no sample lines
+    /// (empty file, file not yet written, read error on sample) must still be
+    /// assigned the correct profile using the filename bonus alone.
+    ///
+    /// This is a regression test for the original early-return bug:
+    ///   `if sample_lines.is_empty() || profiles.is_empty() { return None; }`
+    /// which caused Veeam PerfLog and Satellite logs to show "plain-text
+    /// (fallback)" even though their filenames uniquely identify the profile.
+    #[test]
+    fn test_auto_detect_empty_samples_filename_match() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        // "test-something.log" matches the "test*.log" file_pattern.
+        let result = auto_detect("test-something.log", &[], &[profile.clone()]);
+        assert!(
+            result.is_some(),
+            "empty samples + filename match should produce a detection result"
+        );
+        let det = result.unwrap();
+        assert_eq!(det.profile_id, "test-profile");
+        // Confidence must be exactly AUTO_DETECT_FILENAME_BONUS (content = 0.0)
+        assert!(
+            (det.confidence - 0.3_f64).abs() < 1e-9,
+            "expected confidence 0.3, got {}",
+            det.confidence
+        );
+
+        // A file whose name does NOT match any pattern must still return None
+        // when samples are empty (no content, no name match = genuine unknown).
+        let result2 = auto_detect("unknown.dat", &[], &[profile]);
+        assert!(
+            result2.is_none(),
+            "empty samples + no filename match must return None"
+        );
     }
 
     #[test]

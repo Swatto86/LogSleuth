@@ -347,12 +347,91 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(6.0);
 
             // =========================================================
+            // Section 4 — External Profiles
+            // =========================================================
+            ui.heading("External Profiles");
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(
+                    "Place custom .toml profile files here to add site-specific or \
+                     product-specific log formats. Use the generator script \
+                     (scripts/New-LogSleuthProfile.ps1) to create profiles \
+                     from any log directory.",
+                )
+                .small()
+                .weak(),
+            );
+            ui.add_space(8.0);
+
+            // Profile directory path.
+            ui.horizontal(|ui| {
+                ui.label("Profile folder:");
+                if let Some(ref dir) = state.user_profiles_dir {
+                    ui.monospace(dir.display().to_string())
+                        .on_hover_text("LogSleuth scans this directory for .toml profiles on startup and on Reload");
+                } else {
+                    ui.label(egui::RichText::new("(not configured)").weak());
+                }
+            });
+            ui.add_space(4.0);
+
+            // Loaded profile counts.
+            let total = state.profiles.len();
+            let builtin_count = state.profiles.iter().filter(|p| p.is_builtin).count();
+            let external_count = total.saturating_sub(builtin_count);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{total} profiles loaded  \u{2014}  {builtin_count} built-in,  {external_count} external"
+                ))
+                .small()
+                .weak(),
+            );
+            ui.add_space(8.0);
+
+            // Action buttons.
+            ui.horizontal(|ui| {
+                let has_dir = state.user_profiles_dir.is_some();
+                if ui
+                    .add_enabled(has_dir, egui::Button::new("Open Folder"))
+                    .on_hover_text("Open the external profiles folder in your file manager")
+                    .clicked()
+                {
+                    if let Some(ref dir) = state.user_profiles_dir {
+                        // Ensure the directory exists before opening it.
+                        let _ = std::fs::create_dir_all(dir);
+                        #[cfg(target_os = "windows")]
+                        let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
+                        #[cfg(target_os = "macos")]
+                        let _ = std::process::Command::new("open").arg(dir).spawn();
+                        #[cfg(target_os = "linux")]
+                        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+                    }
+                }
+                ui.add_space(4.0);
+                if ui
+                    .button("Reload Profiles")
+                    .on_hover_text(
+                        "Re-scan the external profiles folder and merge any new or updated \
+                         profiles with the built-in set. Takes effect immediately.",
+                    )
+                    .clicked()
+                {
+                    state.request_reload_profiles = true;
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            // =========================================================
             // Footer
             // =========================================================
             ui.label(
                 egui::RichText::new(
                     "Ingest settings apply to the next scan. \
-                     Tail/watch settings apply when the next session is started.",
+                     Tail/watch settings apply when the next session is started. \
+                     Profile changes take effect immediately.",
                 )
                 .small()
                 .italics()

@@ -275,6 +275,15 @@ pub struct AppState {
     /// local paths, mapped drives, and UNC paths (\\server\share\logs).
     /// Pure UI state — not saved to the session file.
     pub directory_path_input: String,
+
+    /// Path to the user external-profiles directory (`%APPDATA%\LogSleuth\profiles\`).
+    /// Set by main.rs after platform paths are resolved.  `None` only if platform
+    /// path resolution failed entirely (should not happen in normal use).
+    pub user_profiles_dir: Option<std::path::PathBuf>,
+
+    /// When `true`, `gui.rs` will call `load_all_profiles` on the next frame,
+    /// update `self.profiles`, and reset this flag.
+    pub request_reload_profiles: bool,
 }
 
 impl AppState {
@@ -332,6 +341,8 @@ impl AppState {
             discovery_date_input: String::new(),
             sidebar_tab: 0,
             directory_path_input: String::new(),
+            user_profiles_dir: None,
+            request_reload_profiles: false,
         }
     }
 

@@ -228,6 +228,20 @@ fn main() {
     // Create application state
     let mut state = app::state::AppState::new(profiles, cli.debug);
 
+    // Expose the external profiles directory to the UI so Options can show it
+    // and trigger reloads without a restart.
+    state.user_profiles_dir = Some(user_profile_dir.to_path_buf());
+
+    // Create the profiles directory on first launch so users can immediately
+    // find it after opening Options > External Profiles > Open Folder.
+    if let Err(e) = std::fs::create_dir_all(user_profile_dir) {
+        tracing::warn!(
+            dir = %user_profile_dir.display(),
+            error = %e,
+            "Could not create user profiles directory"
+        );
+    }
+
     // Set the persistent session file path so save/restore can locate it.
     let session_file = app::session::session_path(&platform_paths.data_dir);
     state.session_path = Some(session_file.clone());

@@ -16,7 +16,7 @@
 id = "veeam-vbr"
 name = "Veeam Backup & Replication"
 version = "1.0"
-description = "VBR service and job logs (Svc.*.log, Job.*.log, Agent.*.log)"
+description = "VBR service, job, agent, CDP, plugin, FLR, transport, and explorer logs"
 log_locations = [
     "Windows: %ProgramData%\\Veeam\\Backup\\",
     "Linux: /var/log/VeeamBackup/",
@@ -24,38 +24,190 @@ log_locations = [
 
 [detection]
 file_patterns = [
-    # Service logs (Svc. prefix used by VBR service processes)
+    # ── Core service logs (Svc. prefix) ──────────────────────────────────────
     "Svc.Veeam*.log",
     "Svc.Veeam*_[0-9]*.log",
-    # Job logs
+    "Svc.*.log",
+
+    # ── Job / backup-copy logs ────────────────────────────────────────────────
     "Job.*.log",
     "BackupCopy.*.log",
-    # Agent and endpoint logs
+
+    # ── Agent and endpoint logs ───────────────────────────────────────────────
     "Agent.*.log",
+    "AgentUpdater*.log",
     "EP.*.log",
     "Endpoint.*.log",
-    # WMI / infrastructure service logs present in every VBR installation
+
+    # ── Task / RPC / transport infrastructure ────────────────────────────────
+    "Task.*.log",
+    "Rpc.*.log",
+    "RPCAssemblyServer.log",
+    "RTS.ResourcesUsage*.log",
+
+    # ── WMI / infrastructure ─────────────────────────────────────────────────
     "WmiServer.*.log",
     "WmiServer.log",
-    # Named service logs
+
+    # ── Named core service logs ───────────────────────────────────────────────
     "VeeamBackupManager.log",
     "VeeamPowerShell.log",
     "CatalogReplicationJob.log",
     "Veeam.WebApp.log",
-    # Deployer / updater logs
     "VeeamDeployer*.log",
-    # Mount service logs
+
+    # ── Mount service ─────────────────────────────────────────────────────────
     "Mount.*.log",
-    # RPC / transport infrastructure logs (Rpc.EmTol.VbrService.log, Rpc.Yrp.log, etc.)
-    "Rpc.*.log",
-    # Task service logs (Task.Repository.log, Task.JobDispatcher.log, etc.)
-    "Task.*.log",
-    # Data-collection service logs (DataCollectionService.log, DataCollectionService.VC3.log)
+    "MountSvc.log",
+
+    # ── Data collection ───────────────────────────────────────────────────────
     "DataCollectionService*.log",
-    # Broader Svc.* catch-all covering Svc.Identity.log, Svc.VeeamCloudConnect.*.log, etc.
-    # that don't start with "Svc.Veeam" but still live in the VBR log directory.
-    "Svc.*.log",
-    # Catch-all for other top-level Veeam service logs whose names vary by version
+
+    # ── Satellite (Cloud Connect / off-site seeding) ─────────────────────────
+    "Satellite*.log",
+
+    # ── Distribution Server / scale-out repository ────────────────────────────
+    "Dis*.log",
+    "DisServer*.log",
+    "DistributionSvc.log",
+
+    # ── Database / storage infrastructure ────────────────────────────────────
+    "Database*.log",
+    "DB.*.log",
+    "DbPlugin*.log",
+    "DbPluginRedist.log",
+    "StorageMeta*.log",
+    "StorageSync*.log",
+
+    # ── Catalog / search service ──────────────────────────────────────────────
+    "Catalog*.log",
+
+    # ── Repository service ────────────────────────────────────────────────────
+    "RepoService*.log",
+    "Repo.*.log",
+
+    # ── Broker / orchestration ────────────────────────────────────────────────
+    "Broker*.log",
+
+    # ── Cloud Connect gateway ─────────────────────────────────────────────────
+    "Gateway*.log",
+    "CloudGateway*.log",
+
+    # ── CDP (Continuous Data Protection) logs ────────────────────────────────
+    "CCdp*.log",
+    "CDP_Policy_*.log",
+    "CdpPolicy*.log",
+    "CdpService*.log",
+
+    # ── Archive / SOBR offload ────────────────────────────────────────────────
+    "ArchiveCleanup*.log",
+    "ArchiveSync*.log",
+    "SOBR_Offload*.log",
+    "Offload_*.log",
+    "ShadowBackupSync*.log",
+
+    # ── Backup management / maintenance ───────────────────────────────────────
+    "AnalyticsService*.log",
+    "AutoProlongate.log",
+    "BackupDatabase*.log",
+    "BackupSrv*.log",
+    "BackupUpdateSvc.log",
+    "BackupVersionChecker*.log",
+    "BackupWeb*.log",
+    "BackupSuite_*.log",
+    "BadRequestRegister.log",
+    "CleanupExpiredRetrievals.log",
+    "Copy_backup_*.log",
+    "Move_backup_*.log",
+    "SetupBackup*.log",
+    "SuiteEngine_*.log",
+    "LogAnalyzer*.log",
+
+    # ── Watchdog and background worker logs ──────────────────────────────────
+    "AvailabilityWatchdog*.log",
+    "BackgroundActivityWatchdog.log",
+    "CloudDatastore*.log",
+    "CloudGateDispatcher.log",
+    "CloudProvider*.log",
+    "CloudThrottling*.log",
+    "DaemonDiskOwnershipWatchdog.log",
+    "HostEvents*.log",
+    "PolicySessions*.log",
+    "ProxyChanges*.log",
+    "RestorePoint*.log",
+    "TargetDatastore*.log",
+    "TaskActivityWatchdog.log",
+
+    # ── Cloud provider plugin logs ────────────────────────────────────────────
+    "AWSPlugin*.log",
+    "EntraIdPlugin*.log",
+    "GCPPlugin*.log",
+    "KVMPlugin*.log",
+    "MicrosoftAzurePlugin*.log",
+    "Microsoft_Azure_*.log",
+    "NutanixAHV*.log",
+    "PVEPlugin*.log",
+    "RHVPlugin*.log",
+
+    # ── Application explorer / database integration logs ──────────────────────
+    "ADExplorer.log",
+    "Exchange*.log",
+    "MongoDBExplorer.log",
+    "OracleExplorer.log",
+    "OracleLib.log",
+    "PostgreSqlExplorer.log",
+    "SapHanaExplorer.log",
+    "SharePoint*.log",
+    "SmartObject.log",
+    "SQLExplorer.log",
+
+    # ── FLR / restore / driver logs ───────────────────────────────────────────
+    "Disk.*.log",
+    "Driver.VeeamFLR*.log",
+    "FilesysVss*.log",
+    "FLR_*.log",
+    "FlrDrv*.log",
+
+    # ── Misc Veeam component logs ─────────────────────────────────────────────
+    "Audit*.log",
+    "Collector*.log",
+    "Common.log",
+    "crash.Veeam.*.log",
+    "ExternalRepo*.log",
+    "Full.log",
+    "I_O_filter_deployment.log",
+    "InstallerSvc.log",
+    "Listener.log",
+    "Main.log",
+    "OneAgent*.log",
+    "PluginImmutabilityUpdater.log",
+    "PostgresConfigurator_*.log",
+    "Record.log",
+    "RemedyService*.log",
+    "ReplicationState*.log",
+    "Reports.log",
+    "ReportViewer.log",
+    "SaveMetaAgent*.log",
+    "ServiceFail.log",
+    "Session.log",
+
+    # ── Log-shipping logs ─────────────────────────────────────────────────────
+    "*.logshipping.log",
+
+    # ── Transport ctrl / session logs (CDP/NBS agent connections) ────────────
+    # e.g. sabp-dba-rdp20_vm-8660.ctrl.log, SABPVEEAM-21_vm-3243.ctrl_06022026.log
+    "*.ctrl.log",
+    "*.ctrl_*.log",
+
+    # ── IP-addressed transport session logs ──────────────────────────────────
+    # e.g. 10.203.244.245.log, 10.235.248.10.log (named after destination IP)
+    "[0-9][0-9].[0-9]*.log",
+
+    # ── GUID-named transport / session logs ───────────────────────────────────
+    # e.g. 8901548d-f98c-7f44-b030-cce36cec0c10.log
+    "????????-????-????-????-????????????.log",
+
+    # ── Catch-all for other top-level Veeam service logs ─────────────────────
     "Veeam*.log",
 ]
 # Matches the opening bracket-timestamp pattern common to all Veeam log variants.

@@ -32,3 +32,5 @@ installer/output/
 
 # User config (contains local paths)
 config.toml
+veeam_samples.txt
+veeam_filenames.txt
