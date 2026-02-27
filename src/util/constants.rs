@@ -114,12 +114,15 @@ pub const MIN_DIR_WATCH_POLL_INTERVAL_MS: u64 = 1_000; // 1 s
 /// Maximum user-configurable directory watch poll interval (ms).
 pub const MAX_DIR_WATCH_POLL_INTERVAL_MS: u64 = 60_000; // 60 s
 
-/// Maximum number of seconds the per-poll directory walk may run before being
+/// Maximum seconds the per-poll directory walk may run before being
 /// abandoned for that cycle.  Protects the watcher thread from blocking
 /// indefinitely on slow UNC/SMB paths where `walkdir::next()` can stall the
 /// OS SMB RPC for tens of seconds per directory entry.  If the timeout fires,
 /// new-file discovery is skipped for that cycle and retried on the next poll.
 pub const DIR_WATCH_WALK_TIMEOUT_SECS: u64 = 25;
+
+/// Alias used by the dir-watcher loop for the per-walk abandonment timeout.
+pub const DIR_WALK_TIMEOUT_SECS: u64 = DIR_WATCH_WALK_TIMEOUT_SECS;
 
 /// Maximum bytes read from a single file in one poll tick.
 /// Prevents a large burst of new content from stalling the entire poll loop.

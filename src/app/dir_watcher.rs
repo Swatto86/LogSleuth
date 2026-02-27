@@ -20,7 +20,7 @@
 //     subsequent polls do not re-report the same files.
 
 use crate::core::model::DirWatchProgress;
-use crate::util::constants::DIR_WATCH_CANCEL_CHECK_INTERVAL_MS;
+use crate::util::constants::{DIR_WALK_TIMEOUT_SECS, DIR_WATCH_CANCEL_CHECK_INTERVAL_MS};
 use chrono::{DateTime, Utc};
 use glob::Pattern;
 use std::collections::{HashMap, HashSet};
@@ -248,15 +248,21 @@ fn run_dir_watcher(
         })
         .collect();
 
-    // Receiver for the currently in-flight walk sub-thread, if any.
+    // Receiver + start-time for the currently in-flight walk sub-thread.
     //
     // Only ONE walk sub-thread is allowed at a time to prevent thread
     // accumulation on slow UNC/SMB shares where each walkdir call can block
     // for tens of seconds per entry.  A new walk is only spawned after the
-    // previous one has delivered its result (or the disconnected signal).
-    // Using `try_recv` here keeps the mtime-tracking loop below running every
-    // 2 s regardless of how long the directory walk takes.
-    let mut walk_in_flight: Option<mpsc::Receiver<Vec<PathBuf>>> = None;
+    // previous one has delivered its result, the disconnected signal, or the
+    // per-walk timeout (`DIR_WALK_TIMEOUT_SECS`) fires.
+    //
+    // Timeout rationale: on a UNC share whose SMB connection stalls mid-walk,
+    // `walkdir::next()` can block indefinitely (Windows SMB retry loop).  Without
+    // a timeout the slot is permanently occupied, `walk_in_flight.is_none()` is
+    // never true again, and no new files are ever reported.  When the timeout
+    // fires we drop the receiver (which will cause the walk thread's `send`
+    // to fail silently) and allow a fresh walk to start on the next cycle.
+    let mut walk_in_flight: Option<(mpsc::Receiver<Vec<PathBuf>>, std::time::Instant)> = None;
 
     loop {
         // Sleep in small sub-intervals so cancellation is detected promptly.
@@ -286,6 +292,27 @@ fn run_dir_watcher(
         // walkdir call for 30-60 s per directory entry.  The mtime loop
         // below is unaffected and always runs on every 2 s cycle.
         // ---------------------------------------------------------------
+        // Abandon an in-flight walk that has been running longer than the
+        // per-walk timeout.  This handles UNC/SMB paths where walkdir blocks
+        // on a single directory entry for tens of seconds (Windows SMB retry
+        // loop), which would otherwise permanently occupy the in-flight slot.
+        if let Some((_, start)) = &walk_in_flight {
+            if start.elapsed() >= Duration::from_secs(DIR_WALK_TIMEOUT_SECS) {
+                tracing::warn!(
+                    timeout_secs = DIR_WALK_TIMEOUT_SECS,
+                    "Directory walk timed out; abandoning in-flight walk and retrying next cycle"
+                );
+                walk_in_flight = None; // drops the receiver; walk thread's send() will fail silently
+                                       // Send WalkComplete with 0 so the UI clears the scanning indicator.
+                if tx
+                    .send(DirWatchProgress::WalkComplete { new_count: 0 })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+
         if walk_in_flight.is_none() {
             let known_snap = known_paths.clone();
             let root_owned = root.clone();
@@ -307,7 +334,7 @@ fn run_dir_watcher(
                 // send fails silently — the thread exits cleanly on return.
                 let _ = walk_tx.send(found);
             });
-            walk_in_flight = Some(walk_rx);
+            walk_in_flight = Some((walk_rx, std::time::Instant::now()));
             // Notify the UI that a walk cycle has started so it can show a
             // "scanning for new files..." indicator in the status bar.
             if tx.send(DirWatchProgress::WalkStarted).is_err() {
@@ -315,7 +342,7 @@ fn run_dir_watcher(
             }
         }
 
-        let new_files = match walk_in_flight.as_ref().map(|rx| rx.try_recv()) {
+        let new_files = match walk_in_flight.as_ref().map(|(rx, _)| rx.try_recv()) {
             Some(Ok(files)) => {
                 // Walk finished — clear the in-flight slot so the next cycle
                 // starts a fresh walk with the updated known_paths.
