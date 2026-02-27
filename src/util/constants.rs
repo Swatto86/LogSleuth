@@ -23,6 +23,14 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Maximum directory recursion depth during discovery.
 pub const DEFAULT_MAX_DEPTH: usize = 10;
 
+/// Number of newly-discovered file paths batched together in a single
+/// `DirWatchProgress::NewFiles` message during an incremental walk.
+///
+/// Smaller values mean new files appear in the UI faster (each batch is
+/// delivered on the next 2-second poll cycle).  Values between 10 and 50
+/// balance message overhead against freshness.
+pub const WALK_BATCH_SIZE: usize = 20;
+
 /// Minimum sensible value for the max-files limit (controls must be non-zero).
 pub const MIN_MAX_FILES: usize = 1;
 

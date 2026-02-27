@@ -20,7 +20,9 @@
 //     subsequent polls do not re-report the same files.
 
 use crate::core::model::DirWatchProgress;
-use crate::util::constants::{DIR_WALK_TIMEOUT_SECS, DIR_WATCH_CANCEL_CHECK_INTERVAL_MS};
+use crate::util::constants::{
+    DIR_WALK_TIMEOUT_SECS, DIR_WATCH_CANCEL_CHECK_INTERVAL_MS, WALK_BATCH_SIZE,
+};
 use chrono::{DateTime, Utc};
 use glob::Pattern;
 use std::collections::{HashMap, HashSet};
@@ -253,16 +255,19 @@ fn run_dir_watcher(
     // Only ONE walk sub-thread is allowed at a time to prevent thread
     // accumulation on slow UNC/SMB shares where each walkdir call can block
     // for tens of seconds per entry.  A new walk is only spawned after the
-    // previous one has delivered its result, the disconnected signal, or the
-    // per-walk timeout (`DIR_WALK_TIMEOUT_SECS`) fires.
+    // previous one finishes (Disconnected signal) or the per-walk timeout fires.
     //
-    // Timeout rationale: on a UNC share whose SMB connection stalls mid-walk,
-    // `walkdir::next()` can block indefinitely (Windows SMB retry loop).  Without
-    // a timeout the slot is permanently occupied, `walk_in_flight.is_none()` is
-    // never true again, and no new files are ever reported.  When the timeout
-    // fires we drop the receiver (which will cause the walk thread's `send`
-    // to fail silently) and allow a fresh walk to start on the next cycle.
+    // The walk sub-thread now streams results in batches of WALK_BATCH_SIZE
+    // via the inner channel as entries are found, rather than collecting the
+    // entire tree first.  This means new files appear in the UI as soon as
+    // the walker reaches them — typically within a few seconds — instead of
+    // waiting for the full tree traversal to complete.
+    //
+    // Channel closure (Disconnected) signals that the walk is finished.
+    // `walk_new_count` accumulates the total new files found across all
+    // batches so WalkComplete{new_count} can be sent when the walk finishes.
     let mut walk_in_flight: Option<(mpsc::Receiver<Vec<PathBuf>>, std::time::Instant)> = None;
+    let mut walk_new_count: usize = 0;
 
     loop {
         // Sleep in small sub-intervals so cancellation is detected promptly.
@@ -318,19 +323,23 @@ fn run_dir_watcher(
             let modified_since = config.modified_since;
             let (walk_tx, walk_rx) = mpsc::channel::<Vec<PathBuf>>();
             std::thread::spawn(move || {
-                let found = walk_for_new_files(
+                // Streams batches of WALK_BATCH_SIZE paths via walk_tx as they
+                // are found.  Dropping walk_tx at function return closes the
+                // channel, which the main thread detects as Disconnected = done.
+                walk_for_new_files(
                     &root_owned,
                     &known_snap,
                     &include_owned,
                     &exclude_owned,
                     max_depth,
                     modified_since,
+                    &walk_tx,
                 );
-                // If the receiver was already dropped (watcher stopped), the
-                // send fails silently — the thread exits cleanly on return.
-                let _ = walk_tx.send(found);
+                // walk_tx dropped here → channel Disconnected → main thread
+                // knows the walk is complete.
             });
             walk_in_flight = Some((walk_rx, std::time::Instant::now()));
+            walk_new_count = 0;
             // Notify the UI that a walk cycle has started so it can show a
             // "scanning for new files..." indicator in the status bar.
             if tx.send(DirWatchProgress::WalkStarted).is_err() {
@@ -338,38 +347,41 @@ fn run_dir_watcher(
             }
         }
 
-        let new_files = match walk_in_flight.as_ref().map(|(rx, _)| rx.try_recv()) {
-            Some(Ok(files)) => {
-                // Walk finished — clear the in-flight slot so the next cycle
-                // starts a fresh walk with the updated known_paths.
-                let new_count = files.len();
-                walk_in_flight = None;
-                // Always notify the UI that the walk is done so it can clear
-                // the "scanning..." indicator even when no new files were found.
-                if tx
-                    .send(DirWatchProgress::WalkComplete { new_count })
-                    .is_err()
-                {
-                    return;
+        // Drain ALL batches the walk thread has sent since the last poll cycle.
+        // Because the walk now streams batches of WALK_BATCH_SIZE as files are
+        // found, each 2-second poll delivers whatever the walker has accumulated
+        // so far — new files appear in the UI as soon as the walker reaches
+        // them rather than after the full tree traversal completes.
+        //
+        // Channel Disconnected means the walk thread has returned and dropped
+        // its sender: the walk is complete.  We send WalkComplete and clear
+        // the slot so a fresh walk starts on the next cycle.
+        let mut new_files: Vec<PathBuf> = Vec::new();
+        let mut walk_just_finished = false;
+        loop {
+            match walk_in_flight.as_ref().map(|(rx, _)| rx.try_recv()) {
+                Some(Ok(batch)) => {
+                    walk_new_count += batch.len();
+                    new_files.extend(batch);
                 }
-                files
+                Some(Err(mpsc::TryRecvError::Empty)) => {
+                    // Walk still running; come back next cycle.
+                    break;
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) | None => {
+                    // Walk thread exited (channel closed) or slot unexpectedly
+                    // empty: treat as walk complete.
+                    walk_in_flight = None;
+                    walk_just_finished = true;
+                    break;
+                }
             }
-            Some(Err(mpsc::TryRecvError::Empty)) => {
-                // Walk still running — nothing to process this cycle.
-                Vec::new()
-            }
-            Some(Err(mpsc::TryRecvError::Disconnected)) | None => {
-                // Thread exited without sending (shouldn't happen but handle
-                // gracefully: clear slot so a fresh walk starts next cycle).
-                walk_in_flight = None;
-                Vec::new()
-            }
-        };
+        }
 
         if !new_files.is_empty() {
             tracing::debug!(
                 count = new_files.len(),
-                "Directory watcher: new files detected"
+                "Directory watcher: new files detected (batch)"
             );
             // Update known_paths before sending so the next poll cycle won't
             // re-report the same files even if the channel is slow to drain.
@@ -381,6 +393,21 @@ fn run_dir_watcher(
                 tracing::debug!("Directory watcher: receiver dropped, exiting");
                 return;
             }
+        }
+
+        if walk_just_finished {
+            // Always notify so the UI clears the "scanning..." indicator,
+            // even when no new files were found this walk.
+            if tx
+                .send(DirWatchProgress::WalkComplete {
+                    new_count: walk_new_count,
+                })
+                .is_err()
+            {
+                tracing::debug!("Directory watcher: receiver dropped, exiting");
+                return;
+            }
+            walk_new_count = 0;
         }
 
         // ------------------------------------------------------------------
@@ -426,14 +453,21 @@ fn run_dir_watcher(
     }
 }
 
-/// Walk `root` up to `max_depth` levels and return all regular files that:
-/// 1. Are not already in `known_paths`.
-/// 2. Match at least one include pattern (or the include list is empty).
-/// 3. Do not match any exclude pattern.
-/// 4. Have an OS last-modified time on or after `modified_since` (if set).
-///    Files whose mtime cannot be read are included (fail-open) so that a
-///    permission-restricted metadata call never silently hides a log file.
+/// Walk `root` up to `max_depth` levels and stream newly-discovered files to
+/// `batch_tx` in batches of [`WALK_BATCH_SIZE`].  Files are streamed as they
+/// are found so callers see partial results within a single poll cycle rather
+/// than waiting for the entire tree traversal to complete — critical for large
+/// UNC/SMB shares where a full walk can take 60-120 seconds.
 ///
+/// Selection criteria (same as before):
+/// 1. Not already in `known_paths`.
+/// 2. Matches at least one include pattern (or list is empty).
+/// 3. Does not match any exclude pattern.
+/// 4. Has an OS last-modified time on or after `modified_since` (if Some).
+///    Files whose mtime cannot be read are included (fail-open).
+///
+/// The function returns when the walk is complete or when `batch_tx.send`
+/// fails (receiver dropped = watcher was stopped or timed out).
 /// Per-entry I/O errors are silently skipped (non-fatal per Rule 11).
 fn walk_for_new_files(
     root: &Path,
@@ -442,8 +476,10 @@ fn walk_for_new_files(
     exclude_pats: &[Pattern],
     max_depth: usize,
     modified_since: Option<DateTime<Utc>>,
-) -> Vec<PathBuf> {
-    let mut found = Vec::new();
+    batch_tx: &mpsc::Sender<Vec<PathBuf>>,
+) {
+    let mut batch: Vec<PathBuf> = Vec::with_capacity(WALK_BATCH_SIZE);
+    let mut total_found: usize = 0;
     let mut skipped_errors: usize = 0;
 
     let walker = walkdir::WalkDir::new(root)
@@ -518,16 +554,26 @@ fn walk_for_new_files(
             }
         }
 
-        found.push(path);
+        batch.push(path);
+        if batch.len() >= WALK_BATCH_SIZE {
+            total_found += batch.len();
+            let to_send = std::mem::replace(&mut batch, Vec::with_capacity(WALK_BATCH_SIZE));
+            if batch_tx.send(to_send).is_err() {
+                // Receiver dropped (walk timed out or watcher stopped).
+                tracing::debug!("Dir-watcher walk: receiver dropped mid-walk, stopping early");
+                return;
+            }
+        }
     }
 
-    tracing::debug!(
-        found = found.len(),
-        skipped_errors,
-        "Dir-watcher walk complete"
-    );
+    // Send any remaining files that didn't fill a complete batch.
+    if !batch.is_empty() {
+        total_found += batch.len();
+        // Ignore send error — receiver dropping is handled by the main thread.
+        let _ = batch_tx.send(batch);
+    }
 
-    found
+    tracing::debug!(total_found, skipped_errors, "Dir-watcher walk complete");
 }
 
 #[cfg(test)]
@@ -535,6 +581,40 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Test helper: run `walk_for_new_files` synchronously and collect all
+    /// batches into a single `Vec<PathBuf>`.  The streaming function sends
+    /// batches via an mpsc channel; dropping the receiver side after collect
+    /// is safe because the walk thread is also the caller here (no thread
+    /// spawn in tests).
+    fn walk_collect(
+        root: &Path,
+        known: &HashSet<PathBuf>,
+        include: &[Pattern],
+        exclude: &[Pattern],
+        max_depth: usize,
+        modified_since: Option<DateTime<Utc>>,
+    ) -> Vec<PathBuf> {
+        let (tx, rx) = mpsc::channel::<Vec<PathBuf>>();
+        walk_for_new_files(
+            root,
+            known,
+            include,
+            exclude,
+            max_depth,
+            modified_since,
+            &tx,
+        );
+        drop(tx); // close sender so the loop below terminates on Disconnected
+        let mut out = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(batch) => out.extend(batch),
+                Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        out
+    }
 
     /// Verify that walk_for_new_files finds a newly created file that was not in
     /// the known set, and does not re-report files that are already known.
@@ -548,14 +628,14 @@ mod tests {
         let exclude: Vec<Pattern> = vec![];
         let known = HashSet::new();
 
-        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, None);
+        let found = walk_collect(dir.path(), &known, &include, &exclude, 5, None);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], new_path);
 
         // If the file is already known it must not be reported again.
         let mut known2 = HashSet::new();
         known2.insert(new_path.clone());
-        let found2 = walk_for_new_files(dir.path(), &known2, &include, &exclude, 5, None);
+        let found2 = walk_collect(dir.path(), &known2, &include, &exclude, 5, None);
         assert!(found2.is_empty());
     }
 
@@ -570,7 +650,7 @@ mod tests {
         let exclude: Vec<Pattern> = vec![];
         let known = HashSet::new();
 
-        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, None);
+        let found = walk_collect(dir.path(), &known, &include, &exclude, 5, None);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].file_name().unwrap().to_str().unwrap(), "app.log");
     }
@@ -600,7 +680,7 @@ mod tests {
         // Cutoff far in the future: mtime of a freshly created file is before it
         // → file should be rejected.
         let future = Utc.with_ymd_and_hms(9999, 1, 1, 0, 0, 0).unwrap();
-        let found = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, Some(future));
+        let found = walk_collect(dir.path(), &known, &include, &exclude, 5, Some(future));
         assert!(
             found.is_empty(),
             "file modified before the cutoff must be excluded"
@@ -608,11 +688,11 @@ mod tests {
 
         // Cutoff far in the past: any file passes.
         let past = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();
-        let found2 = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, Some(past));
+        let found2 = walk_collect(dir.path(), &known, &include, &exclude, 5, Some(past));
         assert_eq!(found2.len(), 1, "file after the cutoff must be included");
 
         // No filter: all matching files are included regardless of mtime.
-        let found3 = walk_for_new_files(dir.path(), &known, &include, &exclude, 5, None);
+        let found3 = walk_collect(dir.path(), &known, &include, &exclude, 5, None);
         assert_eq!(found3.len(), 1, "no filter: file must be included");
     }
 

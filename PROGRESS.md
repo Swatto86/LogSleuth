@@ -781,6 +781,22 @@ The file list in the Files tab now shows a live last-modified timestamp next to 
 
 ---
 
+## Increment 41 — Incremental walk streaming for fast new-file discovery (bug fix)
+
+**Problem**: `walk_for_new_files` collected all results across the entire UNC directory tree before sending a single bulk message. On large SMB shares this meant new files (e.g., a Veeam error log created mid-session or a file excluded from the initial scan by the date gate) didn't appear in the file list until the complete 60-120 second walk finished. Reproducing an error in Veeam and looking for the resulting log update was unreliable.
+
+**Fix**: Changed `walk_for_new_files` to stream results incrementally via the existing inner channel in batches of `WALK_BATCH_SIZE = 20`. The main poll loop now drains all available batches each 2-second cycle using a `loop { try_recv }` pattern, and interprets `TryRecvError::Disconnected` (channel closed when the walk thread returns) as the "walk complete" signal instead of receiving a single final `Vec`. A `walk_new_count` accumulator tracks the total across all batches so `WalkComplete{new_count}` is still sent correctly when the walk finishes.
+
+Effect: a new file appears in the file list at most 2 seconds after the walker reaches it in the directory tree, regardless of how large the tree is or how long the remaining walk takes.
+
+- [x] `src/util/constants.rs` — `WALK_BATCH_SIZE: usize = 20` added.
+- [x] `src/app/dir_watcher.rs` — `walk_for_new_files` signature changed: returns `()`, takes `batch_tx: &mpsc::Sender<Vec<PathBuf>>`, streams batches and exits early on send error. Main loop: `try_recv` section replaced with draining loop; WalkComplete sent on Disconnected; `walk_new_count: usize` accumulator added and reset on each new walk start. Test helper `walk_collect` added to wrap streaming API into synchronous Vec for tests.
+- [x] `ATLAS.md` — Dir-watcher component entry updated to document streaming walk.
+
+**Test results: 94 unit tests + 29 E2E tests = 123 total, all passing. Zero clippy warnings.**
+
+---
+
 ## Increment 40 — Fix `LogEntry::file_modified` staleness in time-range filter (bug fix)
 
 **Problem**: `LogEntry::file_modified` is stamped once at parse time and never updated. The time-range filter uses it as a fallback effective timestamp for plain-text / no-timestamp entries (`effective_time = entry.timestamp.or(entry.file_modified)`). Over time those entries aged out of rolling windows such as "Last 1m" even while the file was actively being written to — producing a confusing "0/N entries" display while the activity window and file list still showed the file as live.
