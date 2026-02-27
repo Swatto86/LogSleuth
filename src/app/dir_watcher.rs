@@ -8,6 +8,8 @@
 //     background thread polling the directory on a fixed interval.
 //   - An `Arc<AtomicBool>` cancel flag allows the UI to stop the watcher.
 //   - New file paths are sent as `DirWatchProgress::NewFiles` over an mpsc channel.
+//   - mtime changes to existing files are sent as `DirWatchProgress::FileMtimeUpdates`
+//     so the UI can show a live "last modified" time for each file.
 //   - The UI thread polls the channel each frame (same pattern as TailManager).
 //
 // Rule 11 compliance:
@@ -21,11 +23,11 @@ use crate::core::model::DirWatchProgress;
 use crate::util::constants::DIR_WATCH_CANCEL_CHECK_INTERVAL_MS;
 use chrono::{DateTime, Utc};
 use glob::Pattern;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 // =============================================================================
 // Watch configuration
@@ -232,6 +234,20 @@ fn run_dir_watcher(
         "Directory watcher thread running"
     );
 
+    // Seed initial mtimes for all known files so the first poll compares
+    // against the scan-time state rather than treating everything as changed.
+    // Files whose metadata cannot be read are skipped (fail-open: they will
+    // be picked up on the next poll if they become readable).
+    let mut tracked_mtimes: HashMap<PathBuf, SystemTime> = known_paths
+        .iter()
+        .filter_map(|p| {
+            std::fs::metadata(p)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| (p.clone(), t))
+        })
+        .collect();
+
     loop {
         // Sleep in small sub-intervals so cancellation is detected promptly.
         for _ in 0..sub_iters {
@@ -268,6 +284,47 @@ fn run_dir_watcher(
             }
             if tx.send(DirWatchProgress::NewFiles(new_files)).is_err() {
                 // UI thread dropped the receiver — exit cleanly.
+                tracing::debug!("Directory watcher: receiver dropped, exiting");
+                return;
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // mtime tracking: stat every known file and report any that have a
+        // newer modification timestamp than last seen.
+        //
+        // `tracked_mtimes.entry().or_insert(mtime)` handles new files that
+        // were just added to `known_paths` above: their entry is seeded with
+        // the current mtime so the NEXT poll is the baseline, preventing a
+        // spurious "changed" event on the same cycle they were first detected.
+        //
+        // Per-file stat errors are silently skipped (Rule 11: non-fatal).
+        // ------------------------------------------------------------------
+        let mut mtime_updates: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
+        for path in &known_paths {
+            match std::fs::metadata(path).and_then(|m| m.modified()) {
+                Ok(mtime) => {
+                    let entry = tracked_mtimes.entry(path.clone()).or_insert(mtime);
+                    if *entry != mtime {
+                        *entry = mtime;
+                        let dt = DateTime::<Utc>::from(mtime);
+                        mtime_updates.push((path.clone(), dt));
+                    }
+                }
+                Err(_) => {
+                    // Cannot stat; skip quietly — will be retried next cycle.
+                }
+            }
+        }
+        if !mtime_updates.is_empty() {
+            tracing::debug!(
+                count = mtime_updates.len(),
+                "Directory watcher: file mtime changes detected"
+            );
+            if tx
+                .send(DirWatchProgress::FileMtimeUpdates(mtime_updates))
+                .is_err()
+            {
                 tracing::debug!("Directory watcher: receiver dropped, exiting");
                 return;
             }

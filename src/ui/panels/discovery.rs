@@ -15,7 +15,7 @@
 // No direct I/O or ScanManager access (Rule 1 boundary).
 
 use crate::app::state::AppState;
-use chrono::{Duration, Local};
+use chrono::{DateTime, Datelike, Duration, Local, Utc};
 
 /// Render the Files tab (scan controls + unified file list).
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
@@ -44,14 +44,15 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     if !state.discovered_files.is_empty() {
         ui.add_space(6.0);
 
-        // Pre-collect (path, name, size, profile_text, profile_colour) once so
-        // we can borrow state mutably for checkbox updates below.
+        // Pre-collect (path, name, size, profile_text, profile_colour, mtime_text) once
+        // so we can borrow state mutably for checkbox updates below.
         let file_entries: Vec<(
             std::path::PathBuf,
             String, // display name
             String, // size text
             String, // profile text
             egui::Color32,
+            String, // mtime text (formatted for display)
         )> = state
             .discovered_files
             .iter()
@@ -77,7 +78,15 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         egui::Color32::from_rgb(156, 163, 175),
                     ),
                 };
-                (f.path.clone(), name, size, profile_text, profile_colour)
+                let mtime_text = format_mtime(f.modified);
+                (
+                    f.path.clone(),
+                    name,
+                    size,
+                    profile_text,
+                    profile_colour,
+                    mtime_text,
+                )
             })
             .collect();
 
@@ -180,7 +189,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         let visible: Vec<usize> = file_entries
             .iter()
             .enumerate()
-            .filter(|(_, (_, name, _, _, _))| matches_file_search(&state.file_list_search, name))
+            .filter(|(_, (_, name, _, _, _, _))| matches_file_search(&state.file_list_search, name))
             .map(|(i, _)| i)
             .collect();
         let visible_count = visible.len();
@@ -194,7 +203,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         visible.iter().map(|&i| &file_entries[i].0).collect();
                     let mut new_selected: std::collections::HashSet<std::path::PathBuf> =
                         visible.iter().map(|&i| file_entries[i].0.clone()).collect();
-                    for (path, _, _, _, _) in &file_entries {
+                    for (path, _, _, _, _, _) in &file_entries {
                         if !visible_paths.contains(path) {
                             let was_selected = !prev_hide_all
                                 && (state.filter_state.source_files.is_empty()
@@ -217,13 +226,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     let non_visible_selected: std::collections::HashSet<std::path::PathBuf> =
                         file_entries
                             .iter()
-                            .filter(|(p, _, _, _, _)| !visible_paths.contains(p))
-                            .filter(|(p, _, _, _, _)| {
+                            .filter(|(p, _, _, _, _, _)| !visible_paths.contains(p))
+                            .filter(|(p, _, _, _, _, _)| {
                                 !state.filter_state.hide_all_sources
                                     && (state.filter_state.source_files.is_empty()
                                         || state.filter_state.source_files.contains(p))
                             })
-                            .map(|(p, _, _, _, _)| p.clone())
+                            .map(|(p, _, _, _, _, _)| p.clone())
                             .collect();
                     state.filter_state.source_files = non_visible_selected;
                     if state.filter_state.source_files.is_empty() {
@@ -255,7 +264,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .show_rows(ui, row_height, visible.len(), |ui, row_range| {
                     for display_idx in row_range {
                         let entry_idx = visible[display_idx];
-                        let (path, name, size_text, profile_text, profile_colour) =
+                        let (path, name, size_text, profile_text, profile_colour, mtime_text) =
                             &file_entries[entry_idx];
 
                         let mut checked = !state.filter_state.hide_all_sources
@@ -271,8 +280,14 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 .circle_filled(dot_rect.center(), 4.0, dot_colour);
 
                             // Checkbox + filename.
-                            let hover_detail =
-                                format!("{}\n{size_text}  \u{b7}  {profile_text}", path.display());
+                            let hover_detail = if mtime_text.is_empty() {
+                                format!("{}\n{size_text}  \u{b7}  {profile_text}", path.display())
+                            } else {
+                                format!(
+                                    "{}\n{size_text}  \u{b7}  {profile_text}\nModified: {mtime_text}",
+                                    path.display()
+                                )
+                            };
                             let cb_resp = ui
                                 .checkbox(&mut checked, egui::RichText::new(name.as_str()).small())
                                 .on_hover_text(hover_detail);
@@ -283,7 +298,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                     if state.filter_state.source_files.is_empty()
                                         && !state.filter_state.hide_all_sources
                                     {
-                                        for (p, _, _, _, _) in &file_entries {
+                                        for (p, _, _, _, _, _) in &file_entries {
                                             state.filter_state.source_files.insert(p.clone());
                                         }
                                     }
@@ -354,8 +369,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 crate::platform::fs::reveal_in_file_manager(path);
                             }
 
-                            // Profile label — right-aligned, coloured by match quality.
-                            // Only shown when there is enough horizontal space.
+                            // Profile label and mtime — right-aligned, coloured by match
+                            // quality.  In right-to-left order: profile is at the far
+                            // right, mtime immediately to its left.
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -364,6 +380,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                             .small()
                                             .color(*profile_colour),
                                     );
+                                    if !mtime_text.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(mtime_text.as_str())
+                                                .small()
+                                                .weak(),
+                                        );
+                                    }
                                 },
                             );
                         });
@@ -563,6 +586,34 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 state.request_new_session = true;
             }
         }
+    }
+}
+
+/// Format a UTC modification time for compact display in a file-list row.
+///
+/// Returns:
+/// - `"HH:MM:SS"`       when the file was modified today (local time)
+/// - `"D Mon HH:MM"`    (e.g. `"26 Feb 14:30"`) when modified this calendar year
+/// - `"YYYY-MM-DD"`     for modifications in a prior year
+/// - `""`               when `modified` is `None`
+fn format_mtime(modified: Option<DateTime<Utc>>) -> String {
+    let Some(mtime) = modified else {
+        return String::new();
+    };
+    let local = mtime.with_timezone(&Local);
+    let now = Local::now();
+    if local.date_naive() == now.date_naive() {
+        local.format("%H:%M:%S").to_string()
+    } else if local.year() == now.year() {
+        // %e = space-padded day (" 6" or "26"); trims leading space via format
+        // so single-digit days look like "6 Feb" rather than " 6 Feb".
+        local
+            .format("%e %b %H:%M")
+            .to_string()
+            .trim_start()
+            .to_string()
+    } else {
+        local.format("%Y-%m-%d").to_string()
     }
 }
 

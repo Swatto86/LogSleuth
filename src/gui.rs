@@ -285,6 +285,21 @@ impl eframe::App for LogSleuthApp {
                         id_start,
                     );
                 }
+                crate::core::model::DirWatchProgress::FileMtimeUpdates(updates) => {
+                    // Update the cached mtime on each DiscoveredFile so the
+                    // file list in the discovery panel shows a live timestamp
+                    // that refreshes whenever the file is written to.
+                    for (path, mtime) in updates {
+                        if let Some(f) = self
+                            .state
+                            .discovered_files
+                            .iter_mut()
+                            .find(|f| f.path == path)
+                        {
+                            f.modified = Some(mtime);
+                        }
+                    }
+                }
             }
         }
         // Keep repainting while the dir watcher is active so new files appear

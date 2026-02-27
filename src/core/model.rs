@@ -431,6 +431,13 @@ pub enum ScanProgress {
 pub enum DirWatchProgress {
     /// One or more new log files were detected in the watched directory tree.
     NewFiles(Vec<std::path::PathBuf>),
+
+    /// One or more already-known files have a newer OS modification timestamp.
+    ///
+    /// Each element is `(path, new_mtime)`.  The UI should update
+    /// `DiscoveredFile::modified` for each matching path so the file list
+    /// shows a live "last modified" time without requiring a full rescan.
+    FileMtimeUpdates(Vec<(std::path::PathBuf, DateTime<Utc>)>),
 }
 
 // =============================================================================
