@@ -335,8 +335,6 @@ impl eframe::App for LogSleuthApp {
                     tracing::debug!(new_count, "Directory watcher: walk cycle complete");
                     self.state.dir_watcher_scanning = false;
                     if new_count == 0 {
-                        // No new files: update status so it's clear the watcher
-                        // is alive and the directory is up-to-date.
                         let now = chrono::Local::now().format("%H:%M:%S");
                         self.state.status_message =
                             format!("Directory watcher: up to date (checked {now})");
@@ -344,10 +342,24 @@ impl eframe::App for LogSleuthApp {
                     // If new_count > 0 the NewFiles handler already set a more
                     // informative status message — don't overwrite it here.
                 }
+                crate::core::model::DirWatchProgress::WalkTimedOut => {
+                    tracing::warn!("Directory watcher: walk timed out — directory tree may be slow (UNC/SMB). Retrying next cycle.");
+                    self.state.dir_watcher_scanning = false;
+                    let now = chrono::Local::now().format("%H:%M:%S");
+                    self.state.status_message = format!(
+                        "Directory watcher: walk timed out ({now}) — retrying. Try enabling --debug to diagnose."
+                    );
+                }
                 crate::core::model::DirWatchProgress::FileMtimeUpdates(updates) => {
                     // Update the cached mtime on each DiscoveredFile so the
                     // file list in the discovery panel shows a live timestamp
                     // that refreshes whenever the file is written to.
+                    //
+                    // Also update LogEntry::file_modified for every entry from
+                    // each updated file. The time-range filter falls back to
+                    // file_modified for plain-text / no-timestamp profiles; without
+                    // this update those entries age out of "Last 1m" even though
+                    // the file is still actively written to.
                     for (path, mtime) in updates {
                         if let Some(f) = self
                             .state
@@ -356,6 +368,11 @@ impl eframe::App for LogSleuthApp {
                             .find(|f| f.path == path)
                         {
                             f.modified = Some(mtime);
+                        }
+                        for entry in self.state.entries.iter_mut() {
+                            if entry.source_file == path {
+                                entry.file_modified = Some(mtime);
+                            }
                         }
                     }
                 }

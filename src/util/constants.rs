@@ -117,9 +117,10 @@ pub const MAX_DIR_WATCH_POLL_INTERVAL_MS: u64 = 60_000; // 60 s
 /// Maximum seconds the per-poll directory walk may run before being
 /// abandoned for that cycle.  Protects the watcher thread from blocking
 /// indefinitely on slow UNC/SMB paths where `walkdir::next()` can stall the
-/// OS SMB RPC for tens of seconds per directory entry.  If the timeout fires,
-/// new-file discovery is skipped for that cycle and retried on the next poll.
-pub const DIR_WATCH_WALK_TIMEOUT_SECS: u64 = 25;
+/// OS SMB RPC for tens of seconds per directory entry.  Increase this value
+/// for large directory trees (e.g. Veeam ProgramData with hundreds of job
+/// subdirectories) — 120 s gives the walk 2 full minutes before giving up.
+pub const DIR_WATCH_WALK_TIMEOUT_SECS: u64 = 120;
 
 /// Alias used by the dir-watcher loop for the per-walk abandonment timeout.
 pub const DIR_WALK_TIMEOUT_SECS: u64 = DIR_WATCH_WALK_TIMEOUT_SECS;

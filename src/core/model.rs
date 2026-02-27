@@ -448,6 +448,11 @@ pub enum DirWatchProgress {
     /// means the directory is up-to-date; non-zero means a `NewFiles` message
     /// was already sent in the same cycle).
     WalkComplete { new_count: usize },
+
+    /// A directory walk was abandoned because it exceeded `DIR_WALK_TIMEOUT_SECS`.
+    /// The walk sub-thread is still running in the background but its results will
+    /// be discarded.  A fresh walk will be started on the next poll cycle.
+    WalkTimedOut,
 }
 
 // =============================================================================

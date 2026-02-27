@@ -781,6 +781,19 @@ The file list in the Files tab now shows a live last-modified timestamp next to 
 
 ---
 
+## Increment 40 — Fix `LogEntry::file_modified` staleness in time-range filter (bug fix)
+
+**Problem**: `LogEntry::file_modified` is stamped once at parse time and never updated. The time-range filter uses it as a fallback effective timestamp for plain-text / no-timestamp entries (`effective_time = entry.timestamp.or(entry.file_modified)`). Over time those entries aged out of rolling windows such as "Last 1m" even while the file was actively being written to — producing a confusing "0/N entries" display while the activity window and file list still showed the file as live.
+
+**Fix**: `src/gui.rs` — In the existing `DirWatchProgress::FileMtimeUpdates` handler, after updating `DiscoveredFile::modified`, also iterate `state.entries` and update `entry.file_modified = Some(mtime)` for every entry whose `source_file` matches the updated path. This keeps the fallback timestamp in sync with each poll cycle's live mtime so plain-text entries stay within the rolling time window for as long as the file is being written to.
+
+- [x] `src/gui.rs` — `FileMtimeUpdates` handler now also refreshes `LogEntry::file_modified` for all matching entries.
+- [x] `ATLAS.md` — Directory Watch concept updated to document the dual update.
+
+**Test results: 94 unit tests + 29 E2E tests = 123 total, all passing. Zero clippy warnings.**
+
+---
+
 ### High Priority
 - [x] **Persistent sessions** -- Save and restore the current set of loaded files, filter state, and colour assignments so a session can be resumed after reopening the application. *(Increment 12)*
 

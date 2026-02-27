@@ -303,11 +303,7 @@ fn run_dir_watcher(
                     "Directory walk timed out; abandoning in-flight walk and retrying next cycle"
                 );
                 walk_in_flight = None; // drops the receiver; walk thread's send() will fail silently
-                                       // Send WalkComplete with 0 so the UI clears the scanning indicator.
-                if tx
-                    .send(DirWatchProgress::WalkComplete { new_count: 0 })
-                    .is_err()
-                {
+                if tx.send(DirWatchProgress::WalkTimedOut).is_err() {
                     return;
                 }
             }
@@ -448,6 +444,7 @@ fn walk_for_new_files(
     modified_since: Option<DateTime<Utc>>,
 ) -> Vec<PathBuf> {
     let mut found = Vec::new();
+    let mut skipped_errors: usize = 0;
 
     let walker = walkdir::WalkDir::new(root)
         .max_depth(max_depth)
@@ -460,7 +457,19 @@ fn walk_for_new_files(
             !exclude_pats.iter().any(|p| p.matches(&name))
         });
 
-    for entry in walker.flatten() {
+    for entry_result in walker {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                skipped_errors += 1;
+                tracing::debug!(
+                    error = %e,
+                    "Dir-watcher walk: skipping inaccessible entry"
+                );
+                continue;
+            }
+        };
+
         if !entry.file_type().is_file() {
             continue;
         }
@@ -511,6 +520,12 @@ fn walk_for_new_files(
 
         found.push(path);
     }
+
+    tracing::debug!(
+        found = found.len(),
+        skipped_errors,
+        "Dir-watcher walk complete"
+    );
 
     found
 }
