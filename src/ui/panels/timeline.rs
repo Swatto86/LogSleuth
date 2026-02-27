@@ -128,12 +128,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     },
                 );
                 row_job.append(
-                    &format!(
-                        "{} | {:>16} | {}",
-                        ts,
-                        truncate_filename(file_name, 16),
-                        first_line
-                    ),
+                    &format!("{} | {} | {}", ts, file_name, first_line),
                     0.0,
                     TextFormat {
                         font_id: font,
@@ -267,16 +262,5 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // not conflict with the immutable entry borrow inside show_rows.
     if correlation_update_needed {
         state.update_correlation();
-    }
-}
-
-/// Return the last `max` characters of `s`, right-aligned.
-fn truncate_filename(s: &str, max: usize) -> String {
-    // Truncate from the LEFT so the extension is always visible
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
-        format!("{:>width$}", s, width = max)
-    } else {
-        chars[chars.len() - max..].iter().collect()
     }
 }
