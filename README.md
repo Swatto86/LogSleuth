@@ -209,13 +209,27 @@ Each setting has a **Reset** button that restores it to the built-in default.
 
 ## Custom Profiles
 
-Create a `.toml` file in your profiles directory:
+Drop a `.toml` file into your external profiles directory to add or override a format profile without rebuilding:
 
 - **Windows**: `%APPDATA%\LogSleuth\profiles\`
 - **Linux**: `~/.config/logsleuth/profiles/`
 - **macOS**: `~/Library/Application Support/LogSleuth/profiles/`
 
-See the [profiles/](profiles/) directory for examples.
+The directory is created automatically on first launch. Profiles are loaded at startup; after adding or editing a file use **Edit → Options → Reload Profiles** to apply changes immediately without restarting.
+
+A profile with the same `id` as a built-in profile overrides it, so you can replace a built-in with a corrected or extended version.
+
+### Generating a profile from a log directory
+
+The included PowerShell script samples a log directory and writes a ready-to-review `.toml`:
+
+```powershell
+.\scripts\New-LogSleuthProfile.ps1 -LogDirectory "D:\Logs\MyApp" -ProfileId "myapp_log"
+```
+
+The script infers the timestamp format, severity keywords, and filename patterns from up to 50 sample lines per file group, then writes the profile to the external profiles directory. Low-confidence fields are commented out for manual review.
+
+See the [profiles/](profiles/) directory for built-in profile examples.
 
 ## Building
 

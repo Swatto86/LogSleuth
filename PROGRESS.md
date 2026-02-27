@@ -781,6 +781,31 @@ The file list in the Files tab now shows a live last-modified timestamp next to 
 
 ---
 
+## Increment 37: External (User) Profiles
+**Status: COMPLETE**
+
+LogSleuth now loads user-supplied format profiles from `%APPDATA%\LogSleuth\profiles\` on every startup and whenever the user clicks **Options > Reload Profiles**. External profiles follow the same TOML schema as built-in profiles and override any built-in with a matching `id`.
+
+### Design decisions
+- Profile directory is `%APPDATA%\LogSleuth\profiles\` (one level above the `config\` directory) — consistent with where a user would expect app data alongside the session file.
+- The directory is created automatically at first launch so the user never needs to create it manually.
+- Override-by-ID means a power user can replace a built-in with a corrected or extended version by dropping a `.toml` with the same `id` into the folder.
+- Reload is **immediate** — the `request_reload_profiles` flag is consumed by `gui.rs` on the next frame; no restart required.
+
+### Changes
+
+- [x] `src/platform/config.rs` — `user_profiles_dir` now derived from `config_dir.parent()` so it correctly resolves to `%APPDATA%\LogSleuth\profiles\` instead of the previous (wrong) `%APPDATA%\LogSleuth\config\profiles\`.
+- [x] `src/app/state.rs` — Added `pub user_profiles_dir: Option<PathBuf>` and `pub request_reload_profiles: bool` fields to `AppState` (both non-clearing user-preference fields).
+- [x] `src/main.rs` — After `AppState::new()`, sets `state.user_profiles_dir` from `platform_paths.user_profiles_dir` and calls `std::fs::create_dir_all` to ensure the directory exists.
+- [x] `src/gui.rs` — Added `request_reload_profiles` handler: calls `load_all_profiles(state.user_profiles_dir.as_deref())`, replaces `state.profiles`, sets a status message with counts (total / external), and logs the reload at info level.
+- [x] `src/ui/panels/options.rs` — New **Section 4 — External Profiles**: displays the profile folder path (monospace), a `{total} profiles loaded ({builtin} built-in, {external} external)` summary line, and two buttons — **Open Folder** (opens the directory in the platform file manager) and **Reload Profiles** (sets `state.request_reload_profiles = true`). Open Folder is disabled when `user_profiles_dir` is `None`. Footer text updated: `"Profile changes take effect immediately."`
+- [x] `scripts/New-LogSleuthProfile.ps1` — New PowerShell generator script. Accepts `-LogDirectory`, `-ProfileId`, `-ProfileName`, `-OutputPath`, `-SampleLines`, `-Force` parameters. Samples up to 5 representative files per filename-prefix group (up to 50 lines each), infers timestamp format via a ranked regex ladder (ISO 8601, log4j, Veeam dot-date, Apache, US-slash, DHCP, BSD syslog, month-name), finds a content anchor, detects severity keywords, emits a commented `.toml` with all low-confidence fields marked for review. Default output: `%APPDATA%\LogSleuth\profiles\<ProfileId>.toml`.
+- [x] `ATLAS.md` — Extension Points table updated, `FormatProfile` concept updated, `options.rs` description updated, `scripts/` directory added to repo structure.
+
+**Test results: 94 unit tests + 29 E2E tests = 123 total, all passing. Zero clippy warnings.**
+
+---
+
 ## Increment 41 — Incremental walk streaming for fast new-file discovery (bug fix)
 
 **Problem**: `walk_for_new_files` collected all results across the entire UNC directory tree before sending a single bulk message. On large SMB shares this meant new files (e.g., a Veeam error log created mid-session or a file excluded from the initial scan by the date gate) didn't appear in the file list until the complete 60-120 second walk finished. Reproducing an error in Veeam and looking for the resulting log update was unreliable.
