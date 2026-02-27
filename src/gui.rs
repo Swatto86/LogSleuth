@@ -45,6 +45,38 @@ impl eframe::App for LogSleuthApp {
             ctx.set_visuals(egui::Visuals::light());
         }
 
+        // Apply the user-selected font size every frame.
+        // All five standard TextStyles are scaled proportionally from the body
+        // size so headings, buttons, small text, and monospace log entries all
+        // update together.  egui diffs the Style internally so this is cheap
+        // when the value has not changed.
+        {
+            let size = self.state.ui_font_size;
+            let mut style = (*ctx.style()).clone();
+            use egui::{FontFamily, FontId, TextStyle};
+            style.text_styles = [
+                (
+                    TextStyle::Small,
+                    FontId::new((size * 0.75).max(8.0), FontFamily::Proportional),
+                ),
+                (TextStyle::Body, FontId::new(size, FontFamily::Proportional)),
+                (
+                    TextStyle::Button,
+                    FontId::new(size, FontFamily::Proportional),
+                ),
+                (
+                    TextStyle::Heading,
+                    FontId::new((size * 1.30).round(), FontFamily::Proportional),
+                ),
+                (
+                    TextStyle::Monospace,
+                    FontId::new(size, FontFamily::Monospace),
+                ),
+            ]
+            .into();
+            ctx.set_style(style);
+        }
+
         // Poll for scan progress (capped at MAX_SCAN_MESSAGES_PER_FRAME so a
         // burst of queued messages cannot stall the render loop — Rule 11).
         let messages = self.scan_manager.poll_progress(MAX_SCAN_MESSAGES_PER_FRAME);

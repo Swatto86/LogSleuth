@@ -73,10 +73,19 @@ pub struct SessionData {
     /// An empty string means no filter was set.
     #[serde(default)]
     pub discovery_date_input: String,
+
+    /// User-selected UI body font size in points.
+    /// Applied every frame; persisted so the user's preference survives restarts.
+    #[serde(default = "default_font_size")]
+    pub ui_font_size: f32,
 }
 
 fn default_correlation_window() -> i64 {
     crate::util::constants::DEFAULT_CORRELATION_WINDOW_SECS
+}
+
+fn default_font_size() -> f32 {
+    crate::util::constants::DEFAULT_FONT_SIZE
 }
 
 /// Serialisable snapshot of `FilterState`.
@@ -226,6 +235,7 @@ mod tests {
             bookmarks: vec![(42, "important".to_string()), (100, String::new())],
             correlation_window_secs: 60,
             discovery_date_input: "2025-06-01 08:00:00".to_string(),
+            ui_font_size: 14.0,
         }
     }
 

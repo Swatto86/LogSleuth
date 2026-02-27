@@ -198,6 +198,15 @@ pub const MAX_CORRELATION_WINDOW_SECS: i64 = 3_600;
 /// Debounce delay in milliseconds for text filter input.
 pub const DEFAULT_FILTER_DEBOUNCE_MS: u64 = 300;
 
+/// Default UI body font size in points.
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+
+/// Minimum user-configurable UI font size (points).
+pub const MIN_FONT_SIZE: f32 = 10.0;
+
+/// Maximum user-configurable UI font size (points).
+pub const MAX_FONT_SIZE: f32 = 24.0;
+
 /// Number of entries above which an export warning is displayed.
 pub const DEFAULT_LARGE_EXPORT_THRESHOLD: usize = 100_000;
 

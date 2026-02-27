@@ -55,6 +55,11 @@ pub struct AppState {
     /// Whether to show the About dialog.
     pub show_about: bool,
 
+    /// UI body font size in points.  Persists across `clear()` calls — it is a
+    /// user preference, not scan state.  Applied every frame in `gui.rs` via
+    /// `ctx.set_style()` so all text tracks this value.
+    pub ui_font_size: f32,
+
     /// Whether the UI is rendering in dark mode (true) or light mode (false).
     /// Persists across `clear()` calls — it is a user preference, not scan state.
     /// Applied every frame via `ctx.set_visuals()` in `gui.rs`.
@@ -290,6 +295,7 @@ impl AppState {
             show_summary: false,
             show_log_summary: false,
             show_about: false,
+            ui_font_size: crate::util::constants::DEFAULT_FONT_SIZE,
             dark_mode: true,        // default to dark; matches egui's own default
             sort_descending: false, // default ascending (oldest first)
             debug_mode,
@@ -814,6 +820,7 @@ impl AppState {
             bookmarks,
             correlation_window_secs: self.correlation_window_secs,
             discovery_date_input: self.discovery_date_input.clone(),
+            ui_font_size: self.ui_font_size,
         };
         if let Err(e) = crate::app::session::save(&data, session_path) {
             tracing::warn!(error = %e, "Failed to save session");
@@ -869,6 +876,7 @@ impl AppState {
         // Restore the date filter so the re-scan triggered by initial_scan
         // applies the same modified_since cutoff as the original scan.
         self.discovery_date_input = data.discovery_date_input;
+        self.ui_font_size = data.ui_font_size;
     }
 }
 

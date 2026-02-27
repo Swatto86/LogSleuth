@@ -15,10 +15,11 @@
 
 use crate::app::state::AppState;
 use crate::util::constants::{
-    ABSOLUTE_MAX_DEPTH, ABSOLUTE_MAX_FILES, ABSOLUTE_MAX_TOTAL_ENTRIES, DEFAULT_MAX_DEPTH,
-    DEFAULT_MAX_FILES, DIR_WATCH_POLL_INTERVAL_MS, MAX_DIR_WATCH_POLL_INTERVAL_MS,
-    MAX_TAIL_POLL_INTERVAL_MS, MAX_TOTAL_ENTRIES, MIN_DIR_WATCH_POLL_INTERVAL_MS, MIN_MAX_FILES,
-    MIN_MAX_TOTAL_ENTRIES, MIN_TAIL_POLL_INTERVAL_MS, TAIL_POLL_INTERVAL_MS,
+    ABSOLUTE_MAX_DEPTH, ABSOLUTE_MAX_FILES, ABSOLUTE_MAX_TOTAL_ENTRIES, DEFAULT_FONT_SIZE,
+    DEFAULT_MAX_DEPTH, DEFAULT_MAX_FILES, DIR_WATCH_POLL_INTERVAL_MS,
+    MAX_DIR_WATCH_POLL_INTERVAL_MS, MAX_FONT_SIZE, MAX_TAIL_POLL_INTERVAL_MS, MAX_TOTAL_ENTRIES,
+    MIN_DIR_WATCH_POLL_INTERVAL_MS, MIN_FONT_SIZE, MIN_MAX_FILES, MIN_MAX_TOTAL_ENTRIES,
+    MIN_TAIL_POLL_INTERVAL_MS, TAIL_POLL_INTERVAL_MS,
 };
 
 /// Render the Options dialog (if `state.show_options` is true).
@@ -34,6 +35,49 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
         .resizable(false)
         .default_width(420.0)
         .show(ctx, |ui| {
+            // =========================================================
+            // Section 0 — Appearance
+            // =========================================================
+            ui.heading("Appearance");
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Font size:");
+                let mut v = state.ui_font_size as f64;
+                if ui
+                    .add(
+                        egui::Slider::new(
+                            &mut v,
+                            (MIN_FONT_SIZE as f64)..=(MAX_FONT_SIZE as f64),
+                        )
+                        .step_by(0.5)
+                        .suffix(" pt"),
+                    )
+                    .changed()
+                {
+                    state.ui_font_size = (v as f32).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+                }
+                if (state.ui_font_size - DEFAULT_FONT_SIZE).abs() > 0.1
+                    && ui
+                        .small_button("Reset")
+                        .on_hover_text("Reset to the built-in default (14 pt)")
+                        .clicked()
+                {
+                    state.ui_font_size = DEFAULT_FONT_SIZE;
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "Scales all text in the application. Takes effect immediately.",
+                )
+                .small()
+                .weak(),
+            );
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+
             // =========================================================
             // Section 1 — Ingest Limits
             // =========================================================

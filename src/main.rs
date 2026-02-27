@@ -140,14 +140,16 @@ fn build_font_definitions() -> egui::FontDefinitions {
 
         // ----------------------------------------------------------------
         // Monospace family
-        // Consolas first — clear grid-aligned log-file rendering.
+        // Segoe UI first — consistent look across the whole application.
         // Segoe UI Symbol second — Unicode box-drawing, arrows, etc.
         // Segoe UI Emoji third — catchall emoji/symbol fallback.
+        // Consolas fourth — ASCII-domain monospace when explicitly requested
+        //   by code that calls FontFamily::Monospace for column-aligned text.
         // The egui built-in (Hack) and NotoSans are kept at the end.
         // ----------------------------------------------------------------
         if let Some(monospace) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
             let mut insert_at = 0usize;
-            for name in &["Consolas", "Segoe UI Symbol", "Segoe UI Emoji"] {
+            for name in &["Segoe UI", "Segoe UI Symbol", "Segoe UI Emoji", "Consolas"] {
                 if loaded.contains(name) {
                     monospace.insert(insert_at, (*name).to_owned());
                     insert_at += 1;
