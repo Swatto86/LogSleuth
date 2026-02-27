@@ -44,6 +44,29 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     if !state.discovered_files.is_empty() {
         ui.add_space(6.0);
 
+        // Build a sorted index list: most-recently-modified files first so that the
+        // files most actively written to during a live session float to the top.
+        // Files with no known mtime go to the end.
+        let mut sorted_file_idxs: Vec<usize> = (0..state.discovered_files.len()).collect();
+        sorted_file_idxs.sort_by(|&a, &b| {
+            state.discovered_files[b]
+                .modified
+                .cmp(&state.discovered_files[a].modified)
+        });
+
+        // Activity window: hide files whose mtime is outside the rolling window.
+        // Computed once here so the file list and counts are consistent.
+        let activity_cutoff = state.activity_cutoff();
+        if let Some(cutoff) = activity_cutoff {
+            sorted_file_idxs.retain(|&idx| {
+                let f = &state.discovered_files[idx];
+                // Fail-open: include files with no known mtime.
+                f.modified.map_or(true, |t| t >= cutoff)
+            });
+        }
+        let total_all = state.discovered_files.len();
+        // total reflects the (possibly activity-filtered) file count shown in the list.
+
         // Pre-collect (path, name, size, profile_text, profile_colour, mtime_text) once
         // so we can borrow state mutably for checkbox updates below.
         let file_entries: Vec<(
@@ -53,10 +76,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             String, // profile text
             egui::Color32,
             String, // mtime text (formatted for display)
-        )> = state
-            .discovered_files
+        )> = sorted_file_idxs
             .iter()
-            .map(|f| {
+            .map(|&idx| {
+                let f = &state.discovered_files[idx];
                 let name = f
                     .path
                     .file_name()
@@ -88,29 +111,45 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     mtime_text,
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         let total = file_entries.len();
         let active_count = state.filter_state.source_files.len();
 
         // Header row: count / active-filter indicator + All / global-reset.
         ui.horizontal(|ui| {
-            if active_count == 0 && !state.filter_state.hide_all_sources {
-                ui.label(egui::RichText::new(format!("{total} files")).strong());
+            // When an activity window is on, prefix the count with the window label.
+            let file_count_text = if let Some(win_secs) = state.activity_window_secs {
+                let label = render_window_label(win_secs);
+                if total == total_all {
+                    format!("{total} files — {label}")
+                } else {
+                    format!("{total}/{total_all} files — {label}")
+                }
+            } else if active_count == 0 && !state.filter_state.hide_all_sources {
+                format!("{total} files")
             } else {
                 let showing = if state.filter_state.hide_all_sources {
-                    0
+                    0usize
                 } else if active_count == 0 {
                     total
                 } else {
                     active_count
                 };
-                ui.label(
-                    egui::RichText::new(format!("{showing}/{total} files"))
-                        .strong()
-                        .color(egui::Color32::from_rgb(96, 165, 250)),
-                );
-            }
+                format!("{showing}/{total} files")
+            };
+            let count_colour = if state.activity_window_secs.is_some() {
+                egui::Color32::from_rgb(251, 191, 36) // amber when activity window is on
+            } else if active_count > 0 || state.filter_state.hide_all_sources {
+                egui::Color32::from_rgb(96, 165, 250)
+            } else {
+                ui.style().visuals.text_color()
+            };
+            ui.label(
+                egui::RichText::new(file_count_text)
+                    .strong()
+                    .color(count_colour),
+            );
             if (active_count > 0 || state.filter_state.hide_all_sources)
                 && ui.small_button("All").clicked()
             {
@@ -407,6 +446,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .color(egui::Color32::from_rgb(217, 119, 6)),
             );
         }
+
+        // Activity window toggle: only shown when files are loaded.
+        render_activity_window(ui, state);
     }
 }
 
@@ -470,50 +512,72 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                     .small()
                     .frame(false),
                 )
-                .on_hover_text("Clear date/time filter")
+                .on_hover_text("Clear date/time filter — rescans with no date restriction")
                 .clicked()
         {
             state.discovery_date_input.clear();
+            // Clear means "scan all files": trigger a rescan immediately when a
+            // path is already configured so the user doesn't have to press Open.
+            if let Some(path) = state.scan_path.clone() {
+                state.pending_scan = Some(path);
+            }
         }
     });
 
-    // Quick-fill row.
+    // Quick-fill row.  Each button updates the date field AND triggers an
+    // immediate rescan if a scan path is already configured (Rule 16: controls
+    // apply their action immediately rather than requiring a secondary click).
+    let mut did_update_date = false;
     ui.horizontal_wrapped(|ui| {
         if ui
             .small_button("Today")
-            .on_hover_text("Set to today's date (00:00:00 local)")
+            .on_hover_text("Set to today's date (00:00:00 local) and rescan")
             .clicked()
         {
             state.discovery_date_input = Local::now().format("%Y-%m-%d 00:00:00").to_string();
+            did_update_date = true;
         }
-        if ui.small_button("-1h").on_hover_text("1 hour ago").clicked() {
+        if ui
+            .small_button("-1h")
+            .on_hover_text("1 hour ago — rescan")
+            .clicked()
+        {
             let t = Local::now() - Duration::hours(1);
             state.discovery_date_input = t.format("%Y-%m-%d %H:%M:%S").to_string();
+            did_update_date = true;
         }
         if ui
             .small_button("-6h")
-            .on_hover_text("6 hours ago")
+            .on_hover_text("6 hours ago — rescan")
             .clicked()
         {
             let t = Local::now() - Duration::hours(6);
             state.discovery_date_input = t.format("%Y-%m-%d %H:%M:%S").to_string();
+            did_update_date = true;
         }
         if ui
             .small_button("-24h")
-            .on_hover_text("24 hours ago")
+            .on_hover_text("24 hours ago — rescan")
             .clicked()
         {
             let t = Local::now() - Duration::hours(24);
             state.discovery_date_input = t.format("%Y-%m-%d %H:%M:%S").to_string();
+            did_update_date = true;
         }
         if ui
             .small_button("Now")
-            .on_hover_text("Current local date and time")
+            .on_hover_text("Current local date and time — rescan")
             .clicked()
         {
             state.discovery_date_input = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            did_update_date = true;
         }
     });
+    if did_update_date {
+        if let Some(path) = state.scan_path.clone() {
+            state.pending_scan = Some(path);
+        }
+    }
 
     if let Some(since) = state.discovery_modified_since() {
         ui.label(
@@ -537,16 +601,64 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             state.request_cancel = true;
         }
     } else {
+        // Path text input — accepts any local, mapped-drive, or UNC path.
+        // Committed on Enter or by clicking the "Open" button.
+        ui.horizontal(|ui| {
+            let path_resp = ui.add(
+                egui::TextEdit::singleline(&mut state.directory_path_input)
+                    .hint_text("Path or \\\\server\\share\\logs")
+                    .desired_width(ui.available_width() - 52.0),
+            );
+            let pressed_enter =
+                path_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let open_clicked = ui
+                .add_enabled(
+                    !state.scan_in_progress && !state.directory_path_input.trim().is_empty(),
+                    egui::Button::new("Open"),
+                )
+                .on_hover_text("Scan this path")
+                .clicked();
+            if (pressed_enter || open_clicked) && !state.directory_path_input.trim().is_empty() {
+                // Do NOT call p.is_dir() here — on a UNC path whose host is
+                // unreachable that synchronous call blocks the entire UI thread
+                // while Windows retries the SMB connection (~30 s).  The
+                // pre-flight inside discover_files is already timeout-guarded
+                // and will report a clear error if the path is invalid.
+                let p = std::path::PathBuf::from(state.directory_path_input.trim());
+                state.pending_scan = Some(p);
+            }
+        });
+        // Error hint when the typed path does not resolve to a directory.
+        // Skip the check for UNC paths (\\server\share) — calling is_dir()
+        // on an unreachable UNC host blocks the UI thread for 30+ seconds.
+        // Those paths are validated by the timeout-guarded pre-flight in
+        // discover_files instead.
+        if !state.directory_path_input.trim().is_empty() {
+            let input = state.directory_path_input.trim();
+            let is_unc = input.starts_with("\\\\") || input.starts_with("//");
+            if !is_unc {
+                let p = std::path::PathBuf::from(input);
+                if !p.is_dir() {
+                    ui.label(
+                        egui::RichText::new("\u{2717} Path not found")
+                            .small()
+                            .color(egui::Color32::from_rgb(248, 113, 113)),
+                    );
+                }
+            }
+        }
+        ui.add_space(2.0);
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
                     !state.scan_in_progress,
                     egui::Button::new("Open Directory\u{2026}"),
                 )
-                .on_hover_text("Scan a directory for log files")
+                .on_hover_text("Browse for a directory")
                 .clicked()
             {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                    state.directory_path_input = path.display().to_string();
                     state.pending_scan = Some(path);
                 }
             }
@@ -703,5 +815,143 @@ fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
         // Literal — must match exactly.
         (Some(p), Some(t)) if p == t => glob_match_bytes(&pat[1..], &txt[1..]),
         _ => false,
+    }
+}
+
+// =============================================================================
+// Activity window UI
+// =============================================================================
+
+/// Human-readable label for a window duration.
+fn format_window_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("last {secs}s")
+    } else if secs % 3600 == 0 {
+        let h = secs / 3600;
+        format!("last {h}h")
+    } else {
+        let m = secs / 60;
+        format!("last {m}m")
+    }
+}
+
+/// Alias used by the file-list header.
+fn render_window_label(secs: u64) -> String {
+    format_window_duration(secs)
+}
+
+/// Render the activity window toggle + preset row at the bottom of the Files panel.
+///
+/// The activity window hides files (and all their entries) whose OS
+/// last-modified time is older than `now - window`.  The cutoff auto-advances
+/// with the clock every second so stale files age out automatically.
+fn render_activity_window(ui: &mut egui::Ui, state: &mut crate::app::state::AppState) {
+    ui.add_space(4.0);
+    ui.separator();
+
+    let amber = egui::Color32::from_rgb(251, 191, 36);
+    let dim = egui::Color32::from_rgb(107, 114, 128);
+    let is_active = state.activity_window_secs.is_some();
+
+    // Header row: label + Off button when active.
+    ui.horizontal(|ui| {
+        let label_colour = if is_active { amber } else { dim };
+        ui.label(
+            egui::RichText::new("\u{23f1} Activity window")
+                .small()
+                .strong()
+                .color(label_colour),
+        );
+        if is_active {
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("\u{d7} Off")
+                            .small()
+                            .color(egui::Color32::from_rgb(156, 163, 175)),
+                    )
+                    .small()
+                    .frame(false),
+                )
+                .on_hover_text("Disable activity window — show all loaded files and entries")
+                .clicked()
+            {
+                state.activity_window_secs = None;
+                state.activity_window_input.clear();
+                state.apply_filters();
+            }
+        } else {
+            ui.label(egui::RichText::new("off").small().color(dim));
+        }
+    });
+
+    // Preset buttons + custom input (always shown when files are loaded).
+    const PRESETS: &[(&str, u64)] = &[("30s", 30), ("5m", 300), ("15m", 900), ("1h", 3600)];
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        for &(label, secs) in PRESETS {
+            let preset_active = state.activity_window_secs == Some(secs);
+            let colour = if preset_active {
+                amber
+            } else {
+                ui.style().visuals.text_color()
+            };
+            let resp = ui
+                .add(egui::Button::new(egui::RichText::new(label).small().color(colour)).small())
+                .on_hover_text(if preset_active {
+                    "Click to turn off activity window"
+                } else {
+                    "Show only files modified within this window"
+                });
+            if resp.clicked() {
+                if preset_active {
+                    state.activity_window_secs = None;
+                    state.activity_window_input.clear();
+                } else {
+                    state.activity_window_secs = Some(secs);
+                    state.activity_window_input.clear();
+                }
+                changed = true;
+            }
+        }
+
+        // Custom input: a number of minutes.
+        ui.add(
+            egui::TextEdit::singleline(&mut state.activity_window_input)
+                .hint_text("min")
+                .desired_width(34.0),
+        );
+        let set_clicked = ui
+            .add_enabled(
+                !state.activity_window_input.trim().is_empty(),
+                egui::Button::new(egui::RichText::new("Set").small()).small(),
+            )
+            .on_hover_text("Set custom activity window (minutes)")
+            .clicked();
+        if set_clicked {
+            if let Ok(mins) = state.activity_window_input.trim().parse::<u64>() {
+                if mins > 0 {
+                    state.activity_window_secs = Some(mins * 60);
+                    changed = true;
+                }
+            }
+        }
+    });
+
+    if changed {
+        state.apply_filters();
+    }
+
+    // Hint when active.
+    if let Some(secs) = state.activity_window_secs {
+        ui.label(
+            egui::RichText::new(format!(
+                "Showing files written in the {}. \
+                 Ages out automatically.",
+                format_window_duration(secs)
+            ))
+            .small()
+            .weak(),
+        );
     }
 }

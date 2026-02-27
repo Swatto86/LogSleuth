@@ -92,6 +92,29 @@ pub struct AppState {
     pub pending_single_files: Option<Vec<PathBuf>>,
 
     // -------------------------------------------------------------------------
+    // Activity window
+    // -------------------------------------------------------------------------
+    /// Rolling "activity window" in seconds.  When `Some(n)`, only files whose
+    /// OS last-modified time is within the last `n` seconds are shown in the
+    /// file list; all entries from files outside that window are hidden from the
+    /// timeline.  The cutoff is re-evaluated every second so stale files age
+    /// out automatically as the clock advances.
+    ///
+    /// Uses `DiscoveredFile::modified` (kept live by the dir-watcher mtime
+    /// polling) rather than parsed log timestamps, so it works correctly for
+    /// plain-text logs and files whose embedded timestamps are unreliable.
+    ///
+    /// Fail-open: files whose mtime cannot be read are always treated as active
+    /// so a metadata failure never silently hides a log file.
+    ///
+    /// `None` means the feature is off; all files and entries are shown.
+    pub activity_window_secs: Option<u64>,
+
+    /// UI text buffer for the custom activity-window duration input.
+    /// Stores the value typed by the user (e.g. "90" for 90 seconds).
+    pub activity_window_input: String,
+
+    // -------------------------------------------------------------------------
     // Directory watcher state
     // -------------------------------------------------------------------------
     /// Whether the recursive directory watcher background thread is currently
@@ -101,6 +124,12 @@ pub struct AppState {
     /// The watcher monitors the scan directory for newly created log files and
     /// automatically adds them to the session in real time.
     pub dir_watcher_active: bool,
+
+    /// True while the watcher's background walk thread is actively scanning
+    /// the directory tree for new files.  Shown in the WATCH badge tooltip
+    /// so the user can see that the watcher is alive and working on UNC/SMB
+    /// shares where each walk can take several minutes.
+    pub dir_watcher_scanning: bool,
 
     // -------------------------------------------------------------------------
     // Live tail state
@@ -198,6 +227,13 @@ pub struct AppState {
     /// Whether the Options dialog is currently open.
     pub show_options: bool,
 
+    /// When true the timeline should snap its scroll position to the top on the
+    /// next rendered frame.  Set by the tail polling loop in `gui.rs` whenever
+    /// new entries arrive while the timeline is in descending (newest-first)
+    /// sort order with auto-scroll enabled.  Consumed and cleared immediately
+    /// by `timeline.rs` so it fires exactly once per batch of new entries.
+    pub scroll_top_requested: bool,
+
     /// Total files found during the last discovery pass **before** the ingest
     /// limit was applied. Equals `discovered_files.len()` when no truncation
     /// occurred. Used to display "Found N, showing M" in the status bar.
@@ -229,6 +265,11 @@ pub struct AppState {
     /// Which tab is active in the left sidebar.  0 = Files, 1 = Filters.
     /// Pure UI state — not saved to the session file.
     pub sidebar_tab: usize,
+
+    /// Text typed into the "path" input box in the scan controls.  Supports
+    /// local paths, mapped drives, and UNC paths (\\server\share\logs).
+    /// Pure UI state — not saved to the session file.
+    pub directory_path_input: String,
 }
 
 impl AppState {
@@ -257,7 +298,10 @@ impl AppState {
             file_list_search: String::new(),
             file_colours: HashMap::new(),
             pending_single_files: None,
+            activity_window_secs: None,
+            activity_window_input: String::new(),
             dir_watcher_active: false,
+            dir_watcher_scanning: false,
             tail_active: false,
             tail_auto_scroll: true,
             request_start_tail: false,
@@ -275,12 +319,22 @@ impl AppState {
             tail_poll_interval_ms: crate::util::constants::TAIL_POLL_INTERVAL_MS,
             dir_watch_poll_interval_ms: crate::util::constants::DIR_WATCH_POLL_INTERVAL_MS,
             show_options: false,
+            scroll_top_requested: false,
             total_files_found: 0,
             pending_replace_files: None,
             request_new_session: false,
             discovery_date_input: String::new(),
             sidebar_tab: 0,
+            directory_path_input: String::new(),
         }
+    }
+
+    /// Returns the UTC cutoff instant for the current activity window, or
+    /// `None` if the window is disabled.  Re-evaluated on every call so the
+    /// rolling window stays current as the clock advances.
+    pub fn activity_cutoff(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.activity_window_secs
+            .map(|secs| chrono::Utc::now() - chrono::Duration::seconds(secs as i64))
     }
 
     /// Recompute filtered indices from current entries and filter state.
@@ -316,6 +370,29 @@ impl AppState {
 
         self.filtered_indices =
             crate::core::filter::apply_filters(&self.entries, &self.filter_state);
+
+        // Activity window: further filter to only entries whose source file has
+        // been modified within the rolling window.  Applied *after* all other
+        // filters so it combines with severity, text search, etc.  Uses the live
+        // mtime from `discovered_files` (updated by the dir-watcher) rather than
+        // any parsed log timestamp, so it works for plain-text and files with
+        // unreliable embedded timestamps.
+        //
+        // Fail-open: a file with no known mtime is treated as active so that a
+        // metadata failure never silently hides entries.
+        if let Some(cutoff) = self.activity_cutoff() {
+            let active_files: std::collections::HashSet<&std::path::PathBuf> = self
+                .discovered_files
+                .iter()
+                .filter(|f| f.modified.map_or(true, |t| t >= cutoff))
+                .map(|f| &f.path)
+                .collect();
+            self.filtered_indices.retain(|&idx| {
+                self.entries
+                    .get(idx)
+                    .is_some_and(|e| active_files.contains(&e.source_file))
+            });
+        }
 
         // Restore selection: find the new display position of the previously
         // selected entry by ID.  If the entry is no longer in the filtered set
@@ -628,6 +705,10 @@ impl AppState {
         self.pending_single_files = None;
         // Stop tail and dir watcher on clear — a new scan starts fresh.
         self.dir_watcher_active = false;
+        self.dir_watcher_scanning = false;
+        // Reset activity window on clear so a fresh scan starts unfiltered.
+        self.activity_window_secs = None;
+        self.activity_window_input.clear();
         self.tail_active = false;
         self.request_start_tail = false;
         self.request_stop_tail = false;
@@ -746,6 +827,13 @@ impl AppState {
     /// current file contents.
     pub fn restore_from_session(&mut self, data: crate::app::session::SessionData) {
         self.scan_path = data.scan_path;
+        // Pre-populate the path text box so the user sees (and can edit)
+        // the restored path immediately on startup without needing to retype it.
+        self.directory_path_input = self
+            .scan_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         let f = &data.filter;
         self.filter_state.severity_levels = f.severity_levels.iter().copied().collect();
         // NOTE: source_files and hide_all_sources are intentionally NOT

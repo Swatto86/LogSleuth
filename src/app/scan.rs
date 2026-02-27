@@ -39,6 +39,16 @@ const SAMPLE_LINES: usize = 20;
 const MAX_RETRIES: u32 = 3;
 const RETRY_DELAYS_MS: [u64; 3] = [50, 100, 200];
 
+/// Maximum seconds to wait for sample-line reads (phase 2 auto-detection).
+/// UNC/SMB shares can stall indefinitely on a dropped connection; this cap
+/// keeps the scan responsive and allows Cancel to take effect promptly.
+/// The spawned I/O thread is not forcibly killed (Rust does not support that)
+/// but will exit on its own once the OS SMB timeout fires.
+const SAMPLE_READ_TIMEOUT_SECS: u64 = 10;
+
+/// Maximum seconds to wait for a full file read (phase 3 parsing).
+const FILE_READ_TIMEOUT_SECS: u64 = 30;
+
 // =============================================================================
 // ScanManager
 // =============================================================================
@@ -170,6 +180,31 @@ impl Default for ScanManager {
 // Background scan pipeline
 // =============================================================================
 
+/// Messages sent from the discovery sub-thread back to the scan thread.
+///
+/// Using a dedicated sub-thread for discovery ensures the scan thread can keep
+/// polling the cancel flag even when `walkdir::next()` is blocked inside a
+/// kernel UNC/SMB directory-listing call (which can stall for 30 + seconds on
+/// an unreachable host).  The scan thread polls this channel with a short
+/// timeout and re-checks cancel between each poll.
+enum DiscoveryUpdate {
+    /// A file was accepted by the walker.  Carries the full `DiscoveredFile`
+    /// so the scan thread can accumulate files as they arrive and proceed even
+    /// if the sub-thread stalls before sending `Done`.
+    FileFound {
+        file: crate::core::model::DiscoveredFile,
+        count: usize,
+    },
+    /// Discovery finished successfully.
+    Done {
+        files: Vec<crate::core::model::DiscoveredFile>,
+        warnings: Vec<String>,
+        total_found: usize,
+    },
+    /// Discovery hit a fatal pre-flight error (bad root path, etc.).
+    Error(String),
+}
+
 /// Full scan pipeline: discovery → auto-detection → parsing → batched delivery.
 ///
 /// Runs on a background thread. Sends `ScanProgress` messages to `tx`.
@@ -199,27 +234,128 @@ fn run_scan(
     }
 
     // -------------------------------------------------------------------------
-    // Phase 1: Discovery
+    // Phase 1: Discovery — runs in a dedicated sub-thread
     // -------------------------------------------------------------------------
+    //
+    // On UNC/SMB paths every `walkdir::next()` call issues a network RPC that
+    // can block indefinitely when the remote host is unreachable or throttled.
+    // Running discovery in a sub-thread and polling the result channel with a
+    // short timeout lets the scan thread check the cancel flag (and return
+    // `Cancelled` promptly) without waiting for the OS SMB timeout to fire.
     send!(ScanProgress::DiscoveryStarted);
 
-    let tx_discovery = tx.clone();
-    let (discovered_files, warnings, total_found) =
-        match discovery::discover_files(&root, &config, |path, count| {
-            tracing::trace!(file = %path.display(), count, "File discovered");
-            let _ = tx_discovery.send(ScanProgress::FileDiscovered {
-                path: path.to_path_buf(),
-                files_found: count,
+    // Wire the cancel flag into the discovery config so the walkdir loop skips
+    // entries promptly once cancellation is requested (belt-and-suspenders with
+    // the polling loop below).
+    let config = crate::core::discovery::DiscoveryConfig {
+        cancel_flag: Some(Arc::clone(&cancel)),
+        ..config
+    };
+
+    let (disc_tx, disc_rx) = mpsc::channel::<DiscoveryUpdate>();
+    let disc_config = config.clone();
+    let disc_root = root.clone();
+    std::thread::spawn(move || {
+        let result = discovery::discover_files(&disc_root, &disc_config, |file, count| {
+            let _ = disc_tx.send(DiscoveryUpdate::FileFound {
+                file: file.clone(),
+                count,
             });
-        }) {
-            Ok(result) => result,
-            Err(e) => {
-                send!(ScanProgress::Failed {
-                    error: e.to_string(),
+        });
+        match result {
+            Ok((files, warnings, total_found)) => {
+                let _ = disc_tx.send(DiscoveryUpdate::Done {
+                    files,
+                    warnings,
+                    total_found,
                 });
+            }
+            Err(e) => {
+                let _ = disc_tx.send(DiscoveryUpdate::Error(e.to_string()));
+            }
+        }
+    });
+
+    // How long to wait with no new message before giving up and proceeding
+    // with whatever files have been accumulated.  On a stalled SMB/UNC path
+    // `walkdir::next()` can block indefinitely; this cap lets the scan proceed
+    // with partial results rather than waiting forever.
+    const DISCOVERY_STALL_SECS: u64 = 30;
+
+    // Accumulate DiscoveredFile structs as FileFound messages arrive so we can
+    // proceed with a partial list if the sub-thread stalls or disconnects.
+    let mut accumulated: Vec<crate::core::model::DiscoveredFile> = Vec::new();
+    let mut last_activity = Instant::now();
+
+    // Poll the discovery channel with a 100 ms timeout so the cancel flag is
+    // re-checked between each poll, even while walkdir blocks inside an SMB call.
+    let (discovered_files, warnings, total_found) = loop {
+        if cancel.load(Ordering::SeqCst) {
+            send!(ScanProgress::Cancelled);
+            return;
+        }
+
+        // Stall guard: if no new progress for DISCOVERY_STALL_SECS, stop
+        // waiting and parse whatever has been found so far.
+        if last_activity.elapsed() >= Duration::from_secs(DISCOVERY_STALL_SECS) {
+            let n = accumulated.len();
+            let msg = format!(
+                "Directory listing stalled for {DISCOVERY_STALL_SECS}s \
+                 (UNC/network path not responding). \
+                 Proceeding with {n} file(s) discovered so far. \
+                 Results may be incomplete."
+            );
+            tracing::warn!("{}", msg);
+            send!(ScanProgress::Warning { message: msg });
+            let total = accumulated.len();
+            break (accumulated, vec![], total);
+        }
+
+        match disc_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(DiscoveryUpdate::FileFound { file, count }) => {
+                tracing::trace!(file = %file.path.display(), count, "File discovered");
+                last_activity = Instant::now();
+                let _ = tx.send(ScanProgress::FileDiscovered {
+                    path: file.path.clone(),
+                    files_found: count,
+                });
+                accumulated.push(file);
+            }
+            Ok(DiscoveryUpdate::Done {
+                files,
+                warnings,
+                total_found,
+            }) => {
+                // Use the sub-thread's final list: it has been truncated to
+                // max_files and sorted by mtime, unlike our `accumulated` copy.
+                break (files, warnings, total_found);
+            }
+            Ok(DiscoveryUpdate::Error(e)) => {
+                send!(ScanProgress::Failed { error: e });
                 return;
             }
-        };
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No message yet — loop; stall timer advances naturally.
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Sub-thread exited without Done/Error (panic or abort).
+                // Fall back to the files accumulated so far rather than failing.
+                if accumulated.is_empty() {
+                    send!(ScanProgress::Failed {
+                        error: "Discovery thread exited unexpectedly".to_string(),
+                    });
+                    return;
+                }
+                let n = accumulated.len();
+                let msg =
+                    format!("Discovery thread exited early; proceeding with {n} file(s) found.");
+                tracing::warn!("{}", msg);
+                send!(ScanProgress::Warning { message: msg });
+                let total = accumulated.len();
+                break (accumulated, vec![], total);
+            }
+        }
+    };
 
     for warning in warnings {
         send!(ScanProgress::Warning { message: warning });
@@ -294,7 +430,7 @@ fn run_parse_pipeline(
     for file in &mut discovered_files {
         check_cancel!();
 
-        let samples = read_sample_lines(&file.path, SAMPLE_LINES);
+        let samples = read_sample_lines_timed(&file.path, SAMPLE_LINES);
         let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if let Some(detection) = profile::auto_detect(file_name, &samples, &profiles) {
@@ -388,7 +524,7 @@ fn run_parse_pipeline(
             }
         };
 
-        let content = match read_file_content(&file.path, file.is_large) {
+        let content = match read_file_content_timed(&file.path, file.is_large) {
             Ok(c) => c,
             Err(e) => {
                 let msg = format!("Cannot read '{}': {e}", file.path.display());
@@ -643,6 +779,61 @@ fn run_files_scan(
 // =============================================================================
 // File reading helpers
 // =============================================================================
+
+/// Timeout-guarded wrapper around `read_sample_lines`.
+///
+/// Runs the I/O on a separate thread; if no result arrives within
+/// `SAMPLE_READ_TIMEOUT_SECS` the function returns an empty vec so the caller
+/// falls back to plain-text detection.  This prevents a stalled UNC/SMB share
+/// from blocking the scan thread indefinitely (Rule 11 resilience).
+fn read_sample_lines_timed(path: &Path, max_lines: usize) -> Vec<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path_owned = path.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(read_sample_lines(&path_owned, max_lines));
+    });
+    match rx.recv_timeout(Duration::from_secs(SAMPLE_READ_TIMEOUT_SECS)) {
+        Ok(lines) => lines,
+        Err(_) => {
+            tracing::warn!(
+                file = %path.display(),
+                timeout_secs = SAMPLE_READ_TIMEOUT_SECS,
+                "Sample read timed out (stalled network path?); falling back to plain-text"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// Timeout-guarded wrapper around `read_file_content`.
+///
+/// Runs the I/O on a separate thread; if no result arrives within
+/// `FILE_READ_TIMEOUT_SECS` returns a `TimedOut` error so the caller logs a
+/// warning and skips the file (Rule 11 resilience).
+fn read_file_content_timed(path: &Path, is_large: bool) -> io::Result<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path_owned = path.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(read_file_content(&path_owned, is_large));
+    });
+    match rx.recv_timeout(Duration::from_secs(FILE_READ_TIMEOUT_SECS)) {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                file = %path.display(),
+                timeout_secs = FILE_READ_TIMEOUT_SECS,
+                "File read timed out (stalled network path?); skipping file"
+            );
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "read timed out after {FILE_READ_TIMEOUT_SECS}s \
+                     (stalled UNC/network path)"
+                ),
+            ))
+        }
+    }
+}
 
 /// Read up to `max_lines` lines from the start of a file for auto-detection.
 /// Returns an empty vec on any I/O error (non-fatal; auto-detection will skip).

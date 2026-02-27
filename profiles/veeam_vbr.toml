@@ -46,6 +46,15 @@ file_patterns = [
     "VeeamDeployer*.log",
     # Mount service logs
     "Mount.*.log",
+    # RPC / transport infrastructure logs (Rpc.EmTol.VbrService.log, Rpc.Yrp.log, etc.)
+    "Rpc.*.log",
+    # Task service logs (Task.Repository.log, Task.JobDispatcher.log, etc.)
+    "Task.*.log",
+    # Data-collection service logs (DataCollectionService.log, DataCollectionService.VC3.log)
+    "DataCollectionService*.log",
+    # Broader Svc.* catch-all covering Svc.Identity.log, Svc.VeeamCloudConnect.*.log, etc.
+    # that don't start with "Svc.Veeam" but still live in the VBR log directory.
+    "Svc.*.log",
     # Catch-all for other top-level Veeam service logs whose names vary by version
     "Veeam*.log",
 ]

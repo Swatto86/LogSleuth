@@ -47,7 +47,10 @@ file_patterns = [
     "kube-proxy.log",
     "etcd.log",
     "kubernetes.log",
-    "*.log",
+    # NOTE: "*.log" intentionally omitted. The content_match regex is unique
+    # enough to identify klog-format files without a wildcard filename bonus,
+    # and a "*.log" pattern creates a 0.3-confidence tie with every other
+    # profile that has a specific filename match, causing arbitrary mis-detection.
 ]
 # Single letter I/W/E/F followed by MMDD and a time — unique to klog
 content_match = '^[IWEF]\d{4}\s\d{2}:\d{2}:\d{2}\.\d+\s'

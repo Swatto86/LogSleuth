@@ -438,6 +438,16 @@ pub enum DirWatchProgress {
     /// `DiscoveredFile::modified` for each matching path so the file list
     /// shows a live "last modified" time without requiring a full rescan.
     FileMtimeUpdates(Vec<(std::path::PathBuf, DateTime<Utc>)>),
+
+    /// The watcher has just spawned a walk thread to scan for new files.
+    /// Sent once per walk cycle so the UI can show a "scanning..." indicator.
+    WalkStarted,
+
+    /// A directory walk completed.  Sent whether or not new files were found.
+    /// `new_count` is the number of new files that passed all filters (zero
+    /// means the directory is up-to-date; non-zero means a `NewFiles` message
+    /// was already sent in the same cycle).
+    WalkComplete { new_count: usize },
 }
 
 // =============================================================================

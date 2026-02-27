@@ -214,7 +214,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Quick-select buttons (toggle: click active button to clear it)
     ui.horizontal_wrapped(|ui| {
         for &(label, secs) in &[
-            ("15m", 15u64 * 60),
+            ("1m", 60u64),
+            ("15m", 15 * 60),
             ("1h", 3_600),
             ("6h", 21_600),
             ("24h", 86_400),
@@ -243,7 +244,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         );
         ui.label("min");
 
-        let committed = resp.lost_focus() && resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        // Apply the filter when the field loses focus (click away or Tab/Enter).
+        // Previously this required both lost_focus AND key_pressed(Enter), which
+        // silently discarded a typed value when the user clicked away without
+        // pressing Enter, leaving the rolling window unset.
+        let committed = resp.lost_focus();
         if committed {
             let trimmed = state.filter_state.relative_time_input.trim().to_string();
             if let Ok(mins) = trimmed.parse::<u64>() {

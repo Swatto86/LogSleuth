@@ -18,6 +18,8 @@ use crate::core::model::DiscoveredFile;
 use crate::util::error::DiscoveryError;
 use chrono::{DateTime, Utc};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 // =============================================================================
 // Configuration
@@ -61,6 +63,15 @@ pub struct DiscoveryConfig {
     /// emits a warning.  Decoupled from `max_files` so users can tune either
     /// limit independently (e.g. allow 5 000 files but cap entries at 100 000).
     pub max_total_entries: usize,
+
+    /// Optional cancel flag.  When `Some`, the discovery loop checks this flag
+    /// on every walker iteration and stops early (returning partial results) if
+    /// it is set to `true`.  The caller (`app::scan::run_scan`) detects the
+    /// cancel after `discover_files` returns and sends `ScanProgress::Cancelled`.
+    ///
+    /// `None` means no cancellation support (used in tests and when the caller
+    /// does not need mid-discovery cancellation).
+    pub cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 impl Default for DiscoveryConfig {
@@ -80,6 +91,7 @@ impl Default for DiscoveryConfig {
             large_file_threshold: constants::DEFAULT_LARGE_FILE_THRESHOLD,
             modified_since: None,
             max_total_entries: constants::MAX_TOTAL_ENTRIES,
+            cancel_flag: None,
         }
     }
 }
@@ -109,20 +121,51 @@ pub fn discover_files<F>(
     mut on_file_found: F,
 ) -> Result<(Vec<DiscoveredFile>, Vec<String>, usize), DiscoveryError>
 where
-    F: FnMut(&Path, usize),
+    F: FnMut(&DiscoveredFile, usize),
 {
     use crate::util::constants;
 
     // --- Pre-flight validation (Rule 17) ---
-    if !root.exists() {
-        return Err(DiscoveryError::RootNotFound {
-            path: root.to_path_buf(),
+    // Run existence and directory checks on a background thread with a
+    // short timeout.  On a UNC/SMB path whose host is unreachable, calls like
+    // `Path::exists()` can block for 30+ seconds while Windows retries the
+    // name-resolution / connect cycle.  If the check times out we treat the
+    // path as not found rather than hanging the scan thread (Rule 11).
+    const PREFLIGHT_TIMEOUT_SECS: u64 = 10;
+    {
+        let root_buf = root.to_path_buf();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<bool, ()>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(Ok(root_buf.is_dir()));
         });
-    }
-    if !root.is_dir() {
-        return Err(DiscoveryError::NotADirectory {
-            path: root.to_path_buf(),
-        });
+        match rx.recv_timeout(std::time::Duration::from_secs(PREFLIGHT_TIMEOUT_SECS)) {
+            Ok(Ok(true)) => {} // root exists and is a directory — proceed
+            Ok(Ok(false)) => {
+                // Path exists but is not a directory, OR does not exist at all.
+                // `is_dir()` returns false for missing paths and for files.
+                if root.exists() {
+                    return Err(DiscoveryError::NotADirectory {
+                        path: root.to_path_buf(),
+                    });
+                } else {
+                    return Err(DiscoveryError::RootNotFound {
+                        path: root.to_path_buf(),
+                    });
+                }
+            }
+            Ok(Err(_)) | Err(_) => {
+                // Timed out or thread panicked — treat as not found so the
+                // caller surfaces an actionable error to the user.
+                tracing::warn!(
+                    root = %root.display(),
+                    timeout_secs = PREFLIGHT_TIMEOUT_SECS,
+                    "Pre-flight path check timed out (unreachable UNC host?)"
+                );
+                return Err(DiscoveryError::RootNotFound {
+                    path: root.to_path_buf(),
+                });
+            }
+        }
     }
 
     // Clamp config limits to absolute bounds (Rule 11 input validation).
@@ -167,6 +210,17 @@ where
         });
 
     for entry_result in walker {
+        // Check cancel flag on every iteration so UNC / large tree scans can
+        // be interrupted promptly without blocking until walkdir finishes.
+        if config
+            .cancel_flag
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::SeqCst))
+        {
+            tracing::debug!("Discovery cancelled by request");
+            break;
+        }
+
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
@@ -261,7 +315,7 @@ where
         };
 
         let count = files.len() + 1;
-        on_file_found(path, count);
+        on_file_found(&discovered, count);
         files.push(discovered);
     }
 

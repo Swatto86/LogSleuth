@@ -239,6 +239,12 @@ impl eframe::App for LogSleuthApp {
                         );
                     }
                     self.state.apply_filters();
+                    // In descending (newest-first) sort mode, new entries appear at
+                    // display_idx 0 (the top of the viewport).  Request a scroll-to-top
+                    // so the user sees them without needing to scroll up manually.
+                    if self.state.sort_descending && self.state.tail_auto_scroll {
+                        self.state.scroll_top_requested = true;
+                    }
                 }
                 crate::core::model::TailProgress::FileError { path, message } => {
                     let msg = format!("Tail warning — {}: {}", path.display(), message);
@@ -284,6 +290,23 @@ impl eframe::App for LogSleuthApp {
                         self.state.max_total_entries,
                         id_start,
                     );
+                }
+                crate::core::model::DirWatchProgress::WalkStarted => {
+                    tracing::debug!("Directory watcher: walk cycle started");
+                    self.state.dir_watcher_scanning = true;
+                }
+                crate::core::model::DirWatchProgress::WalkComplete { new_count } => {
+                    tracing::debug!(new_count, "Directory watcher: walk cycle complete");
+                    self.state.dir_watcher_scanning = false;
+                    if new_count == 0 {
+                        // No new files: update status so it's clear the watcher
+                        // is alive and the directory is up-to-date.
+                        let now = chrono::Local::now().format("%H:%M:%S");
+                        self.state.status_message =
+                            format!("Directory watcher: up to date (checked {now})");
+                    }
+                    // If new_count > 0 the NewFiles handler already set a more
+                    // informative status message — don't overwrite it here.
                 }
                 crate::core::model::DirWatchProgress::FileMtimeUpdates(updates) => {
                     // Update the cached mtime on each DiscoveredFile so the
@@ -768,10 +791,20 @@ impl eframe::App for LogSleuthApp {
                 let has_dir_session = self.state.scan_path.is_some()
                     && !self.state.discovered_files.is_empty();
                 if self.state.dir_watcher_active {
+                    let watch_tip = if self.state.dir_watcher_scanning {
+                        "Directory watch active — scanning for new files… (click to pause)"
+                    } else {
+                        "Directory watch active — click to pause"
+                    };
+                    let watch_label = if self.state.dir_watcher_scanning {
+                        egui::RichText::new(" \u{1f441} WATCH ⋯ ")
+                    } else {
+                        egui::RichText::new(" \u{1f441} WATCH ")
+                    };
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(" \u{1f441} WATCH ")
+                                watch_label
                                     .strong()
                                     .color(egui::Color32::from_rgb(96, 165, 250)) // Blue 400
                                     .background_color(egui::Color32::from_rgba_premultiplied(
@@ -780,7 +813,7 @@ impl eframe::App for LogSleuthApp {
                             )
                             .frame(false),
                         )
-                        .on_hover_text("Directory watch active — click to pause")
+                        .on_hover_text(watch_tip)
                         .clicked()
                     {
                         watch_toggle = Some(false);
@@ -950,6 +983,15 @@ impl eframe::App for LogSleuthApp {
         ui::panels::log_summary::render(ctx, &mut self.state);
         ui::panels::about::render(ctx, &mut self.state);
         ui::panels::options::render(ctx, &mut self.state);
+
+        // Activity window auto-advance: re-apply filters every second so the
+        // rolling cutoff stays current and stale files/entries age out without
+        // any user interaction.  The repaint_after keeps the UI responsive
+        // without busy-looping at the full frame rate.
+        if self.state.activity_window_secs.is_some() {
+            self.state.apply_filters();
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
     }
 
     /// Called by eframe when the application window is about to close.

@@ -248,6 +248,16 @@ fn run_dir_watcher(
         })
         .collect();
 
+    // Receiver for the currently in-flight walk sub-thread, if any.
+    //
+    // Only ONE walk sub-thread is allowed at a time to prevent thread
+    // accumulation on slow UNC/SMB shares where each walkdir call can block
+    // for tens of seconds per entry.  A new walk is only spawned after the
+    // previous one has delivered its result (or the disconnected signal).
+    // Using `try_recv` here keeps the mtime-tracking loop below running every
+    // 2 s regardless of how long the directory walk takes.
+    let mut walk_in_flight: Option<mpsc::Receiver<Vec<PathBuf>>> = None;
+
     loop {
         // Sleep in small sub-intervals so cancellation is detected promptly.
         for _ in 0..sub_iters {
@@ -262,15 +272,76 @@ fn run_dir_watcher(
             return;
         }
 
-        // Walk the directory and collect files not yet in `known_paths`.
-        let new_files = walk_for_new_files(
-            &root,
-            &known_paths,
-            &include_pats,
-            &exclude_pats,
-            config.max_depth,
-            config.modified_since,
-        );
+        // ---------------------------------------------------------------
+        // New-file discovery via a persistent walk sub-thread.
+        //
+        // Pattern:
+        //   1. If no walk is in flight, snapshot known_paths and spawn one.
+        //   2. Poll the in-flight receiver non-blockingly (try_recv).
+        //   3. If the result is ready, process it; if not, skip new-file
+        //      detection this cycle and continue to the mtime loop below.
+        //
+        // This guarantees at most one walk thread at a time, preventing
+        // thread accumulation on slow UNC shares where the OS can stall a
+        // walkdir call for 30-60 s per directory entry.  The mtime loop
+        // below is unaffected and always runs on every 2 s cycle.
+        // ---------------------------------------------------------------
+        if walk_in_flight.is_none() {
+            let known_snap = known_paths.clone();
+            let root_owned = root.clone();
+            let include_owned = include_pats.clone();
+            let exclude_owned = exclude_pats.clone();
+            let max_depth = config.max_depth;
+            let modified_since = config.modified_since;
+            let (walk_tx, walk_rx) = mpsc::channel::<Vec<PathBuf>>();
+            std::thread::spawn(move || {
+                let found = walk_for_new_files(
+                    &root_owned,
+                    &known_snap,
+                    &include_owned,
+                    &exclude_owned,
+                    max_depth,
+                    modified_since,
+                );
+                // If the receiver was already dropped (watcher stopped), the
+                // send fails silently — the thread exits cleanly on return.
+                let _ = walk_tx.send(found);
+            });
+            walk_in_flight = Some(walk_rx);
+            // Notify the UI that a walk cycle has started so it can show a
+            // "scanning for new files..." indicator in the status bar.
+            if tx.send(DirWatchProgress::WalkStarted).is_err() {
+                return;
+            }
+        }
+
+        let new_files = match walk_in_flight.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(files)) => {
+                // Walk finished — clear the in-flight slot so the next cycle
+                // starts a fresh walk with the updated known_paths.
+                let new_count = files.len();
+                walk_in_flight = None;
+                // Always notify the UI that the walk is done so it can clear
+                // the "scanning..." indicator even when no new files were found.
+                if tx
+                    .send(DirWatchProgress::WalkComplete { new_count })
+                    .is_err()
+                {
+                    return;
+                }
+                files
+            }
+            Some(Err(mpsc::TryRecvError::Empty)) => {
+                // Walk still running — nothing to process this cycle.
+                Vec::new()
+            }
+            Some(Err(mpsc::TryRecvError::Disconnected)) | None => {
+                // Thread exited without sending (shouldn't happen but handle
+                // gracefully: clear slot so a fresh walk starts next cycle).
+                walk_in_flight = None;
+                Vec::new()
+            }
+        };
 
         if !new_files.is_empty() {
             tracing::debug!(
