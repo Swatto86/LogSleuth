@@ -373,8 +373,10 @@ impl AppState {
     /// `None` if the window is disabled.  Re-evaluated on every call so the
     /// rolling window stays current as the clock advances.
     pub fn activity_cutoff(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.activity_window_secs
-            .map(|secs| chrono::Utc::now() - chrono::Duration::seconds(secs as i64))
+        self.activity_window_secs.map(|secs| {
+            let clamped = i64::try_from(secs).unwrap_or(i64::MAX);
+            chrono::Utc::now() - chrono::Duration::seconds(clamped)
+        })
     }
 
     /// Recompute filtered indices from current entries and filter state.
@@ -389,8 +391,9 @@ impl AppState {
         // Relative time filter: derive the absolute start bound each call so the
         // rolling window stays current as the clock advances.
         if let Some(secs) = self.filter_state.relative_time_secs {
+            let clamped = i64::try_from(secs).unwrap_or(i64::MAX);
             self.filter_state.time_start =
-                Some(chrono::Utc::now() - chrono::Duration::seconds(secs as i64));
+                Some(chrono::Utc::now() - chrono::Duration::seconds(clamped));
             self.filter_state.time_end = None;
         }
 
@@ -913,8 +916,13 @@ impl AppState {
             .map(|s| (s / 60).to_string())
             .unwrap_or_default();
         self.filter_state.bookmarks_only = f.bookmarks_only;
-        if !f.regex_pattern.is_empty() {
-            let _ = self.filter_state.set_regex(&f.regex_pattern);
+        if !f.regex_pattern.is_empty()
+            && self.filter_state.set_regex(&f.regex_pattern).is_err()
+        {
+            tracing::warn!(
+                pattern = %f.regex_pattern,
+                "Session restore: saved regex pattern is invalid, discarding"
+            );
         }
         // Queue extra files for a secondary append scan after the initial
         // scan_path scan completes (handled in gui.rs::ParsingCompleted).

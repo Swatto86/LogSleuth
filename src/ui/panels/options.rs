@@ -398,13 +398,33 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 {
                     if let Some(ref dir) = state.user_profiles_dir {
                         // Ensure the directory exists before opening it.
-                        let _ = std::fs::create_dir_all(dir);
-                        #[cfg(target_os = "windows")]
-                        let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
-                        #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open").arg(dir).spawn();
-                        #[cfg(target_os = "linux")]
-                        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+                        if let Err(e) = std::fs::create_dir_all(dir) {
+                            tracing::warn!(
+                                dir = %dir.display(),
+                                error = %e,
+                                "Failed to create profiles directory"
+                            );
+                            state.status_message =
+                                format!("Cannot create profiles folder: {e}");
+                        } else {
+                            // Open the directory itself (not /select), so the
+                            // user lands inside the folder ready to drop .toml files.
+                            #[cfg(target_os = "windows")]
+                            if let Err(e) = std::process::Command::new("explorer.exe").arg(dir).spawn() {
+                                tracing::warn!(dir = %dir.display(), error = %e, "Failed to open profiles folder");
+                                state.status_message = format!("Cannot open folder: {e}");
+                            }
+                            #[cfg(target_os = "macos")]
+                            if let Err(e) = std::process::Command::new("open").arg(dir).spawn() {
+                                tracing::warn!(dir = %dir.display(), error = %e, "Failed to open profiles folder");
+                                state.status_message = format!("Cannot open folder: {e}");
+                            }
+                            #[cfg(target_os = "linux")]
+                            if let Err(e) = std::process::Command::new("xdg-open").arg(dir).spawn() {
+                                tracing::warn!(dir = %dir.display(), error = %e, "Failed to open profiles folder");
+                                state.status_message = format!("Cannot open folder: {e}");
+                            }
+                        }
                     }
                 }
                 ui.add_space(4.0);

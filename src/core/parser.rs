@@ -160,12 +160,19 @@ pub fn parse_content(
             // Line does not match the pattern
             match profile.multiline_mode {
                 crate::core::model::MultilineMode::Continuation => {
-                    // Append to previous entry if one exists
+                    // Append to previous entry if one exists.
+                    // Skip the append when the entry has already been truncated
+                    // to avoid repeated grow-then-truncate cycles that waste CPU
+                    // and temporarily spike memory for pathological files.
                     if let Some(last) = entries.last_mut() {
-                        last.message.push('\n');
-                        last.message.push_str(line);
-                        last.raw_text.push('\n');
-                        last.raw_text.push_str(line);
+                        if last.message.len() <= config.max_entry_size {
+                            last.message.push('\n');
+                            last.message.push_str(line);
+                        }
+                        if last.raw_text.len() <= config.max_entry_size {
+                            last.raw_text.push('\n');
+                            last.raw_text.push_str(line);
+                        }
                     }
                 }
                 crate::core::model::MultilineMode::Skip => {
@@ -213,11 +220,18 @@ pub fn parse_content(
             }
         }
 
-        // Enforce max entry size on the last entry
+        // Enforce max entry size on the last entry.
+        // Both `message` and `raw_text` are capped so that a pathological
+        // file with millions of continuation lines cannot grow an entry
+        // without bound (memory safety — Rule 11 resource bounds).
         if let Some(last) = entries.last_mut() {
             if last.message.len() > config.max_entry_size {
                 last.message.truncate(config.max_entry_size);
                 last.message.push_str("... [truncated]");
+            }
+            if last.raw_text.len() > config.max_entry_size {
+                last.raw_text.truncate(config.max_entry_size);
+                last.raw_text.push_str("... [truncated]");
             }
         }
     }

@@ -36,8 +36,8 @@ const ENTRY_BATCH_SIZE: usize = 500;
 const SAMPLE_LINES: usize = 20;
 
 /// Retry limits for transient I/O errors.
-const MAX_RETRIES: u32 = 3;
-const RETRY_DELAYS_MS: [u64; 3] = [50, 100, 200];
+const MAX_RETRIES: usize = 3;
+const RETRY_DELAYS_MS: [u64; MAX_RETRIES] = [50, 100, 200];
 
 /// Maximum seconds to wait for sample-line reads (phase 2 auto-detection).
 /// UNC/SMB shares can stall indefinitely on a dropped connection; this cap
@@ -940,7 +940,7 @@ fn read_large_file(path: &Path) -> io::Result<String> {
 fn read_small_file_with_retry(path: &Path) -> io::Result<String> {
     let mut last_err: Option<io::Error> = None;
 
-    for attempt in 0..MAX_RETRIES {
+    for (attempt, &delay_ms) in RETRY_DELAYS_MS.iter().enumerate() {
         match std::fs::read_to_string(path) {
             Ok(content) => return Ok(content),
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -955,7 +955,7 @@ fn read_small_file_with_retry(path: &Path) -> io::Result<String> {
                     error = %e,
                     "Transient I/O error, retrying"
                 );
-                std::thread::sleep(Duration::from_millis(RETRY_DELAYS_MS[attempt as usize]));
+                std::thread::sleep(Duration::from_millis(delay_ms));
                 last_err = Some(e);
             }
             Err(e) => return Err(e), // Permanent error; do not retry.

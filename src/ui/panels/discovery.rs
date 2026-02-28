@@ -455,7 +455,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 /// Render the collapsible scan-controls body: date filter, Open buttons, Clear.
 fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
     // Current scan path (small, weak — for reference when the header is collapsed).
-    if let Some(ref path) = state.scan_path.clone() {
+    if let Some(ref path) = state.scan_path {
         ui.label(
             egui::RichText::new(path.display().to_string())
                 .small()
@@ -518,9 +518,7 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             state.discovery_date_input.clear();
             // Clear means "scan all files": trigger a rescan immediately when a
             // path is already configured so the user doesn't have to press Open.
-            if let Some(path) = state.scan_path.clone() {
-                state.pending_scan = Some(path);
-            }
+            state.pending_scan = state.scan_path.clone();
         }
     });
 
@@ -574,9 +572,7 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
         }
     });
     if did_update_date {
-        if let Some(path) = state.scan_path.clone() {
-            state.pending_scan = Some(path);
-        }
+        state.pending_scan = state.scan_path.clone();
     }
 
     if !state.discovery_date_input.trim().is_empty() && state.discovery_modified_since().is_some() {
@@ -783,43 +779,55 @@ fn matches_file_search(query: &str, name: &str) -> bool {
     false
 }
 
-/// Recursive glob matcher (case-insensitive inputs expected).
+/// Iterative glob matcher (case-insensitive inputs expected).
 ///
-/// `*` greedily skips 0..=N characters; `?` consumes exactly one.
-/// The recursion depth is bounded by the length of `pat` (at most a few dozen
-/// characters for typical user input), so stack overflow is not a concern.
+/// `*` matches 0..N characters; `?` matches exactly one.
+/// Uses a two-pointer approach that runs in O(n*m) worst case without
+/// exponential backtracking, making it safe for any user-typed pattern.
 fn glob_match(pat: &str, txt: &str) -> bool {
     glob_match_bytes(pat.as_bytes(), txt.as_bytes())
 }
 
 fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
-    match (pat.first(), txt.first()) {
-        // Both exhausted — successful match.
-        (None, None) => true,
-        // Pattern exhausted but text remains — no match.
-        (None, _) => false,
-        // `*` — try consuming 0 through N characters from txt.
-        (Some(b'*'), _) => {
-            // Trim consecutive stars so e.g. "**" behaves like "*".
-            let rest_pat = &pat[1..];
-            if rest_pat.first() == Some(&b'*') {
-                return glob_match_bytes(rest_pat, txt);
+    let (mut pi, mut ti) = (0usize, 0usize);
+    // Saved positions for the last `*` we encountered.
+    let mut star_pi: Option<usize> = None;
+    let mut star_ti: usize = 0;
+
+    while ti < txt.len() || pi < pat.len() {
+        if pi < pat.len() && pat[pi] == b'*' {
+            // Skip consecutive stars.
+            while pi < pat.len() && pat[pi] == b'*' {
+                pi += 1;
             }
-            // Attempt to match with the star consuming 0, 1, 2, … characters.
-            for skip in 0..=txt.len() {
-                if glob_match_bytes(rest_pat, &txt[skip..]) {
-                    return true;
-                }
+            // If `*` is at the end of the pattern, it matches everything remaining.
+            if pi == pat.len() {
+                return true;
             }
-            false
+            star_pi = Some(pi);
+            star_ti = ti;
+            continue;
         }
-        // `?` — matches any single char; fail if text is empty.
-        (Some(b'?'), Some(_)) => glob_match_bytes(&pat[1..], &txt[1..]),
-        (Some(b'?'), None) => false,
-        // Literal — must match exactly.
-        (Some(p), Some(t)) if p == t => glob_match_bytes(&pat[1..], &txt[1..]),
-        _ => false,
+
+        if pi < pat.len() && ti < txt.len() && (pat[pi] == b'?' || pat[pi] == txt[ti]) {
+            pi += 1;
+            ti += 1;
+            continue;
+        }
+
+        // Mismatch: backtrack to last `*` if available and consume one more
+        // character of txt.
+        if let Some(sp) = star_pi {
+            star_ti += 1;
+            ti = star_ti;
+            pi = sp;
+            continue;
+        }
+
+        return false;
     }
+
+    true
 }
 
 // =============================================================================

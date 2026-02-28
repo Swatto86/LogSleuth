@@ -303,7 +303,8 @@ fn run_tail_watcher(
             // -----------------------------------------------------------------
             // 4. Read new bytes (capped per tick).
             // -----------------------------------------------------------------
-            let bytes_available = (current_size - state.offset) as usize;
+            let bytes_available =
+                usize::try_from(current_size - state.offset).unwrap_or(usize::MAX);
             let read_limit = bytes_available.min(MAX_TAIL_READ_BYTES_PER_TICK);
 
             let new_bytes = match read_bytes_at(&state.path, state.offset, read_limit) {

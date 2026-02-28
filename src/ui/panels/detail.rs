@@ -81,29 +81,7 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
         }
         // Open the containing folder in Windows Explorer / macOS Finder / Linux file manager.
         if ui.small_button("Show in folder").clicked() {
-            let folder = entry.source_file.parent().unwrap_or(&entry.source_file);
-            #[cfg(target_os = "windows")]
-            {
-                // `explorer /select,<path>` must be ONE argument — no space between
-                // the comma and the path.  Two separate .arg() calls would be parsed
-                // as distinct argv entries, causing Explorer to ignore the path and
-                // open the default folder without selecting the file.
-                let _ = std::process::Command::new("explorer")
-                    .arg(format!("/select,{}", entry.source_file.display()))
-                    .spawn();
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let _ = std::process::Command::new("open")
-                    .arg("-R")
-                    .arg(&entry.source_file)
-                    .spawn();
-            }
-            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-            {
-                let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
-            }
-            let _ = folder; // suppress unused-variable warning on all paths
+            crate::platform::fs::reveal_in_file_manager(&entry.source_file);
         }
     });
     // Use most of the available panel height so multi-line messages are readable.
