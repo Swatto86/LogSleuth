@@ -138,6 +138,9 @@ impl eframe::App for LogSleuthApp {
                     let current = self.state.entries.len();
                     let remaining = cap.saturating_sub(current);
                     if remaining > 0 {
+                        // Track max entry ID incrementally (Bug fix: O(1) instead
+                        // of O(n) full scan in next_entry_id).
+                        self.state.track_max_entry_id(&entries);
                         if entries.len() <= remaining {
                             self.state.entries.extend(entries);
                         } else {
@@ -284,6 +287,11 @@ impl eframe::App for LogSleuthApp {
         }
 
         // Poll live tail progress (capped at MAX_TAIL_MESSAGES_PER_FRAME — Rule 11).
+        // `entries_changed` tracks whether new entries were added this frame so
+        // we can consolidate the sort + apply_filters call once instead of
+        // calling it redundantly from both the tail handler and the
+        // relative-time auto-advance block (Bug fix: double apply_filters).
+        let mut entries_changed = false;
         let tail_messages = self.tail_manager.poll_progress(MAX_TAIL_MESSAGES_PER_FRAME);
         let had_tail = !tail_messages.is_empty();
         for msg in tail_messages {
@@ -302,17 +310,21 @@ impl eframe::App for LogSleuthApp {
                             count = entries.len(),
                             "Tail entry cap reached; new entries discarded"
                         );
-                    } else if entries.len() <= remaining {
-                        self.state.entries.extend(entries);
                     } else {
-                        self.state
-                            .entries
-                            .extend(entries.into_iter().take(remaining));
-                        tracing::warn!(
-                            "Tail entry cap reached; batch truncated to fit remaining capacity"
-                        );
+                        // Track max entry ID incrementally.
+                        self.state.track_max_entry_id(&entries);
+                        if entries.len() <= remaining {
+                            self.state.entries.extend(entries);
+                        } else {
+                            self.state
+                                .entries
+                                .extend(entries.into_iter().take(remaining));
+                            tracing::warn!(
+                                "Tail entry cap reached; batch truncated to fit remaining capacity"
+                            );
+                        }
+                        entries_changed = true;
                     }
-                    self.state.apply_filters();
                     // In descending (newest-first) sort mode, new entries appear at
                     // display_idx 0 (the top of the viewport).  Request a scroll-to-top
                     // so the user sees them without needing to scroll up manually.
@@ -334,6 +346,19 @@ impl eframe::App for LogSleuthApp {
                 }
             }
         }
+        // If tail entries were added this frame, sort them into chronological
+        // order before applying filters.  Without this, entries from multiple
+        // tailed files interleave in arrival order rather than time order,
+        // breaking the timeline's ascending/descending display logic.
+        // (Bug fix: tail entries not sorted chronologically.)
+        //
+        // Timsort handles mostly-sorted data in nearly O(n) so the cost is
+        // low for the common case of a few appended entries.
+        if entries_changed {
+            self.state.sort_entries_chronologically();
+            // sort_entries_chronologically calls apply_filters internally.
+        }
+
         // Keep repainting while tail is active so new entries appear promptly.
         if had_tail || self.state.tail_active {
             ctx.request_repaint_after(std::time::Duration::from_millis(
@@ -398,19 +423,27 @@ impl eframe::App for LogSleuthApp {
                     // file_modified for plain-text / no-timestamp profiles; without
                     // this update those entries age out of "Last 1m" even though
                     // the file is still actively written to.
-                    for (path, mtime) in updates {
+                    //
+                    // Bug fix: batch all path->mtime updates into a HashMap and
+                    // iterate entries once, reducing O(files * entries) to
+                    // O(files + entries).
+                    let mtime_map: std::collections::HashMap<
+                        &std::path::PathBuf,
+                        chrono::DateTime<chrono::Utc>,
+                    > = updates.iter().map(|(p, t)| (p, *t)).collect();
+                    for (path, mtime) in &updates {
                         if let Some(f) = self
                             .state
                             .discovered_files
                             .iter_mut()
-                            .find(|f| f.path == path)
+                            .find(|f| &f.path == path)
                         {
-                            f.modified = Some(mtime);
+                            f.modified = Some(*mtime);
                         }
-                        for entry in self.state.entries.iter_mut() {
-                            if entry.source_file == path {
-                                entry.file_modified = Some(mtime);
-                            }
+                    }
+                    for entry in self.state.entries.iter_mut() {
+                        if let Some(&mtime) = mtime_map.get(&entry.source_file) {
+                            entry.file_modified = Some(mtime);
                         }
                     }
                 }
@@ -429,10 +462,16 @@ impl eframe::App for LogSleuthApp {
         // so the rolling boundary stays current as the clock advances.
         // Consolidated into a single check to avoid calling apply_filters() twice
         // per frame when both features are active simultaneously.
+        //
+        // Skip the call when `entries_changed` already triggered
+        // sort_entries_chronologically (which calls apply_filters internally)
+        // earlier in this frame — avoids redundant O(n) work (Bug fix).
         if self.state.filter_state.relative_time_secs.is_some()
             || self.state.activity_window_secs.is_some()
         {
-            self.state.apply_filters();
+            if !entries_changed {
+                self.state.apply_filters();
+            }
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 

@@ -173,10 +173,14 @@ struct FileState {
     /// Always advances by exactly the number of bytes read each tick,
     /// whether those bytes produced complete lines or not.
     offset: u64,
-    /// Bytes from the most recent read that followed the final newline —
+    /// Raw bytes from the most recent read that followed the final newline --
     /// they represent an in-progress (incomplete) log line. Prepended to the
-    /// next tick's decoded bytes before searching for newlines.
-    partial: String,
+    /// next tick's raw bytes before searching for newlines.
+    ///
+    /// Stored as raw bytes (not String) so that multi-byte UTF-8 sequences
+    /// split across two reads are decoded correctly at the line boundary
+    /// rather than being replaced with U+FFFD per fragment (Bug fix).
+    partial: Vec<u8>,
 }
 
 // =============================================================================
@@ -227,7 +231,7 @@ fn run_tail_watcher(
                 path: info.path,
                 profile: info.profile,
                 offset,
-                partial: String::new(),
+                partial: Vec::new(),
             }
         })
         .collect();
@@ -287,7 +291,7 @@ fn run_tail_watcher(
                     file = %state.path.display(),
                     old_offset = state.offset,
                     new_size = current_size,
-                    "Tail: file truncated or rotated — resetting offset to 0"
+                    "Tail: file truncated or rotated -- resetting offset to 0"
                 );
                 state.offset = 0;
                 state.partial.clear();
@@ -325,20 +329,23 @@ fn run_tail_watcher(
                 continue;
             }
 
-            // Advance offset unconditionally — we have consumed these bytes
+            // Advance offset unconditionally -- we have consumed these bytes
             // whether they produce complete lines or not.
             state.offset += n as u64;
 
             // -----------------------------------------------------------------
-            // 5. Decode (lossy UTF-8) and append to the partial-line buffer.
+            // 5. Append raw bytes to the partial-line buffer.
+            //    Kept as raw bytes so multi-byte UTF-8 sequences split across
+            //    two reads are decoded correctly at the line boundary (Bug fix:
+            //    previously decoded each fragment independently with lossy
+            //    UTF-8, replacing split code points with U+FFFD).
             // -----------------------------------------------------------------
-            let decoded = String::from_utf8_lossy(&new_bytes);
-            state.partial.push_str(&decoded);
+            state.partial.extend_from_slice(&new_bytes);
 
-            // Bound the partial buffer (Rule 11 — resource bounds on growing
-            // collections).  A file that never emits newlines — binary content,
+            // Bound the partial buffer (Rule 11 -- resource bounds on growing
+            // collections).  A file that never emits newlines -- binary content,
             // an extremely long structured-log line, or a non-text file opened
-            // by mistake — would otherwise cause the buffer to grow at
+            // by mistake -- would otherwise cause the buffer to grow at
             // MAX_TAIL_READ_BYTES_PER_TICK per tick without any upper limit,
             // eventually exhausting heap.  When the bound is hit we discard the
             // stale fragment, emit a warning, and skip to the next file; the
@@ -348,7 +355,7 @@ fn run_tail_watcher(
                     file = %state.path.display(),
                     partial_bytes = state.partial.len(),
                     limit = MAX_TAIL_PARTIAL_BYTES,
-                    "Tail: partial buffer exceeded limit — discarding fragment \
+                    "Tail: partial buffer exceeded limit -- discarding fragment \
                      (binary content or extremely long line?)"
                 );
                 send!(TailProgress::FileError {
@@ -363,19 +370,23 @@ fn run_tail_watcher(
             }
 
             // -----------------------------------------------------------------
-            // 6. Split at the last newline.
+            // 6. Split at the last newline byte.
             //    Everything up to and including the final '\n' can be parsed.
-            //    Bytes after the final '\n' are an in-progress line — carry forward.
+            //    Bytes after the final '\n' are an in-progress line -- carry forward.
+            //    Decode to UTF-8 only *after* splitting so that multi-byte
+            //    sequences that straddle a read boundary are kept intact.
             // -----------------------------------------------------------------
-            let complete_text = match state.partial.rfind('\n') {
+            let complete_text = match state.partial.iter().rposition(|&b| b == b'\n') {
                 Some(nl_pos) => {
-                    let complete = state.partial[..=nl_pos].to_string();
+                    let complete_bytes = state.partial[..=nl_pos].to_vec();
                     // Keep the tail after the last newline for the next tick.
-                    state.partial = state.partial[nl_pos + 1..].to_string();
-                    complete
+                    state.partial = state.partial[nl_pos + 1..].to_vec();
+                    // Decode the complete portion as lossy UTF-8 now that byte
+                    // boundaries are guaranteed to land on line boundaries.
+                    String::from_utf8_lossy(&complete_bytes).into_owned()
                 }
                 None => {
-                    // No newline yet — the entire buffer is an in-progress line.
+                    // No newline yet -- the entire buffer is an in-progress line.
                     continue;
                 }
             };

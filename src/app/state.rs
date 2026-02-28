@@ -333,6 +333,14 @@ pub struct AppState {
     /// When `true`, `gui.rs` will call `load_all_profiles` on the next frame,
     /// update `self.profiles`, and reset this flag.
     pub request_reload_profiles: bool,
+
+    /// Highest entry ID currently assigned.  Maintained incrementally as
+    /// entries arrive from scans, tail, and append operations so that
+    /// `next_entry_id()` is O(1) instead of scanning all entries.
+    ///
+    /// Reset to 0 by `clear()`.  Updated by `track_max_entry_id()` which
+    /// must be called every time entries are added to `self.entries`.
+    max_entry_id: u64,
 }
 
 impl AppState {
@@ -399,6 +407,7 @@ impl AppState {
             pending_unc_connect: false,
             user_profiles_dir: None,
             request_reload_profiles: false,
+            max_entry_id: 0,
         }
     }
 
@@ -537,17 +546,31 @@ impl AppState {
     /// Used when starting the live tail watcher so tail entry IDs continue
     /// from where the scan left off and do not collide with existing IDs.
     ///
-    /// Note: entries are sorted chronologically after a scan, so
-    /// `entries.last()` is the most recent by *timestamp*, not the
-    /// highest by *ID*. We must iterate all entries to find the true
-    /// maximum ID, otherwise tail entries can collide with scan entries.
+    /// Uses the higher of the incrementally tracked `max_entry_id` counter
+    /// and the actual maximum ID present in `entries`.  The tracked counter
+    /// is maintained by [`track_max_entry_id`] in the normal GUI pipeline;
+    /// the full scan provides a safety net when entries are added directly
+    /// (e.g. in tests or session restore).  This method is called only at
+    /// lifecycle transitions (not per-entry), so the O(n) fallback is
+    /// negligible.
     pub fn next_entry_id(&self) -> u64 {
-        self.entries
-            .iter()
-            .map(|e| e.id)
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0)
+        if self.entries.is_empty() {
+            0
+        } else {
+            let from_entries = self.entries.iter().map(|e| e.id).max().unwrap_or(0);
+            self.max_entry_id.max(from_entries) + 1
+        }
+    }
+
+    /// Update `max_entry_id` from a slice of newly added entries.
+    ///
+    /// Must be called every time entries are appended to `self.entries`
+    /// (scan batches, tail entries, etc.) so that `next_entry_id()` stays
+    /// accurate without requiring an O(n) full scan.
+    pub fn track_max_entry_id(&mut self, new_entries: &[LogEntry]) {
+        if let Some(max) = new_entries.iter().map(|e| e.id).max() {
+            self.max_entry_id = self.max_entry_id.max(max);
+        }
     }
 
     /// Assign a palette colour to `path` if it does not already have one.
@@ -815,6 +838,8 @@ impl AppState {
         self.unc_password.clear();
         self.unc_connect_error = None;
         self.pending_unc_connect = false;
+        // Reset tracked entry ID counter.
+        self.max_entry_id = 0;
     }
 
     /// Reset to the initial blank state: clears everything `clear()` clears
