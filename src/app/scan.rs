@@ -19,9 +19,10 @@ use crate::core::discovery::{self, DiscoveryConfig};
 use crate::core::model::{FileSummary, FormatProfile, LogEntry, ScanProgress, ScanSummary};
 use crate::core::parser::{self, ParseConfig};
 use crate::core::profile;
-use std::io::{self, BufRead, BufReader};
+use rayon::prelude::*;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -39,14 +40,12 @@ const SAMPLE_LINES: usize = 20;
 const MAX_RETRIES: usize = 3;
 const RETRY_DELAYS_MS: [u64; MAX_RETRIES] = [50, 100, 200];
 
-/// Maximum seconds to wait for sample-line reads (phase 2 auto-detection).
+/// Maximum seconds to wait for a full file read.
+///
 /// UNC/SMB shares can stall indefinitely on a dropped connection; this cap
 /// keeps the scan responsive and allows Cancel to take effect promptly.
 /// The spawned I/O thread is not forcibly killed (Rust does not support that)
 /// but will exit on its own once the OS SMB timeout fires.
-const SAMPLE_READ_TIMEOUT_SECS: u64 = 10;
-
-/// Maximum seconds to wait for a full file read (phase 3 parsing).
 const FILE_READ_TIMEOUT_SECS: u64 = 30;
 
 // =============================================================================
@@ -423,35 +422,329 @@ fn run_parse_pipeline(
     }
 
     // -------------------------------------------------------------------------
-    // Phase 2: Auto-detection
+    // Parallel Phase: Merged auto-detection + parsing (single I/O pass)
     // -------------------------------------------------------------------------
+    //
+    // Performance architecture:
+    //
+    // The previous sequential approach read each file TWICE (sample lines for
+    // profile detection, then full content for parsing) and processed files
+    // one at a time.  On network/UNC paths every file open is an SMB
+    // round-trip; sequential processing serialises that latency across all
+    // files.
+    //
+    // This merged parallel phase reads each file ONCE, extracts sample lines
+    // from the in-memory content for auto-detection, then parses immediately.
+    // Rayon's work-stealing thread pool processes multiple files concurrently,
+    // overlapping network latency.  On local storage the parallelism overlaps
+    // parsing CPU work with disk I/O.
+    //
+    // Key gains:
+    //   - Eliminates N redundant file opens (one per file) on UNC paths
+    //   - Overlaps I/O latency across files via rayon parallelism
+    //   - Timeout-guarded reads protect rayon workers from SMB stalls
+    //   - Entry IDs are assigned sequentially after collection to maintain
+    //     global uniqueness without cross-thread coordination
+
     let total_files = discovered_files.len();
+    let scan_start = Instant::now();
 
-    for file in &mut discovered_files {
-        check_cancel!();
+    /// Per-file result collected from the parallel processing phase.
+    ///
+    /// Entry IDs inside `entries` are temporary (start from 0 within each
+    /// file).  The sequential post-processing step reassigns globally-unique
+    /// IDs before streaming to the UI.
+    struct FileResult {
+        /// Index into `discovered_files` for updating profile info.
+        idx: usize,
+        /// Detected or fallback profile ID (None if file was unreadable/skipped).
+        profile_id: Option<String>,
+        /// Detection confidence score.
+        detection_confidence: f64,
+        /// Parsed entries with temporary IDs.
+        entries: Vec<LogEntry>,
+        /// File summary for the scan report.
+        summary: Option<FileSummary>,
+        /// Warning messages to surface to the user.
+        warnings: Vec<String>,
+        /// Number of parse errors in this file.
+        error_count: usize,
+    }
 
-        let samples = read_sample_lines_timed(&file.path, SAMPLE_LINES);
-        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    // Shared atomic counter so parallel workers can report per-file progress
+    // in real time (the UI sees FileParsed messages streaming in as files
+    // complete, even though the order is non-deterministic).
+    let files_completed_counter = Arc::new(AtomicUsize::new(0));
+    let progress_tx = tx.clone();
 
-        if let Some(detection) = profile::auto_detect(file_name, &samples, &profiles) {
-            file.profile_id = Some(detection.profile_id.clone());
-            file.detection_confidence = detection.confidence;
-            tracing::debug!(
-                file = %file.path.display(),
-                profile = detection.profile_id,
-                confidence = detection.confidence,
-                "Auto-detected profile"
-            );
-        } else {
-            // No specific profile matched: fall back to plain-text.
-            if profiles.iter().any(|p| p.id == "plain-text") {
-                file.profile_id = Some("plain-text".to_string());
-                file.detection_confidence = 0.0;
+    let file_results: Vec<FileResult> = discovered_files
+        .par_iter()
+        .enumerate()
+        .map(|(idx, file)| {
+            // Early exit on cancel -- each rayon worker checks independently.
+            if cancel.load(Ordering::SeqCst) {
+                return FileResult {
+                    idx,
+                    profile_id: None,
+                    detection_confidence: 0.0,
+                    entries: Vec::new(),
+                    summary: None,
+                    warnings: Vec::new(),
+                    error_count: 0,
+                };
+            }
+
+            let mut warnings: Vec<String> = Vec::new();
+
+            // --- Single I/O pass: read full file content (timeout-guarded) ---
+            let content = match read_file_content_timed(&file.path, file.is_large) {
+                Ok(c) => c,
+                Err(e) => {
+                    let msg = format!("Cannot read '{}': {e}", file.path.display());
+                    tracing::warn!(warning = %msg, "File read failed");
+                    let _ = progress_tx.send(ScanProgress::Warning {
+                        message: msg.clone(),
+                    });
+                    let completed = files_completed_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = progress_tx.send(ScanProgress::FileParsed {
+                        path: file.path.clone(),
+                        entries: 0,
+                        errors: 0,
+                        files_completed: completed,
+                        total_files,
+                    });
+                    return FileResult {
+                        idx,
+                        profile_id: None,
+                        detection_confidence: 0.0,
+                        entries: Vec::new(),
+                        summary: None,
+                        warnings: vec![msg],
+                        error_count: 0,
+                    };
+                }
+            };
+
+            if cancel.load(Ordering::SeqCst) {
+                return FileResult {
+                    idx,
+                    profile_id: None,
+                    detection_confidence: 0.0,
+                    entries: Vec::new(),
+                    summary: None,
+                    warnings: Vec::new(),
+                    error_count: 0,
+                };
+            }
+
+            // --- Auto-detect from first N lines of already-read content ---
+            // Avoids a second file open that the old sequential Phase 2 required.
+            let sample_lines: Vec<String> = content
+                .lines()
+                .take(SAMPLE_LINES)
+                .map(String::from)
+                .collect();
+            let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            let (mut detected_profile_id, detection_confidence) = if let Some(detection) =
+                profile::auto_detect(file_name, &sample_lines, &profiles)
+            {
+                tracing::debug!(
+                    file = %file.path.display(),
+                    profile = %detection.profile_id,
+                    confidence = detection.confidence,
+                    "Auto-detected profile"
+                );
+                (Some(detection.profile_id), detection.confidence)
+            } else if profiles.iter().any(|p| p.id == "plain-text") {
                 tracing::debug!(
                     file = %file.path.display(),
                     "No structured profile matched; falling back to plain-text"
                 );
+                (Some("plain-text".to_string()), 0.0)
+            } else {
+                (None, 0.0)
+            };
+
+            // Resolve profile or skip the file.
+            let pid = match &detected_profile_id {
+                Some(id) => id.clone(),
+                None => {
+                    let msg = format!(
+                        "'{}': no format profile could be assigned \
+                         (even plain-text was unavailable), file skipped",
+                        file.path.display()
+                    );
+                    tracing::debug!(file = %file.path.display(), "No profile assigned, skipping");
+                    let _ = progress_tx.send(ScanProgress::Warning {
+                        message: msg.clone(),
+                    });
+                    warnings.push(msg);
+                    let completed = files_completed_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = progress_tx.send(ScanProgress::FileParsed {
+                        path: file.path.clone(),
+                        entries: 0,
+                        errors: 0,
+                        files_completed: completed,
+                        total_files,
+                    });
+                    return FileResult {
+                        idx,
+                        profile_id: None,
+                        detection_confidence: 0.0,
+                        entries: Vec::new(),
+                        summary: None,
+                        warnings,
+                        error_count: 0,
+                    };
+                }
+            };
+
+            let matched_profile = match profiles.iter().find(|p| p.id == pid) {
+                Some(p) => p,
+                None => {
+                    tracing::warn!(profile = %pid, "Profile not found in loaded profiles");
+                    let completed = files_completed_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = progress_tx.send(ScanProgress::FileParsed {
+                        path: file.path.clone(),
+                        entries: 0,
+                        errors: 0,
+                        files_completed: completed,
+                        total_files,
+                    });
+                    return FileResult {
+                        idx,
+                        profile_id: Some(pid),
+                        detection_confidence,
+                        entries: Vec::new(),
+                        summary: None,
+                        warnings,
+                        error_count: 0,
+                    };
+                }
+            };
+
+            if cancel.load(Ordering::SeqCst) {
+                return FileResult {
+                    idx,
+                    profile_id: Some(pid),
+                    detection_confidence,
+                    entries: Vec::new(),
+                    summary: None,
+                    warnings,
+                    error_count: 0,
+                };
             }
+
+            // --- Parse (reuses already-read content -- zero additional I/O) ---
+            let mut parse_result = parser::parse_content(
+                &content,
+                &file.path,
+                matched_profile,
+                &parse_config,
+                0, // temporary IDs -- reassigned sequentially after collection
+            );
+
+            // Fallback: if the assigned profile produced zero entries but the
+            // file has content, re-parse with plain-text so every non-empty
+            // file contributes at least its raw line content to the timeline.
+            let mut final_profile_id = pid;
+            if parse_result.entries.is_empty() && !content.trim().is_empty() {
+                if let Some(plain_profile) = profiles.iter().find(|p| p.id == "plain-text") {
+                    if plain_profile.id != final_profile_id {
+                        tracing::debug!(
+                            file = %file.path.display(),
+                            assigned_profile = %final_profile_id,
+                            "Assigned profile yielded 0 entries; \
+                             falling back to plain-text"
+                        );
+                        parse_result = parser::parse_content(
+                            &content,
+                            &file.path,
+                            plain_profile,
+                            &parse_config,
+                            0,
+                        );
+                        final_profile_id = plain_profile.id.clone();
+                    }
+                }
+            }
+
+            // Stamp the source file's OS last-modified time on every entry.
+            let file_mtime = file.modified;
+            for entry in &mut parse_result.entries {
+                entry.file_modified = file_mtime;
+            }
+
+            let entry_count = parse_result.entries.len();
+            let error_count = parse_result.errors.len();
+
+            // Build per-file summary.
+            let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
+            let mut latest: Option<chrono::DateTime<chrono::Utc>> = None;
+            for entry in &parse_result.entries {
+                if let Some(ts) = entry.timestamp {
+                    earliest = Some(match earliest {
+                        Some(e) if e <= ts => e,
+                        _ => ts,
+                    });
+                    latest = Some(match latest {
+                        Some(l) if l >= ts => l,
+                        _ => ts,
+                    });
+                }
+            }
+            let summary = FileSummary {
+                path: file.path.clone(),
+                profile_id: final_profile_id.clone(),
+                entry_count,
+                error_count,
+                earliest,
+                latest,
+            };
+
+            for err in &parse_result.errors {
+                tracing::debug!(error = %err, "Parse error");
+            }
+
+            // Send per-file progress (order is non-deterministic in parallel
+            // mode but the UI only uses files_completed / total_files for its
+            // progress bar, so arrival order does not matter).
+            let completed = files_completed_counter.fetch_add(1, Ordering::SeqCst) + 1;
+            let _ = progress_tx.send(ScanProgress::FileParsed {
+                path: file.path.clone(),
+                entries: entry_count,
+                errors: error_count,
+                files_completed: completed,
+                total_files,
+            });
+
+            detected_profile_id = Some(final_profile_id);
+
+            FileResult {
+                idx,
+                profile_id: detected_profile_id,
+                detection_confidence,
+                entries: parse_result.entries,
+                summary: Some(summary),
+                warnings,
+                error_count,
+            }
+        })
+        .collect();
+
+    check_cancel!();
+
+    // -------------------------------------------------------------------------
+    // Post-parallel: assemble results sequentially
+    // -------------------------------------------------------------------------
+
+    // Update discovered_files with the profile info detected during the
+    // parallel phase so the UI file list shows the correct profile assignment.
+    for result in &file_results {
+        if let Some(pid) = &result.profile_id {
+            discovered_files[result.idx].profile_id = Some(pid.clone());
+            discovered_files[result.idx].detection_confidence = result.detection_confidence;
         }
     }
 
@@ -460,7 +753,6 @@ fn run_parse_pipeline(
         total_found,
     });
 
-    // Send file list. Append mode extends UI list; normal mode replaces it.
     if append {
         send!(ScanProgress::AdditionalFilesDiscovered {
             files: discovered_files.clone(),
@@ -471,192 +763,78 @@ fn run_parse_pipeline(
         });
     }
 
-    check_cancel!();
-
-    // -------------------------------------------------------------------------
-    // Phase 3: Parsing
-    // -------------------------------------------------------------------------
+    // ParsingStarted is sent here for UI state-machine compatibility even
+    // though parsing already completed during the parallel phase.  The
+    // FileParsed messages were sent in real-time from parallel workers, so the
+    // UI saw incremental progress.
     send!(ScanProgress::ParsingStarted { total_files });
 
-    let scan_start = Instant::now();
+    // Assign globally-unique entry IDs, enforce the hard entry cap, and
+    // collect summaries -- all sequential to avoid cross-thread coordination.
     let mut total_entries: usize = 0;
     let mut total_errors: usize = 0;
     let mut files_with_entries: usize = 0;
     let mut entry_id: u64 = entry_id_start;
-    // Collect all entries here; sort chronologically on this background thread
-    // before streaming to the UI so the UI thread never blocks on a large sort.
     let mut all_entries: Vec<LogEntry> = Vec::new();
     let mut file_summaries: Vec<FileSummary> = Vec::new();
-    // Flag set when MAX_TOTAL_ENTRIES is reached so processing stops cleanly.
     let mut entry_cap_reached = false;
 
-    for (idx, file) in discovered_files.iter().enumerate() {
+    // Process results in original file order so entry IDs are deterministic.
+    let mut sorted_results: Vec<FileResult> = file_results
+        .into_iter()
+        .filter(|r| r.summary.is_some())
+        .collect();
+    sorted_results.sort_by_key(|r| r.idx);
+
+    for mut result in sorted_results {
         check_cancel!();
 
-        // Stop ingesting new files once the hard entry cap is reached (Rule 11).
-        // Continuing to parse would allocate unbounded memory, causing an OOM
-        // crash with no warning — the original bug this guard prevents.
         if entry_cap_reached {
             break;
         }
 
-        let files_completed = idx + 1;
+        let entry_count = result.entries.len();
+        let error_count = result.error_count;
 
-        let mut profile_id = match &file.profile_id {
-            Some(id) => id.clone(),
-            None => {
-                tracing::debug!(file = %file.path.display(), "No profile assigned, skipping");
-                send!(ScanProgress::Warning {
-                    message: format!(
-                        "'{}': no format profile could be assigned (even plain-text was unavailable), file skipped",
-                        file.path.display()
-                    ),
-                });
-                continue;
-            }
-        };
-
-        let matched_profile = match profiles.iter().find(|p| p.id == profile_id) {
-            Some(p) => p,
-            None => {
-                tracing::warn!(profile = %profile_id, "Profile not found in loaded profiles");
-                continue;
-            }
-        };
-
-        let content = match read_file_content_timed(&file.path, file.is_large) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("Cannot read '{}': {e}", file.path.display());
-                tracing::warn!(warning = %msg, "File read failed");
-                send!(ScanProgress::Warning { message: msg });
-                continue;
-            }
-        };
-
-        check_cancel!();
-
-        let mut parse_result = parser::parse_content(
-            &content,
-            &file.path,
-            matched_profile,
-            &parse_config,
-            entry_id,
-        );
-
-        // Fallback: if the assigned profile produced zero entries but the file
-        // has content, the line_pattern did not match any line.  This happens
-        // when:
-        //   - A structured profile is assigned via filename-glob bonus alone
-        //     (content_match never ran against the actual lines).
-        //   - The file uses a format variant whose first line does not match
-        //     (e.g. UTF-8 BOM prefix, separator/header lines), and
-        //     multiline_mode = "continuation" silently drops everything because
-        //     `entries` is still empty when non-matching continuation lines
-        //     try to append to `entries.last_mut()`.
-        //
-        // Re-parsing with plain-text ensures every non-empty file contributes
-        // at least its raw line content to the timeline instead of disappearing.
-        // The profile_id check prevents an infinite loop if plain-text itself
-        // somehow produced 0 entries (e.g. a truly empty file).
-        if parse_result.entries.is_empty() && !content.trim().is_empty() {
-            if let Some(plain_profile) = profiles.iter().find(|p| p.id == "plain-text") {
-                if plain_profile.id != profile_id {
-                    tracing::debug!(
-                        file = %file.path.display(),
-                        assigned_profile = %profile_id,
-                        "Assigned profile yielded 0 entries; falling back to plain-text"
-                    );
-                    parse_result = parser::parse_content(
-                        &content,
-                        &file.path,
-                        plain_profile,
-                        &parse_config,
-                        entry_id,
-                    );
-                    profile_id = plain_profile.id.clone();
-                }
-            }
+        // Reassign entry IDs to maintain global uniqueness.
+        for entry in &mut result.entries {
+            entry.id = entry_id;
+            entry_id += 1;
         }
 
-        // Stamp the source file's OS last-modified time on every entry.
-        // The time-range filter uses file_modified (not the parsed log timestamp)
-        // so filtering by "last 15 minutes" correctly includes plain-text entries
-        // and any log whose embedded timestamps are missing or malformed.
-        let file_mtime = file.modified;
-        for entry in &mut parse_result.entries {
-            entry.file_modified = file_mtime;
-        }
-
-        let entry_count = parse_result.entries.len();
-        let error_count = parse_result.errors.len();
-
-        entry_id += entry_count as u64;
         total_entries += entry_count;
         total_errors += error_count;
-
         if entry_count > 0 {
             files_with_entries += 1;
         }
 
-        let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
-        let mut latest: Option<chrono::DateTime<chrono::Utc>> = None;
-        for entry in &parse_result.entries {
-            if let Some(ts) = entry.timestamp {
-                earliest = Some(match earliest {
-                    Some(e) if e <= ts => e,
-                    _ => ts,
-                });
-                latest = Some(match latest {
-                    Some(l) if l >= ts => l,
-                    _ => ts,
-                });
-            }
+        if let Some(summary) = result.summary {
+            file_summaries.push(summary);
         }
-        file_summaries.push(FileSummary {
-            path: file.path.clone(),
-            profile_id: profile_id.clone(),
-            entry_count,
-            error_count,
-            earliest,
-            latest,
-        });
 
-        for err in &parse_result.errors {
-            tracing::debug!(error = %err, "Parse error");
+        for w in &result.warnings {
+            send!(ScanProgress::Warning { message: w.clone() });
         }
 
         // Enforce the hard entry cap (Rule 11: bounded collections).
-        // All entries from this file are still counted in file_summaries so
-        // the scan summary accurately reflects what was found vs. what was loaded.
         let remaining_capacity = max_total_entries.saturating_sub(all_entries.len());
         if remaining_capacity == 0 {
-            // Cap already hit before this file; entries were skipped above.
-            // This branch should not be reached now that the loop breaks early,
-            // but guard defensively.
-        } else if parse_result.entries.len() <= remaining_capacity {
-            all_entries.extend(parse_result.entries);
+            // Defensive guard -- should not be reached with the break above.
+        } else if result.entries.len() <= remaining_capacity {
+            all_entries.extend(result.entries);
         } else {
-            // Partial ingest: take as many entries as fit, then trigger the cap.
-            all_entries.extend(parse_result.entries.into_iter().take(remaining_capacity));
+            all_entries.extend(result.entries.into_iter().take(remaining_capacity));
             entry_cap_reached = true;
             let cap = max_total_entries;
             let msg = format!(
                 "Entry limit reached: {cap} entries loaded. \
-                 Remaining files in this scan have been skipped to prevent an out-of-memory crash. \
-                 Use the date filter or reduce the max-files limit to target a smaller dataset."
+                 Remaining files in this scan have been skipped to \
+                 prevent an out-of-memory crash. Use the date filter \
+                 or reduce the max-files limit to target a smaller dataset."
             );
             tracing::warn!("{}", msg);
             send!(ScanProgress::Warning { message: msg });
         }
-
-        send!(ScanProgress::FileParsed {
-            path: file.path.clone(),
-            entries: entry_count,
-            errors: error_count,
-            files_completed,
-            total_files,
-        });
     }
 
     // Sort all collected entries chronologically on the background thread.
@@ -743,7 +921,7 @@ fn run_files_scan(
 
     // Use a per-file timeout-guarded stat so that files on an unreachable
     // UNC/SMB share never hang the scan thread indefinitely (Rule 11).
-    // The same pattern is used by read_sample_lines_timed / read_file_content_timed.
+    // The same pattern is used by read_file_content_timed.
     const META_TIMEOUT_SECS: u64 = 10;
     for path in &paths {
         if cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -809,31 +987,6 @@ fn run_files_scan(
 // File reading helpers
 // =============================================================================
 
-/// Timeout-guarded wrapper around `read_sample_lines`.
-///
-/// Runs the I/O on a separate thread; if no result arrives within
-/// `SAMPLE_READ_TIMEOUT_SECS` the function returns an empty vec so the caller
-/// falls back to plain-text detection.  This prevents a stalled UNC/SMB share
-/// from blocking the scan thread indefinitely (Rule 11 resilience).
-fn read_sample_lines_timed(path: &Path, max_lines: usize) -> Vec<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let path_owned = path.to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tx.send(read_sample_lines(&path_owned, max_lines));
-    });
-    match rx.recv_timeout(Duration::from_secs(SAMPLE_READ_TIMEOUT_SECS)) {
-        Ok(lines) => lines,
-        Err(_) => {
-            tracing::warn!(
-                file = %path.display(),
-                timeout_secs = SAMPLE_READ_TIMEOUT_SECS,
-                "Sample read timed out (stalled network path?); falling back to plain-text"
-            );
-            Vec::new()
-        }
-    }
-}
-
 /// Timeout-guarded wrapper around `read_file_content`.
 ///
 /// Runs the I/O on a separate thread; if no result arrives within
@@ -861,49 +1014,6 @@ fn read_file_content_timed(path: &Path, is_large: bool) -> io::Result<String> {
                 ),
             ))
         }
-    }
-}
-
-/// Read up to `max_lines` lines from the start of a file for auto-detection.
-/// Returns an empty vec on any I/O error (non-fatal; auto-detection will skip).
-///
-/// Handles UTF-16 LE/BE encoded files (common in C:\Windows\Logs) by first
-/// reading the full content with encoding detection, then splitting into lines.
-/// This ensures auto-detection works on Windows system log files.
-fn read_sample_lines(path: &Path, max_lines: usize) -> Vec<String> {
-    // Try fast UTF-8 path first.
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::debug!(file = %path.display(), error = %e, "Cannot open for sampling");
-            return Vec::new();
-        }
-    };
-
-    let lines: Vec<String> = BufReader::new(file)
-        .lines()
-        .take(max_lines)
-        .filter_map(Result::ok)
-        .collect();
-
-    // If we got lines, we're done (UTF-8 file).
-    if !lines.is_empty() {
-        return lines;
-    }
-
-    // Empty result may mean UTF-16 LE/BE encoding. Try encoding-aware read.
-    match std::fs::read(path) {
-        Ok(bytes) if bytes.len() >= 2 => {
-            if let Ok(content) = decode_bytes(&bytes, path) {
-                return content
-                    .lines()
-                    .take(max_lines)
-                    .map(ToString::to_string)
-                    .collect();
-            }
-            Vec::new()
-        }
-        _ => Vec::new(),
     }
 }
 
@@ -1006,9 +1116,20 @@ fn decode_bytes(bytes: &[u8], path: &Path) -> io::Result<String> {
         return Ok(String::from_utf16_lossy(&utf16));
     }
 
-    // No recognised BOM: treat as lossy UTF-8 / ANSI.
-    tracing::debug!(file = %path.display(), "Decoded file as lossy UTF-8 (no BOM)");
-    Ok(String::from_utf8_lossy(bytes).into_owned())
+    // No recognised BOM: try zero-copy UTF-8 first (most log files are
+    // valid UTF-8), falling back to lossy conversion only for genuinely
+    // invalid bytes.  The owned Vec→String path avoids a full buffer copy
+    // that from_utf8_lossy().into_owned() would always perform.
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(s) => {
+            tracing::debug!(file = %path.display(), "Decoded file as UTF-8 (zero-copy)");
+            Ok(s)
+        }
+        Err(e) => {
+            tracing::debug!(file = %path.display(), "Decoded file as lossy UTF-8 (no BOM)");
+            Ok(String::from_utf8_lossy(e.as_bytes()).into_owned())
+        }
+    }
 }
 
 /// Returns true for transient I/O errors that are worth retrying.

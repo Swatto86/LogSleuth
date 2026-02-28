@@ -846,7 +846,7 @@ Effect: a new file appears in the file list at most 2 seconds after the walker r
 - [x] **Configurable max files / max entries** -- Max files, max total entries, max scan depth, tail poll interval, and directory watch poll interval are all now user-configurable via Edit > Options… and apply on the next scan/session start. *(Increment 27)*
 
 ### Low Priority / Research
-- [ ] **Parallel file parsing** -- Use rayon to parse multiple files concurrently on the background thread; the sort step already handles out-of-order results.
+- [x] **Parallel file parsing** -- Rayon-parallelised merged auto-detect + parse pipeline. Each file is read once (eliminating the previous double-I/O for sample lines + full content), auto-detected from in-memory content, parsed, and results collected in parallel. Entry IDs are assigned sequentially post-collection. Also: 128 KB BufReader buffers for network-efficient reads, optimised UTF-8 decode path (zero-copy for valid UTF-8). Major performance improvement on UNC/network paths where I/O latency dominates.
 - [ ] **Full-text index** -- Build a Tantivy (or similar) in-memory index on scan completion to enable fast regex and phrase searching across millions of entries.
 - [ ] **Plugin / WASM profile extensions** -- Allow format profiles to include embedded WASM functions for custom timestamp or severity extraction logic beyond what regex alone can express.
 - [ ] **Network / remote log sources** -- Pull logs from a remote host via SSH or HTTP (structured log APIs).

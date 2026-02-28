@@ -12,10 +12,14 @@ use std::path::Path;
 ///
 /// Returns up to `max_lines` lines from the start of the file.
 /// Handles encoding errors gracefully (replaces invalid UTF-8).
+/// I/O buffer size for network-efficient reads (128 KB reduces SMB round-trips
+/// by 16x compared to the default 8 KB BufReader buffer).
+const IO_BUFFER_SIZE: usize = 128 * 1024;
+
 pub fn read_first_lines(path: &Path, max_lines: usize) -> io::Result<Vec<String>> {
     use std::io::BufRead;
     let file = std::fs::File::open(path)?;
-    let reader = io::BufReader::new(file);
+    let reader = io::BufReader::with_capacity(IO_BUFFER_SIZE, file);
 
     let mut lines = Vec::with_capacity(max_lines);
     for line_result in reader.lines().take(max_lines) {
@@ -36,7 +40,14 @@ pub fn read_first_lines(path: &Path, max_lines: usize) -> io::Result<Vec<String>
 /// For files with invalid UTF-8, uses lossy conversion.
 pub fn read_file_lossy(path: &Path) -> io::Result<String> {
     let bytes = std::fs::read(path)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    // Try zero-copy UTF-8 first (most log files are valid UTF-8), falling
+    // back to lossy conversion only when genuinely invalid bytes are found.
+    // This avoids the unconditional buffer copy that from_utf8_lossy().into_owned()
+    // performs even when the input is already valid UTF-8.
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+    }
 }
 
 /// Open the system file manager and highlight `path` within it.
