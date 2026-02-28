@@ -220,6 +220,44 @@ impl eframe::App for LogSleuthApp {
                         self.tail_manager.stop_tail();
                         self.state.request_start_tail = true;
                     }
+
+                    // Session restore: re-add any "Add File(s)..." files that were
+                    // saved in the previous session but are not already in the
+                    // discovered set (the directory scan may have found them too).
+                    // Uses std::mem::take so extra_files_to_restore is cleared
+                    // immediately and a second ParsingCompleted (from the append
+                    // scan itself) does not re-trigger the same add.
+                    if !self.state.extra_files_to_restore.is_empty() {
+                        let known: std::collections::HashSet<std::path::PathBuf> = self
+                            .state
+                            .discovered_files
+                            .iter()
+                            .map(|f| f.path.clone())
+                            .collect();
+                        let extra: Vec<std::path::PathBuf> =
+                            std::mem::take(&mut self.state.extra_files_to_restore)
+                                .into_iter()
+                                .filter(|p| !known.contains(p))
+                                .collect();
+                        if !extra.is_empty() {
+                            tracing::info!(
+                                count = extra.len(),
+                                "Session restore: re-adding extra files from previous session"
+                            );
+                            let id_start = self.state.next_entry_id();
+                            self.state.scan_in_progress = true;
+                            self.state.status_message = format!(
+                                "Restoring {} extra file(s) from previous session...",
+                                extra.len()
+                            );
+                            self.scan_manager.start_scan_files(
+                                extra,
+                                self.state.profiles.clone(),
+                                self.state.max_total_entries,
+                                id_start,
+                            );
+                        }
+                    }
                 }
                 crate::core::model::ScanProgress::Warning { message } => {
                     // Bounded push: prevent the warnings Vec from growing beyond
@@ -458,6 +496,11 @@ impl eframe::App for LogSleuthApp {
         }
         // pending_single_files: user chose "Add File(s)" — append to session.
         if let Some(files) = self.state.pending_single_files.take() {
+            // Record the paths for session persistence so they survive a restart
+            // and are re-added after the initial scan_path scan on next launch.
+            self.state
+                .manually_added_files
+                .extend(files.iter().cloned());
             self.state.scan_in_progress = true;
             self.state.status_message = format!("Adding {} file(s)...", files.len());
             // Append scan: entry IDs must continue after the highest existing ID

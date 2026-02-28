@@ -137,6 +137,16 @@ pub const DIR_WALK_TIMEOUT_SECS: u64 = DIR_WATCH_WALK_TIMEOUT_SECS;
 /// Prevents a large burst of new content from stalling the entire poll loop.
 pub const MAX_TAIL_READ_BYTES_PER_TICK: usize = 512 * 1_024; // 512 KiB
 
+/// Maximum accumulated size of the partial (in-progress) log-line buffer for a
+/// single tailed file.
+///
+/// Guards against OOM when a tailed file produces no newlines — binary content,
+/// an extremely long single line, or a file opened by mistake.  Set to 4x
+/// `MAX_TAIL_READ_BYTES_PER_TICK` so legitimate lines up to ~2 MiB are
+/// tolerated before the safety mechanism discards the fragment and emits a
+/// warning (Rule 11 — resource bounds on growing collections).
+pub const MAX_TAIL_PARTIAL_BYTES: usize = MAX_TAIL_READ_BYTES_PER_TICK * 4; // 2 MiB
+
 /// Maximum number of log entries included in a single "Copy Filtered Results"
 /// clipboard export.  Prevents multi-second clipboard operations and excessive
 /// memory allocation when the filtered set is very large.

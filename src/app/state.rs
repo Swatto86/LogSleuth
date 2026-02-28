@@ -201,6 +201,26 @@ pub struct AppState {
     /// so the restored filter/colour/bookmark state is preserved during the re-scan.
     pub initial_scan: Option<PathBuf>,
 
+    /// Files added to the current session via "Add File(s)\u2026" that are persisted
+    /// so they can be re-added after the next session restore.
+    ///
+    /// When `save_session()` runs, the contents of this Vec are written to
+    /// `SessionData.extra_files`.  On the following launch, after the main
+    /// `scan_path` scan completes, `gui.rs` triggers an append scan for any of
+    /// these paths not already discovered by the directory scan.
+    ///
+    /// Cleared by `clear()` so it is scoped to the active scan-directory session.
+    pub manually_added_files: Vec<PathBuf>,
+
+    /// Extra files loaded from `SessionData.extra_files` on session restore.
+    ///
+    /// Populated by `restore_from_session()` and consumed exactly once by
+    /// `gui.rs` when the first `ParsingCompleted` arrives after startup — an
+    /// append scan is then triggered for any of these paths not already in
+    /// `discovered_files`.  Cleared by `clear()` so a mid-session new-directory
+    /// open does not accidentally re-add stale paths from the old session.
+    pub extra_files_to_restore: Vec<PathBuf>,
+
     // -------------------------------------------------------------------------
     // Options / ingest limits
     // -------------------------------------------------------------------------
@@ -329,6 +349,8 @@ impl AppState {
             correlated_ids: HashSet::new(),
             session_path: None,
             initial_scan: None,
+            manually_added_files: Vec::new(),
+            extra_files_to_restore: Vec::new(),
             max_files_limit: crate::util::constants::DEFAULT_MAX_FILES,
             max_total_entries: crate::util::constants::MAX_TOTAL_ENTRIES,
             max_scan_depth: crate::util::constants::DEFAULT_MAX_DEPTH,
@@ -742,6 +764,9 @@ impl AppState {
         // tail_auto_scroll preference is intentionally preserved across clears.
         // initial_scan is cleared on each new scan; session_path is never cleared.
         self.initial_scan = None;
+        // Extra-files tracking is scoped to the active session.
+        self.manually_added_files.clear();
+        self.extra_files_to_restore.clear();
         // Reset per-scan discovery counters.
         self.total_files_found = 0;
         self.pending_replace_files = None;
@@ -843,7 +868,7 @@ impl AppState {
         let data = crate::app::session::SessionData {
             version: crate::app::session::SESSION_VERSION,
             scan_path: self.scan_path.clone(),
-            extra_files: vec![],
+            extra_files: self.manually_added_files.to_vec(),
             filter,
             file_colours,
             bookmarks,
@@ -891,6 +916,9 @@ impl AppState {
         if !f.regex_pattern.is_empty() {
             let _ = self.filter_state.set_regex(&f.regex_pattern);
         }
+        // Queue extra files for a secondary append scan after the initial
+        // scan_path scan completes (handled in gui.rs::ParsingCompleted).
+        self.extra_files_to_restore = data.extra_files;
         self.file_colours = data
             .file_colours
             .into_iter()
@@ -1277,6 +1305,100 @@ mod tests {
         assert!(
             state.sort_descending,
             "sort_descending must not be reset by clear() — it is a user preference"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // extra_files session persistence (Bug 7 regression)
+    // -------------------------------------------------------------------------
+
+    /// `save_session()` must persist `manually_added_files` into
+    /// `SessionData.extra_files`.  Before the fix, `extra_files` was always
+    /// serialised as `vec![]` so files added via "Add File(s)..." were silently
+    /// lost when the app restarted.
+    #[test]
+    fn test_manually_added_files_round_trip_through_save_session() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let session_file = dir.path().join("session.json");
+
+        let mut state = AppState::new(vec![], false);
+        state.session_path = Some(session_file.clone());
+        state.manually_added_files = vec![
+            std::path::PathBuf::from("/var/log/extra1.log"),
+            std::path::PathBuf::from("/var/log/extra2.log"),
+        ];
+
+        state.save_session();
+
+        let data = crate::app::session::load(&session_file)
+            .expect("session file must exist after save_session");
+        assert_eq!(
+            data.extra_files.len(),
+            2,
+            "extra_files in session must contain both manually-added paths"
+        );
+        assert!(
+            data.extra_files
+                .contains(&std::path::PathBuf::from("/var/log/extra1.log")),
+            "extra1.log must be present in saved extra_files"
+        );
+    }
+
+    /// `restore_from_session()` must populate `extra_files_to_restore` from
+    /// `SessionData.extra_files`.  Before the fix, `extra_files` was always
+    /// silently discarded so extra files could never be re-added on restore.
+    #[test]
+    fn test_extra_files_restored_into_queue_after_restore_from_session() {
+        let mut state = AppState::new(vec![], false);
+
+        let data = crate::app::session::SessionData {
+            version: crate::app::session::SESSION_VERSION,
+            scan_path: Some(std::path::PathBuf::from("/var/log")),
+            extra_files: vec![
+                std::path::PathBuf::from("/tmp/a.log"),
+                std::path::PathBuf::from("/tmp/b.log"),
+            ],
+            filter: crate::app::session::PersistedFilter::default(),
+            file_colours: vec![],
+            bookmarks: vec![],
+            correlation_window_secs: crate::util::constants::DEFAULT_CORRELATION_WINDOW_SECS,
+            discovery_date_input: String::new(),
+            ui_font_size: crate::util::constants::DEFAULT_FONT_SIZE,
+        };
+
+        state.restore_from_session(data);
+
+        assert_eq!(
+            state.extra_files_to_restore.len(),
+            2,
+            "extra_files_to_restore must hold both paths after restore_from_session"
+        );
+        assert!(
+            state
+                .extra_files_to_restore
+                .contains(&std::path::PathBuf::from("/tmp/a.log")),
+            "/tmp/a.log must be queued for restore"
+        );
+    }
+
+    /// `clear()` must wipe both extra-file Vec fields so a new-directory scan
+    /// does not inherit stale lists from the previous session.
+    #[test]
+    fn test_clear_removes_extra_file_lists() {
+        let mut state = AppState::new(vec![], false);
+        state.manually_added_files = vec![std::path::PathBuf::from("/a.log")];
+        state.extra_files_to_restore = vec![std::path::PathBuf::from("/b.log")];
+
+        state.clear();
+
+        assert!(
+            state.manually_added_files.is_empty(),
+            "manually_added_files must be empty after clear()"
+        );
+        assert!(
+            state.extra_files_to_restore.is_empty(),
+            "extra_files_to_restore must be empty after clear()"
         );
     }
 }

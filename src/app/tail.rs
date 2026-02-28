@@ -38,7 +38,9 @@ use std::time::Duration;
 // here via the constant names; the actual values live in constants.rs).
 // =============================================================================
 
-use crate::util::constants::{MAX_TAIL_READ_BYTES_PER_TICK, TAIL_CANCEL_CHECK_INTERVAL_MS};
+use crate::util::constants::{
+    MAX_TAIL_PARTIAL_BYTES, MAX_TAIL_READ_BYTES_PER_TICK, TAIL_CANCEL_CHECK_INTERVAL_MS,
+};
 
 // =============================================================================
 // Public types
@@ -331,6 +333,33 @@ fn run_tail_watcher(
             // -----------------------------------------------------------------
             let decoded = String::from_utf8_lossy(&new_bytes);
             state.partial.push_str(&decoded);
+
+            // Bound the partial buffer (Rule 11 — resource bounds on growing
+            // collections).  A file that never emits newlines — binary content,
+            // an extremely long structured-log line, or a non-text file opened
+            // by mistake — would otherwise cause the buffer to grow at
+            // MAX_TAIL_READ_BYTES_PER_TICK per tick without any upper limit,
+            // eventually exhausting heap.  When the bound is hit we discard the
+            // stale fragment, emit a warning, and skip to the next file; the
+            // watcher remains alive and will resume on the next newline.
+            if state.partial.len() > MAX_TAIL_PARTIAL_BYTES {
+                tracing::warn!(
+                    file = %state.path.display(),
+                    partial_bytes = state.partial.len(),
+                    limit = MAX_TAIL_PARTIAL_BYTES,
+                    "Tail: partial buffer exceeded limit — discarding fragment \
+                     (binary content or extremely long line?)"
+                );
+                send!(TailProgress::FileError {
+                    path: state.path.clone(),
+                    message: format!(
+                        "Partial-line buffer exceeded {MAX_TAIL_PARTIAL_BYTES}B; \
+                         content may be binary or contain very long lines."
+                    ),
+                });
+                state.partial.clear();
+                continue;
+            }
 
             // -----------------------------------------------------------------
             // 6. Split at the last newline.
