@@ -732,6 +732,25 @@ impl AppState {
         if self.filter_state.regex_search.is_some() {
             filter_parts.push(format!("Regex: /{}/", self.filter_state.regex_pattern));
         }
+        // Bug fix: include source-file, bookmark, and activity-window filters
+        // in the report header so the recipient knows the full scope of the
+        // filtered result set.
+        if self.filter_state.hide_all_sources {
+            filter_parts.push("Files: none (all hidden)".to_string());
+        } else if !self.filter_state.source_files.is_empty() {
+            let n = self.filter_state.source_files.len();
+            filter_parts.push(format!("Files: {n} selected"));
+        }
+        if self.filter_state.bookmarks_only {
+            filter_parts.push("Bookmarks only".to_string());
+        }
+        if let Some(secs) = self.activity_window_secs {
+            if secs < 3_600 {
+                filter_parts.push(format!("Activity window: {}m", secs / 60));
+            } else {
+                filter_parts.push(format!("Activity window: {}h", secs / 3_600));
+            }
+        }
         let filter_desc = if filter_parts.is_empty() {
             "No filter (all entries)".to_string()
         } else {

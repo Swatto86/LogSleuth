@@ -563,6 +563,12 @@ impl eframe::App for LogSleuthApp {
             // It will be restarted automatically when ParsingCompleted fires.
             self.dir_watcher.stop_watch();
             self.state.dir_watcher_active = false;
+            // Bug fix: stop any running live tail before clear().  Without
+            // this, the tail thread keeps sending NewEntries from the old
+            // session's files, which contaminate the new session's entries.
+            if self.state.tail_active {
+                self.tail_manager.stop_tail();
+            }
             // Capture the date filter BEFORE clear() — clear() does not reset
             // discovery_date_input intentionally (user preference, not scan state).
             let modified_since = self.state.discovery_modified_since();
@@ -605,6 +611,11 @@ impl eframe::App for LogSleuthApp {
             // is NOT restarted after the file-only scan completes (Rule 17 pre-flight).
             self.dir_watcher.stop_watch();
             self.state.dir_watcher_active = false;
+            // Bug fix: stop any running live tail before clear() so stale
+            // tail entries do not contaminate the new file-only session.
+            if self.state.tail_active {
+                self.tail_manager.stop_tail();
+            }
             self.state.clear();
             // scan_path must be None for file-only sessions so the dir watcher is
             // not started in the ParsingCompleted handler.
@@ -780,6 +791,11 @@ impl eframe::App for LogSleuthApp {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
                             self.dir_watcher.stop_watch();
                             self.state.dir_watcher_active = false;
+                            // Bug fix: stop any running live tail before clear()
+                            // so stale tail entries do not contaminate the new session.
+                            if self.state.tail_active {
+                                self.tail_manager.stop_tail();
+                            }
                             // Capture the date filter BEFORE clear() so the user's
                             // setting is not lost.  clear() intentionally preserves
                             // discovery_date_input, but modified_since must be read
@@ -1232,7 +1248,10 @@ impl eframe::App for LogSleuthApp {
                         || self.state.filter_state.hide_all_sources
                         || self.state.filter_state.relative_time_secs.is_some()
                         || !self.state.filter_state.text_search.is_empty()
-                        || !self.state.filter_state.regex_pattern.is_empty()
+                        // Bug fix: check the compiled regex (regex_search), not the
+                        // raw pattern string.  An invalid pattern is non-empty but
+                        // regex_search is None, so the filter is not actually applied.
+                        || self.state.filter_state.regex_search.is_some()
                         || self.state.filter_state.bookmarks_only
                         // A severity filter is active only when the set is non-empty
                         // AND does not contain every variant (all-checked is equivalent
