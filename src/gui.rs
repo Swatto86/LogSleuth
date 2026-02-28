@@ -1221,11 +1221,12 @@ impl eframe::App for LogSleuthApp {
                         || !self.state.filter_state.text_search.is_empty()
                         || !self.state.filter_state.regex_pattern.is_empty()
                         || self.state.filter_state.bookmarks_only
-                        // Non-empty means a subset of severities is selected
-                        // (the filter engine treats an empty set as "all pass").
-                        // Using len() != all().len() would be a false positive
-                        // when the set is empty (0 != 6 = true but no filter active).
-                        || !self.state.filter_state.severity_levels.is_empty();
+                        // A severity filter is active only when the set is non-empty
+                        // AND does not contain every variant (all-checked is equivalent
+                        // to no filter).  An empty set also means no filter (all pass).
+                        || (!self.state.filter_state.severity_levels.is_empty()
+                            && self.state.filter_state.severity_levels.len()
+                                < crate::core::model::Severity::all().len());
                     let filters_label = if filter_active {
                         "\u{25cf} Filters".to_string() // bullet dot = filter active
                     } else {
@@ -1276,6 +1277,7 @@ impl eframe::App for LogSleuthApp {
     /// Saves the current session so the next launch can restore it.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // Stop background threads cleanly before the process exits.
+        self.scan_manager.cancel_scan();
         self.dir_watcher.stop_watch();
         self.tail_manager.stop_tail();
         self.state.save_session();

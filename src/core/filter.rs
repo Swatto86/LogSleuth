@@ -7,7 +7,7 @@
 use crate::core::model::{LogEntry, Severity};
 use crate::util::error::FilterError;
 use chrono::{DateTime, Utc};
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -91,10 +91,13 @@ impl FilterState {
             self.regex_search = None;
             return Ok(());
         }
-        let regex = Regex::new(pattern).map_err(|e| FilterError::InvalidRegex {
-            pattern: pattern.to_string(),
-            source: e,
-        })?;
+        let regex = RegexBuilder::new(pattern)
+            .case_insensitive(true)
+            .build()
+            .map_err(|e| FilterError::InvalidRegex {
+                pattern: pattern.to_string(),
+                source: e,
+            })?;
         self.regex_search = Some(regex);
         Ok(())
     }
@@ -380,6 +383,19 @@ mod tests {
         filter.set_regex(r"code:\s*5\d{2}").unwrap();
         let result = apply_filters(&entries, &filter);
         assert_eq!(result, vec![1]);
+    }
+
+    #[test]
+    fn test_regex_filter_is_case_insensitive() {
+        let entries = vec![
+            make_entry(1, Severity::Error, "Error CODE: 500"),
+            make_entry(2, Severity::Info, "Status OK"),
+        ];
+        let mut filter = FilterState::default();
+        filter.set_regex(r"code:\s*5\d{2}").unwrap();
+        let result = apply_filters(&entries, &filter);
+        // Regex should match case-insensitively (lowercase pattern vs uppercase text)
+        assert_eq!(result, vec![0]);
     }
 
     #[test]

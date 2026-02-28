@@ -134,7 +134,16 @@ impl ScanManager {
         let parse_config = ParseConfig::default();
 
         std::thread::spawn(move || {
-            run_scan(root, profiles, config, parse_config, tx, cancel);
+            let tx_guard = tx.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_scan(root, profiles, config, parse_config, tx, cancel);
+            }));
+            if result.is_err() {
+                tracing::error!("Scan thread panicked; sending Failed message");
+                let _ = tx_guard.send(ScanProgress::Failed {
+                    error: "Internal error: scan thread panicked unexpectedly".to_string(),
+                });
+            }
         });
 
         tracing::info!("Scan started");
@@ -169,15 +178,24 @@ impl ScanManager {
         let parse_config = ParseConfig::default();
 
         std::thread::spawn(move || {
-            run_files_scan(
-                files,
-                profiles,
-                parse_config,
-                tx,
-                cancel,
-                max_total_entries,
-                entry_id_start,
-            );
+            let tx_guard = tx.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_files_scan(
+                    files,
+                    profiles,
+                    parse_config,
+                    tx,
+                    cancel,
+                    max_total_entries,
+                    entry_id_start,
+                );
+            }));
+            if result.is_err() {
+                tracing::error!("File scan thread panicked; sending Failed message");
+                let _ = tx_guard.send(ScanProgress::Failed {
+                    error: "Internal error: file scan thread panicked unexpectedly".to_string(),
+                });
+            }
         });
 
         tracing::info!("File append scan started");
