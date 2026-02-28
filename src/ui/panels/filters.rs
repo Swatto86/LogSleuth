@@ -355,9 +355,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             );
             ui.label(egui::RichText::new("sec").small());
 
-            // Commit on Enter (same pattern as relative-time custom input).
-            let committed = input_resp.lost_focus()
-                && input_resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
+            // Commit when focus leaves the field (same fix as the relative-time
+            // custom input: previously this required both lost_focus AND
+            // key_pressed(Enter), which silently discarded a value typed by the
+            // user who clicked away without pressing Enter).
+            let committed = input_resp.lost_focus();
             if committed {
                 if let Ok(secs) = state.correlation_window_input.trim().parse::<i64>() {
                     let clamped = secs.clamp(

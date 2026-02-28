@@ -1356,10 +1356,17 @@ fn e2e_discovery_date_filter_is_honoured_by_menu_open_directory() {
         "a valid date input must produce Some(DateTime)"
     );
     let dt = since.unwrap();
+    // The input string is interpreted as LOCAL time and stored as UTC internally.
+    // Verify the round-trip: converting the UTC value back to local time must
+    // reproduce the original input string.  This assertion is timezone-agnostic
+    // and works correctly on machines in any timezone.
+    let local_repr = dt
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
     assert_eq!(
-        dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-        "2025-06-15 08:30:00",
-        "parsed datetime must match the input exactly"
+        local_repr, "2025-06-15 08:30:00",
+        "parsed datetime, converted back to local time, must match the input exactly"
     );
 
     // Case 2: `clear()` must NOT wipe `discovery_date_input`.

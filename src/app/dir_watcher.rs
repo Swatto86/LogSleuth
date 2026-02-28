@@ -487,6 +487,14 @@ fn walk_for_new_files(
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
+            // Always allow the root itself through (depth 0) so that a root
+            // directory whose name happens to match an exclude pattern (e.g.
+            // a user-named folder that looks like "*.tmp") is never blocked.
+            // Without this guard the entire walk produces zero results.
+            // Mirrors the identical guard in core/discovery.rs.
+            if e.depth() == 0 {
+                return true;
+            }
             // Short-circuit: never descend into excluded directories,
             // skipping their entire subtree in a single filter_entry call.
             let name = e.file_name().to_string_lossy();

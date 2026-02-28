@@ -53,8 +53,9 @@ pub struct DiscoveryConfig {
     /// included (fail-open) so permission-restricted metadata does not silently
     /// hide relevant log files.
     ///
-    /// Use `chrono::NaiveDate::and_hms_opt(…).and_utc()` to derive the start of
-    /// a calendar day in UTC, or `chrono::Local::today()` for local midnight.
+    /// This field is always expressed in UTC.  Callers that work in local time
+    /// should convert via `Local.from_local_datetime(&ndt).single().map(|d| d.to_utc())`
+    /// so the comparison is correct for all timezones.
     pub modified_since: Option<DateTime<Utc>>,
 
     /// Maximum total log entries to load across all files.
@@ -133,27 +134,33 @@ where
     // path as not found rather than hanging the scan thread (Rule 11).
     const PREFLIGHT_TIMEOUT_SECS: u64 = 10;
     {
+        // Send a 3-tuple: (is_dir, exists, path) so that the entire check —
+        // including the secondary root.exists() call — runs inside the timeout-
+        // guarded thread.  Previously the secondary exists() was called on the
+        // scan thread after the spawn returned, leaving it unprotected against
+        // a 30-second hang on an unreachable UNC host (Rule 11 / Bug 5).
         let root_buf = root.to_path_buf();
-        let (tx, rx) = std::sync::mpsc::channel::<Result<bool, ()>>();
+        let (tx, rx) = std::sync::mpsc::channel::<(bool, bool)>();
         std::thread::spawn(move || {
-            let _ = tx.send(Ok(root_buf.is_dir()));
+            // is_dir() returns false for both missing paths and plain files;
+            // exists() distinguishes the two cases.
+            let is_dir = root_buf.is_dir();
+            let exists = if is_dir { true } else { root_buf.exists() };
+            let _ = tx.send((is_dir, exists));
         });
         match rx.recv_timeout(std::time::Duration::from_secs(PREFLIGHT_TIMEOUT_SECS)) {
-            Ok(Ok(true)) => {} // root exists and is a directory — proceed
-            Ok(Ok(false)) => {
-                // Path exists but is not a directory, OR does not exist at all.
-                // `is_dir()` returns false for missing paths and for files.
-                if root.exists() {
-                    return Err(DiscoveryError::NotADirectory {
-                        path: root.to_path_buf(),
-                    });
-                } else {
-                    return Err(DiscoveryError::RootNotFound {
-                        path: root.to_path_buf(),
-                    });
-                }
+            Ok((true, _)) => {} // root exists and is a directory — proceed
+            Ok((false, true)) => {
+                return Err(DiscoveryError::NotADirectory {
+                    path: root.to_path_buf(),
+                });
             }
-            Ok(Err(_)) | Err(_) => {
+            Ok((false, false)) => {
+                return Err(DiscoveryError::RootNotFound {
+                    path: root.to_path_buf(),
+                });
+            }
+            Err(_) => {
                 // Timed out or thread panicked — treat as not found so the
                 // caller surfaces an actionable error to the user.
                 tracing::warn!(

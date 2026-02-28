@@ -737,8 +737,33 @@ fn run_files_scan(
 
     let mut discovered: Vec<crate::core::model::DiscoveredFile> = Vec::with_capacity(paths.len());
 
+    // Use a per-file timeout-guarded stat so that files on an unreachable
+    // UNC/SMB share never hang the scan thread indefinitely (Rule 11).
+    // The same pattern is used by read_sample_lines_timed / read_file_content_timed.
+    const META_TIMEOUT_SECS: u64 = 10;
     for path in &paths {
-        match std::fs::metadata(path) {
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let path_owned = path.clone();
+        let (meta_tx, meta_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = meta_tx.send(std::fs::metadata(&path_owned));
+        });
+        let meta_result = match meta_rx.recv_timeout(Duration::from_secs(META_TIMEOUT_SECS)) {
+            Ok(r) => r,
+            Err(_) => {
+                let msg = format!(
+                    "Cannot access '{}': metadata timed out after {META_TIMEOUT_SECS}s \
+                     (unreachable UNC host?)",
+                    path.display()
+                );
+                tracing::warn!(warning = %msg, "Add-files metadata timeout");
+                send!(ScanProgress::Warning { message: msg });
+                continue;
+            }
+        };
+        match meta_result {
             Ok(meta) => {
                 let size = meta.len();
                 let modified = meta.modified().ok().map(DateTime::<chrono::Utc>::from);

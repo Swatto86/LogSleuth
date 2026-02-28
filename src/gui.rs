@@ -1014,8 +1014,11 @@ impl eframe::App for LogSleuthApp {
                         || !self.state.filter_state.text_search.is_empty()
                         || !self.state.filter_state.regex_pattern.is_empty()
                         || self.state.filter_state.bookmarks_only
-                        || self.state.filter_state.severity_levels.len()
-                            != crate::core::model::Severity::all().len();
+                        // Non-empty means a subset of severities is selected
+                        // (the filter engine treats an empty set as "all pass").
+                        // Using len() != all().len() would be a false positive
+                        // when the set is empty (0 != 6 = true but no filter active).
+                        || !self.state.filter_state.severity_levels.is_empty();
                     let filters_label = if filter_active {
                         "\u{25cf} Filters".to_string() // bullet dot = filter active
                     } else {

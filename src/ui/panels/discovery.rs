@@ -579,11 +579,15 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
         }
     }
 
-    if let Some(since) = state.discovery_modified_since() {
+    if !state.discovery_date_input.trim().is_empty() && state.discovery_modified_since().is_some() {
+        // Display the filter in local wall-clock terms — `discovery_date_input`
+        // already holds a local-time string so we show it directly rather than
+        // converting back from the UTC `DateTime` (which would re-introduce an
+        // offset shift for non-UTC users).
         ui.label(
             egui::RichText::new(format!(
-                "Files modified on/after {} UTC",
-                since.format("%Y-%m-%d %H:%M:%S")
+                "Files modified on/after {} (local time)",
+                state.discovery_date_input.trim()
             ))
             .small()
             .color(egui::Color32::from_rgb(96, 165, 250)),

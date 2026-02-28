@@ -259,10 +259,11 @@ pub struct AppState {
     /// Accepted formats (most-specific first):
     ///   `YYYY-MM-DD HH:MM:SS` — second precision
     ///   `YYYY-MM-DD HH:MM`    — minute precision
-    ///   `YYYY-MM-DD`          — day precision (treated as 00:00:00 UTC)
+    ///   `YYYY-MM-DD`          — day precision (treated as 00:00:00 local time)
     ///
     /// An empty string means no filter.  Parsed by `discovery_modified_since()`
-    /// and passed as `DiscoveryConfig::modified_since` when a scan is started.
+    /// as **local time** (then converted to UTC internally) and passed as
+    /// `DiscoveryConfig::modified_since` when a scan is started.
     ///
     /// Persists across scans so the user does not have to re-enter it each time.
     pub discovery_date_input: String,
@@ -767,27 +768,44 @@ impl AppState {
     /// The caller passes this to `DiscoveryConfig::modified_since` when starting
     /// a scan so only files modified on or after that instant are ingested.
     pub fn discovery_modified_since(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        use chrono::NaiveDate;
-        use chrono::NaiveDateTime;
+        use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone as _};
 
         let trimmed = self.discovery_date_input.trim();
         if trimmed.is_empty() {
             return None;
         }
 
+        // Interpret a NaiveDateTime as LOCAL time and convert to UTC.
+        //
+        // Using local time here is intentional: the quick-fill buttons ("Now",
+        // "-1h", etc.) and manual entry all work in wall-clock local time.
+        // Previously the string was passed straight to `.and_utc()`, meaning
+        // users not in UTC saw the filter cutoff shifted by their UTC offset
+        // (up to ±14 h), causing files to be incorrectly included or excluded.
+        //
+        // Falls back to UTC-interpretation on DST ambiguity (e.g. clocks
+        // turning back) so the function never silently returns None.
+        let local_to_utc = |ndt: NaiveDateTime| -> chrono::DateTime<chrono::Utc> {
+            Local
+                .from_local_datetime(&ndt)
+                .single()
+                .map(|dt| dt.to_utc())
+                .unwrap_or_else(|| ndt.and_utc()) // DST-gap fallback
+        };
+
         // 1. Full datetime to the second: "YYYY-MM-DD HH:MM:SS"
         if let Ok(ndt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
-            return Some(ndt.and_utc());
+            return Some(local_to_utc(ndt));
         }
         // 2. Datetime to the minute: "YYYY-MM-DD HH:MM"
         if let Ok(ndt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M") {
-            return Some(ndt.and_utc());
+            return Some(local_to_utc(ndt));
         }
-        // 3. Date only: "YYYY-MM-DD" — treat as start of day (00:00:00 UTC).
+        // 3. Date only: "YYYY-MM-DD" — treat as start of day in local time.
         NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
             .ok()
             .and_then(|d| d.and_hms_opt(0, 0, 0))
-            .map(|ndt| ndt.and_utc())
+            .map(local_to_utc)
     }
 
     // -------------------------------------------------------------------------
@@ -1071,33 +1089,55 @@ mod tests {
     }
 
     #[test]
-    fn test_discovery_modified_since_date_only_midnight_utc() {
+    fn test_discovery_modified_since_date_only_midnight_local() {
+        use chrono::{Local, NaiveDate, TimeZone as _};
         let st = state_with_input("2025-03-14");
         let dt = st.discovery_modified_since().expect("should parse");
-        assert_eq!(
-            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            "2025-03-14 00:00:00"
-        );
+        // Input is interpreted as local midnight; verify the round-trip back to
+        // the local NaiveDate equals the input date, regardless of timezone.
+        let ndt = NaiveDate::from_ymd_opt(2025, 3, 14)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let expected = Local
+            .from_local_datetime(&ndt)
+            .single()
+            .map(|d| d.to_utc())
+            .unwrap_or_else(|| ndt.and_utc());
+        assert_eq!(dt, expected);
     }
 
     #[test]
     fn test_discovery_modified_since_date_and_hour_minute() {
+        use chrono::{Local, NaiveDateTime, TimeZone as _};
         let st = state_with_input("2025-03-14 09:30");
         let dt = st.discovery_modified_since().expect("should parse");
-        assert_eq!(
-            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            "2025-03-14 09:30:00"
-        );
+        // Verify round-trip: UTC result converts back to the local time the
+        // user typed (timezone-agnostic — works on any machine).  We check via
+        // the expected UTC value built the same way the function builds it.
+        let ndt =
+            NaiveDateTime::parse_from_str("2025-03-14 09:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let expected = Local
+            .from_local_datetime(&ndt)
+            .single()
+            .map(|d| d.to_utc())
+            .unwrap_or_else(|| ndt.and_utc());
+        assert_eq!(dt, expected);
     }
 
     #[test]
     fn test_discovery_modified_since_full_datetime_to_second() {
+        use chrono::{Local, NaiveDateTime, TimeZone as _};
         let st = state_with_input("2025-03-14 09:30:45");
         let dt = st.discovery_modified_since().expect("should parse");
-        assert_eq!(
-            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            "2025-03-14 09:30:45"
-        );
+        let ndt =
+            NaiveDateTime::parse_from_str("2025-03-14 09:30:45", "%Y-%m-%d %H:%M:%S").unwrap();
+        let expected = Local
+            .from_local_datetime(&ndt)
+            .single()
+            .map(|d| d.to_utc())
+            .unwrap_or_else(|| ndt.and_utc());
+        assert_eq!(dt, expected);
     }
 
     #[test]
