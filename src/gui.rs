@@ -96,6 +96,7 @@ impl eframe::App for LogSleuthApp {
                     total_found,
                 } => {
                     self.state.total_files_found = total_found;
+                    self.state.discovery_truncated = total_found > total_files;
                     self.state.status_message = if total_found > total_files {
                         format!(
                             "Discovery complete: {total_files} of {total_found} files loaded (most recently modified)."
@@ -151,7 +152,13 @@ impl eframe::App for LogSleuthApp {
                     }
                 }
                 crate::core::model::ScanProgress::ParsingCompleted { summary } => {
-                    let truncated = self.state.total_files_found > summary.total_files_discovered;
+                    // Use the flag set by DiscoveryCompleted rather than
+                    // comparing total_files_found vs summary.total_files_discovered.
+                    // For append scans (start_scan_files) DiscoveryCompleted is never
+                    // sent, so discovery_truncated remains false and we avoid a
+                    // false-positive truncation message caused by a stale
+                    // total_files_found from the initial directory scan.
+                    let truncated = self.state.discovery_truncated;
                     self.state.status_message = if truncated {
                         format!(
                             "Scan complete: {} entries from {} files in {:.2}s  \u{2014}  {}/{} files loaded (raise limit in Options to load more)",
@@ -720,6 +727,12 @@ impl eframe::App for LogSleuthApp {
             if self.state.scan_in_progress {
                 self.scan_manager.cancel_scan();
             }
+            // Discard any stale progress messages still queued in the channel.
+            // cancel_scan() sets the flag but messages sent before the flag was
+            // observed are still buffered.  Dropping the receiver ensures they
+            // are discarded rather than applied to the freshly-cleared state on
+            // the next frame (Bug fix: stale EntriesBatch after new_session).
+            self.scan_manager.progress_rx = None;
             // Disconnect any active UNC network connection before clearing state
             // so stale `net use` connections do not accumulate across sessions.
             if let Some(share) = self.state.unc_connected_share.take() {

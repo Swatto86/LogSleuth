@@ -264,6 +264,12 @@ pub struct AppState {
     /// occurred. Used to display "Found N, showing M" in the status bar.
     pub total_files_found: usize,
 
+    /// Set by the `DiscoveryCompleted` handler when the raw file count exceeds
+    /// the ingest limit.  Consumed by the `ParsingCompleted` handler to decide
+    /// whether to show the truncation hint.  Prevents false positives on append
+    /// scans where `total_files_found` is stale from the initial directory scan.
+    pub discovery_truncated: bool,
+
     /// Set by the discovery panel "Open Log(s)..." button to request starting
     /// a fresh session with a user-selected list of individual files.
     /// Consumed and cleared by `gui.rs` (calls `clear()` then `start_scan_files`).
@@ -406,6 +412,7 @@ impl AppState {
             show_options: false,
             scroll_top_requested: false,
             total_files_found: 0,
+            discovery_truncated: false,
             pending_replace_files: None,
             request_new_session: false,
             discovery_date_input: String::new(),
@@ -813,6 +820,7 @@ impl AppState {
         self.show_summary = false;
         self.show_log_summary = false;
         self.status_message = "Ready.".to_string();
+        self.scan_in_progress = false;
         self.pending_scan = None;
         self.request_cancel = false;
         self.file_list_search.clear();
@@ -844,6 +852,7 @@ impl AppState {
         self.extra_files_to_restore.clear();
         // Reset per-scan discovery counters.
         self.total_files_found = 0;
+        self.discovery_truncated = false;
         self.pending_replace_files = None;
         self.request_new_session = false;
         // Clear UNC password and error state on session clear (Rule 12).

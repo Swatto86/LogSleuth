@@ -247,6 +247,9 @@ pub enum DiscoveryError {
         path: PathBuf,
         source: walkdir::Error,
     },
+
+    /// Pre-flight path check timed out (e.g. unreachable UNC host).
+    Timeout { path: PathBuf, timeout_secs: u64 },
 }
 
 impl fmt::Display for DiscoveryError {
@@ -278,6 +281,15 @@ impl fmt::Display for DiscoveryError {
             }
             Self::Traversal { path, source } => {
                 write!(f, "Error traversing '{}': {source}", path.display())
+            }
+            Self::Timeout { path, timeout_secs } => {
+                write!(
+                    f,
+                    "Path '{}' did not respond within {timeout_secs}s -- \
+                     the host may be unreachable or the network path is slow. \
+                     Check connectivity and try again.",
+                    path.display()
+                )
             }
         }
     }

@@ -192,15 +192,18 @@ where
                 });
             }
             Err(_) => {
-                // Timed out or thread panicked — treat as not found so the
-                // caller surfaces an actionable error to the user.
+                // Timed out or thread panicked — the host is likely
+                // unreachable rather than the path not existing.  Surface a
+                // specific timeout error so the user sees an actionable
+                // message instead of "path does not exist" (Bug fix).
                 tracing::warn!(
                     root = %root.display(),
                     timeout_secs = PREFLIGHT_TIMEOUT_SECS,
                     "Pre-flight path check timed out (unreachable UNC host?)"
                 );
-                return Err(DiscoveryError::RootNotFound {
+                return Err(DiscoveryError::Timeout {
                     path: root.to_path_buf(),
+                    timeout_secs: PREFLIGHT_TIMEOUT_SECS,
                 });
             }
         }

@@ -22,7 +22,14 @@ pub fn read_first_lines(path: &Path, max_lines: usize) -> io::Result<Vec<String>
     let reader = io::BufReader::with_capacity(IO_BUFFER_SIZE, file);
 
     let mut lines = Vec::with_capacity(max_lines);
-    for line_result in reader.lines().take(max_lines) {
+    // Manual loop instead of `.take(max_lines)` so that encoding-error lines
+    // do not count toward the budget.  With `.take()`, skipped InvalidData
+    // lines still consumed an iteration, reducing the number of usable sample
+    // lines available for profile auto-detection (Bug fix).
+    for line_result in reader.lines() {
+        if lines.len() >= max_lines {
+            break;
+        }
         match line_result {
             Ok(line) => lines.push(line),
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
