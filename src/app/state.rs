@@ -334,6 +334,17 @@ pub struct AppState {
     /// update `self.profiles`, and reset this flag.
     pub request_reload_profiles: bool,
 
+    // -------------------------------------------------------------------------
+    // Dir-watcher file queue (Bug fix: prevents cancel race)
+    // -------------------------------------------------------------------------
+    /// File paths reported by the directory watcher while an append/scan was
+    /// already in progress.  Rather than cancelling the running scan (which
+    /// loses in-flight entries), new paths are accumulated here and processed
+    /// as a single append scan once the current scan completes.
+    ///
+    /// Cleared by `clear()`.
+    pub queued_dir_watcher_files: Vec<PathBuf>,
+
     /// Highest entry ID currently assigned.  Maintained incrementally as
     /// entries arrive from scans, tail, and append operations so that
     /// `next_entry_id()` is O(1) instead of scanning all entries.
@@ -407,6 +418,7 @@ impl AppState {
             pending_unc_connect: false,
             user_profiles_dir: None,
             request_reload_profiles: false,
+            queued_dir_watcher_files: Vec::new(),
             max_entry_id: 0,
         }
     }
@@ -643,8 +655,12 @@ impl AppState {
             "LogSleuth Bookmark Report\nGenerated: {generated}\n{}\n\n",
             "=".repeat(60)
         );
+        // Build a HashMap index so each bookmark lookup is O(1) instead of
+        // O(entries).  With 1M entries and many bookmarks the previous
+        // `entries.iter().find()` approach was O(bookmarks * entries).
+        let entry_map: HashMap<u64, &LogEntry> = self.entries.iter().map(|e| (e.id, e)).collect();
         for id in &ids {
-            if let Some(entry) = self.entries.iter().find(|e| e.id == *id) {
+            if let Some(entry) = entry_map.get(id) {
                 let ts = entry
                     .timestamp
                     .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
@@ -838,6 +854,8 @@ impl AppState {
         self.unc_password.clear();
         self.unc_connect_error = None;
         self.pending_unc_connect = false;
+        // Discard any queued dir-watcher files from the previous session.
+        self.queued_dir_watcher_files.clear();
         // Reset tracked entry ID counter.
         self.max_entry_id = 0;
     }

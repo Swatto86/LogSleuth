@@ -261,6 +261,31 @@ impl eframe::App for LogSleuthApp {
                             );
                         }
                     }
+
+                    // Drain any dir-watcher files that were queued while this
+                    // (or a previous) scan was running.  Only start when no
+                    // other scan was just kicked off above (extra_files check
+                    // may have set scan_in_progress = true already).
+                    if !self.state.scan_in_progress
+                        && !self.state.queued_dir_watcher_files.is_empty()
+                    {
+                        let queued = std::mem::take(&mut self.state.queued_dir_watcher_files);
+                        let count = queued.len();
+                        tracing::info!(
+                            count,
+                            "Processing queued dir-watcher files after scan completed"
+                        );
+                        let id_start = self.state.next_entry_id();
+                        self.state.scan_in_progress = true;
+                        self.state.status_message =
+                            format!("Adding {count} queued file(s) from directory watcher...");
+                        self.scan_manager.start_scan_files(
+                            queued,
+                            self.state.profiles.clone(),
+                            self.state.max_total_entries,
+                            id_start,
+                        );
+                    }
                 }
                 crate::core::model::ScanProgress::Warning { message } => {
                     // Bounded push: prevent the warnings Vec from growing beyond
@@ -375,20 +400,36 @@ impl eframe::App for LogSleuthApp {
             match msg {
                 crate::core::model::DirWatchProgress::NewFiles(paths) => {
                     let count = paths.len();
-                    tracing::info!(count, "Directory watcher: adding new files to session");
-                    self.state.status_message =
-                        format!("Directory watcher: {count} new file(s) detected, adding...");
-                    self.state.scan_in_progress = true;
-                    // Pass next_entry_id() so appended entries never reuse IDs
-                    // already assigned during the initial scan (bookmarks /
-                    // correlation use entry IDs as stable keys).
-                    let id_start = self.state.next_entry_id();
-                    self.scan_manager.start_scan_files(
-                        paths,
-                        self.state.profiles.clone(),
-                        self.state.max_total_entries,
-                        id_start,
-                    );
+                    // Bug fix: if a scan is already in progress, queue the paths
+                    // rather than starting a new scan.  `start_scan_files()` calls
+                    // `cancel_scan()` internally, which would kill the in-flight
+                    // scan and drop any `EntriesBatch` messages still in the old
+                    // channel — silently losing entries from files that hadn't
+                    // finished parsing yet.  The queue is drained in the next
+                    // `ParsingCompleted` handler.
+                    if self.state.scan_in_progress {
+                        self.state.queued_dir_watcher_files.extend(paths);
+                        tracing::info!(
+                            count,
+                            queued_total = self.state.queued_dir_watcher_files.len(),
+                            "Scan in progress; queueing new dir-watcher files"
+                        );
+                    } else {
+                        tracing::info!(count, "Directory watcher: adding new files to session");
+                        self.state.status_message =
+                            format!("Directory watcher: {count} new file(s) detected, adding...");
+                        self.state.scan_in_progress = true;
+                        // Pass next_entry_id() so appended entries never reuse IDs
+                        // already assigned during the initial scan (bookmarks /
+                        // correlation use entry IDs as stable keys).
+                        let id_start = self.state.next_entry_id();
+                        self.scan_manager.start_scan_files(
+                            paths,
+                            self.state.profiles.clone(),
+                            self.state.max_total_entries,
+                            id_start,
+                        );
+                    }
                 }
                 crate::core::model::DirWatchProgress::WalkStarted => {
                     tracing::debug!("Directory watcher: walk cycle started");
@@ -425,20 +466,17 @@ impl eframe::App for LogSleuthApp {
                     // the file is still actively written to.
                     //
                     // Bug fix: batch all path->mtime updates into a HashMap and
-                    // iterate entries once, reducing O(files * entries) to
-                    // O(files + entries).
+                    // iterate discovered_files and entries once each, reducing
+                    // O(updates * files + entries) to O(updates + files + entries).
                     let mtime_map: std::collections::HashMap<
                         &std::path::PathBuf,
                         chrono::DateTime<chrono::Utc>,
                     > = updates.iter().map(|(p, t)| (p, *t)).collect();
-                    for (path, mtime) in &updates {
-                        if let Some(f) = self
-                            .state
-                            .discovered_files
-                            .iter_mut()
-                            .find(|f| &f.path == path)
-                        {
-                            f.modified = Some(*mtime);
+                    // Update discovered_files using the HashMap (O(files) instead
+                    // of O(updates * files) from the previous nested-find loop).
+                    for f in self.state.discovered_files.iter_mut() {
+                        if let Some(&mtime) = mtime_map.get(&f.path) {
+                            f.modified = Some(mtime);
                         }
                     }
                     for entry in self.state.entries.iter_mut() {
