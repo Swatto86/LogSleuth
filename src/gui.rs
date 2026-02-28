@@ -633,22 +633,38 @@ impl eframe::App for LogSleuthApp {
         }
         // pending_single_files: user chose "Add File(s)" — append to session.
         if let Some(files) = self.state.pending_single_files.take() {
-            // Record the paths for session persistence so they survive a restart
-            // and are re-added after the initial scan_path scan on next launch.
-            self.state
-                .manually_added_files
-                .extend(files.iter().cloned());
-            self.state.scan_in_progress = true;
-            self.state.status_message = format!("Adding {} file(s)...", files.len());
-            // Append scan: entry IDs must continue after the highest existing ID
-            // so bookmarks and correlation are not confused by duplicate IDs.
-            let id_start = self.state.next_entry_id();
-            self.scan_manager.start_scan_files(
-                files,
-                self.state.profiles.clone(),
-                self.state.max_total_entries,
-                id_start,
-            );
+            // Bug fix: de-duplicate against files already loaded in this session
+            // to prevent duplicate entries in the timeline and duplicate rows in
+            // the file list.  A user may accidentally re-select the same files,
+            // or the dir-watcher may have already picked them up.
+            let known: std::collections::HashSet<std::path::PathBuf> = self
+                .state
+                .discovered_files
+                .iter()
+                .map(|f| f.path.clone())
+                .collect();
+            let files: Vec<std::path::PathBuf> =
+                files.into_iter().filter(|p| !known.contains(p)).collect();
+            if files.is_empty() {
+                self.state.status_message = "Selected file(s) already loaded.".to_string();
+            } else {
+                // Record the paths for session persistence so they survive a restart
+                // and are re-added after the initial scan_path scan on next launch.
+                self.state
+                    .manually_added_files
+                    .extend(files.iter().cloned());
+                self.state.scan_in_progress = true;
+                self.state.status_message = format!("Adding {} file(s)...", files.len());
+                // Append scan: entry IDs must continue after the highest existing ID
+                // so bookmarks and correlation are not confused by duplicate IDs.
+                let id_start = self.state.next_entry_id();
+                self.scan_manager.start_scan_files(
+                    files,
+                    self.state.profiles.clone(),
+                    self.state.max_total_entries,
+                    id_start,
+                );
+            }
         }
         // request_cancel: a panel requested the current scan be cancelled.
         if self.state.request_cancel {

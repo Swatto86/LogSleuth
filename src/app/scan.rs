@@ -866,7 +866,6 @@ fn run_parse_pipeline(
 
     // Assign globally-unique entry IDs, enforce the hard entry cap, and
     // collect summaries -- all sequential to avoid cross-thread coordination.
-    let mut total_entries: usize = 0;
     let mut total_errors: usize = 0;
     let mut files_with_entries: usize = 0;
     let mut entry_id: u64 = entry_id_start;
@@ -897,7 +896,6 @@ fn run_parse_pipeline(
             entry_id += 1;
         }
 
-        total_entries += entry_count;
         total_errors += error_count;
         if entry_count > 0 {
             files_with_entries += 1;
@@ -952,6 +950,12 @@ fn run_parse_pipeline(
     // Performance: use `drain()` to MOVE entries out of the Vec rather than
     // `chunks().to_vec()` which CLONES every entry.  With 1M entries the
     // clone approach doubles peak memory usage; drain keeps it flat.
+    //
+    // Bug fix: capture the actual loaded count BEFORE draining.  The
+    // accumulated `total_entries` counter can overcount when the entry cap
+    // truncates a file mid-way (it includes the full file's entry count).
+    // Using the concrete Vec length gives the accurate number.
+    let actual_total_entries = all_entries.len();
     check_cancel!();
     while !all_entries.is_empty() {
         let batch_end = ENTRY_BATCH_SIZE.min(all_entries.len());
@@ -966,7 +970,7 @@ fn run_parse_pipeline(
         .count();
     let summary = ScanSummary {
         total_files_discovered: total_files,
-        total_entries,
+        total_entries: actual_total_entries,
         total_parse_errors: total_errors,
         files_matched: files_with_entries,
         files_with_errors,
@@ -978,7 +982,7 @@ fn run_parse_pipeline(
 
     tracing::info!(
         files = total_files,
-        entries = total_entries,
+        entries = actual_total_entries,
         errors = total_errors,
         "Parse pipeline complete (append={})",
         append

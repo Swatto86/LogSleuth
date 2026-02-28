@@ -433,10 +433,14 @@ impl AppState {
     /// Returns the UTC cutoff instant for the current activity window, or
     /// `None` if the window is disabled.  Re-evaluated on every call so the
     /// rolling window stays current as the clock advances.
+    ///
+    /// Uses checked arithmetic to avoid a panic if `activity_window_secs` is
+    /// extremely large (e.g. from a malformed session file).  On overflow the
+    /// window is treated as disabled (returns `None` -- fail-open).
     pub fn activity_cutoff(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.activity_window_secs.map(|secs| {
+        self.activity_window_secs.and_then(|secs| {
             let clamped = i64::try_from(secs).unwrap_or(i64::MAX);
-            chrono::Utc::now() - chrono::Duration::seconds(clamped)
+            chrono::Utc::now().checked_sub_signed(chrono::Duration::seconds(clamped))
         })
     }
 
@@ -451,10 +455,14 @@ impl AppState {
     pub fn apply_filters(&mut self) {
         // Relative time filter: derive the absolute start bound each call so the
         // rolling window stays current as the clock advances.
+        //
+        // Uses checked arithmetic to avoid a panic if the value is extremely
+        // large (e.g. from a malformed session file).  On overflow, time_start
+        // is set to None (no lower bound -- shows all entries; fail-open).
         if let Some(secs) = self.filter_state.relative_time_secs {
             let clamped = i64::try_from(secs).unwrap_or(i64::MAX);
             self.filter_state.time_start =
-                Some(chrono::Utc::now() - chrono::Duration::seconds(clamped));
+                chrono::Utc::now().checked_sub_signed(chrono::Duration::seconds(clamped));
             self.filter_state.time_end = None;
         }
 
@@ -539,8 +547,16 @@ impl AppState {
             return;
         };
         let window = chrono::Duration::seconds(self.correlation_window_secs);
-        let start = anchor_ts - window;
-        let end = anchor_ts + window;
+        // Use checked arithmetic to avoid panicking on extreme window values
+        // (e.g. from a crafted session file).  Fall back to chrono's min/max
+        // representable instants so the window degrades to "everything" rather
+        // than crashing.
+        let start = anchor_ts
+            .checked_sub_signed(window)
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
+        let end = anchor_ts
+            .checked_add_signed(window)
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
         self.correlated_ids = self
             .entries
             .iter()

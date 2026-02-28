@@ -1108,9 +1108,13 @@ fn render_activity_window(ui: &mut egui::Ui, state: &mut crate::app::state::AppS
             || (input_resp.lost_focus() && !state.activity_window_input.trim().is_empty());
         if committed {
             if let Ok(mins) = state.activity_window_input.trim().parse::<u64>() {
+                // Bug fix: use checked_mul to prevent u64 overflow (silent
+                // wrapping in release / panic in debug) for very large inputs.
                 if mins > 0 {
-                    state.activity_window_secs = Some(mins * 60);
-                    changed = true;
+                    if let Some(secs) = mins.checked_mul(60) {
+                        state.activity_window_secs = Some(secs);
+                        changed = true;
+                    }
                 }
             }
         }

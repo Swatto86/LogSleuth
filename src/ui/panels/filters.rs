@@ -292,9 +292,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         if committed {
             let trimmed = state.filter_state.relative_time_input.trim().to_string();
             if let Ok(mins) = trimmed.parse::<u64>() {
+                // Bug fix: use checked_mul to prevent u64 overflow (silent
+                // wrapping in release / panic in debug) for very large inputs.
                 if mins > 0 {
-                    state.filter_state.relative_time_secs = Some(mins * 60);
-                    state.apply_filters();
+                    if let Some(secs) = mins.checked_mul(60) {
+                        state.filter_state.relative_time_secs = Some(secs);
+                        state.apply_filters();
+                    }
                 }
             }
         }
