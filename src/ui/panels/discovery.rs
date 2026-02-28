@@ -218,11 +218,30 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         // of which may contain `*` (any chars) or `?` (one char) wildcards.
         // Plain text without wildcards falls back to substring match.
         // Example: "svcVee*, *iis, svcBck*"
-        ui.add(
-            egui::TextEdit::singleline(&mut state.file_list_search)
-                .hint_text("\u{1f50d} search files… e.g. \"svcVee*, *iis\"")
-                .desired_width(f32::INFINITY),
-        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.file_list_search)
+                    .hint_text("\u{1f50d} search files\u{2026} e.g. \"svcVee*, *iis\"")
+                    .desired_width(ui.available_width() - 22.0),
+            );
+            // Clear button — visible only when the search box has text.
+            if !state.file_list_search.is_empty()
+                && ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("\u{2715}")
+                                .small()
+                                .color(egui::Color32::from_rgb(156, 163, 175)),
+                        )
+                        .small()
+                        .frame(false),
+                    )
+                    .on_hover_text("Clear search")
+                    .clicked()
+            {
+                state.file_list_search.clear();
+            }
+        });
 
         // Build the visible subset filtered by the search box.
         let visible: Vec<usize> = file_entries
@@ -292,11 +311,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         // Virtual-scroll file list.
         // Each row: [checkbox] [dot] [filename]  [solo]
         // Hover:    full path + size + profile
-        // Row height matches ROW_HEIGHT (20px) since each row is a single line.
+        // Row height scales with the user's font-size preference.
         if visible.is_empty() {
             ui.label(egui::RichText::new("No files match.").small().weak());
         } else {
-            let row_height = crate::ui::theme::ROW_HEIGHT;
+            let row_height = crate::ui::theme::row_height(state.ui_font_size);
             egui::ScrollArea::vertical()
                 .id_salt("discovery_file_list")
                 .auto_shrink([false; 2])
@@ -933,7 +952,7 @@ fn render_activity_window(ui: &mut egui::Ui, state: &mut crate::app::state::AppS
         }
 
         // Custom input: a number of minutes.
-        ui.add(
+        let input_resp = ui.add(
             egui::TextEdit::singleline(&mut state.activity_window_input)
                 .hint_text("min")
                 .desired_width(34.0),
@@ -945,7 +964,11 @@ fn render_activity_window(ui: &mut egui::Ui, state: &mut crate::app::state::AppS
             )
             .on_hover_text("Set custom activity window (minutes)")
             .clicked();
-        if set_clicked {
+        // Commit on Set click OR when focus leaves the field (consistent
+        // with the relative-time custom input in the Filters tab).
+        let committed = set_clicked
+            || (input_resp.lost_focus() && !state.activity_window_input.trim().is_empty());
+        if committed {
             if let Ok(mins) = state.activity_window_input.trim().parse::<u64>() {
                 if mins > 0 {
                     state.activity_window_secs = Some(mins * 60);

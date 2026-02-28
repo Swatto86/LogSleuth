@@ -807,10 +807,13 @@ impl eframe::App for LogSleuthApp {
                     }
                 });
                 ui.menu_button("View", |ui| {
-                    if ui.button("Scan Summary").clicked() {
-                        self.state.show_summary = true;
-                        ui.close_menu();
-                    }
+                    let has_summary = self.state.scan_summary.is_some();
+                    ui.add_enabled_ui(has_summary, |ui| {
+                        if ui.button("Scan Summary").clicked() {
+                            self.state.show_summary = true;
+                            ui.close_menu();
+                        }
+                    });
                     let has_entries = !self.state.filtered_indices.is_empty();
                     ui.add_enabled_ui(has_entries, |ui| {
                         if ui.button("Log Summary").clicked() {

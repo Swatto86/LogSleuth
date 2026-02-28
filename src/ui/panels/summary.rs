@@ -95,7 +95,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                             .file_name()
                                             .and_then(|n| n.to_str())
                                             .unwrap_or("?");
-                                        ui.label(egui::RichText::new(name).monospace().size(11.5));
+                                        ui.label(egui::RichText::new(name).monospace());
                                         ui.label(&fs.profile_id);
                                         ui.label(fs.entry_count.to_string());
 
@@ -119,9 +119,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                             }
                                             _ => "--".to_string(),
                                         };
-                                        ui.label(
-                                            egui::RichText::new(time_range).monospace().size(11.5),
-                                        );
+                                        ui.label(egui::RichText::new(time_range).monospace());
                                         ui.end_row();
                                     }
                                 });

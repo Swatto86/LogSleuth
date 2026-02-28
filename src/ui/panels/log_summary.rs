@@ -211,7 +211,6 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                             ui.label(
                                                 egui::RichText::new(ts)
                                                     .monospace()
-                                                    .size(11.5)
                                                     .weak(),
                                             );
                                             // Show just the filename; full path in tooltip.
@@ -223,15 +222,13 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                             ui.label(
                                                 egui::RichText::new(display_name)
                                                     .monospace()
-                                                    .size(11.5)
                                                     .weak(),
                                             )
                                             .on_hover_text(file.as_str());
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(msg)
-                                                        .color(colour)
-                                                        .size(11.5),
+                                                        .color(colour),
                                                 )
                                                 .truncate(),
                                             );

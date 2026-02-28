@@ -98,12 +98,17 @@ pub fn file_colour(index: usize) -> Color32 {
     FILE_COLOUR_PALETTE[index % FILE_COLOUR_PALETTE.len()]
 }
 
-/// Status bar colours.
-pub const STATUS_BG: Color32 = Color32::from_rgb(31, 41, 55); // Gray 800
-pub const STATUS_TEXT: Color32 = Color32::from_rgb(209, 213, 219); // Gray 300
-
 /// Layout constants.
 pub const SIDEBAR_WIDTH: f32 = 460.0;
 pub const DETAIL_PANE_HEIGHT: f32 = 200.0;
-pub const ROW_HEIGHT: f32 = 20.0;
 pub const STATUS_BAR_HEIGHT: f32 = 28.0;
+
+/// Compute the row height for virtual-scrolled lists based on the current
+/// font size.  Produces a consistent single-line row height that scales
+/// proportionally with the user's font-size preference.
+///
+/// At the default 14 pt this returns 22 px; at the old hardcoded 12 pt it
+/// returns 20 px (matching the previous constant).
+pub fn row_height(font_size: f32) -> f32 {
+    (font_size + 8.0).round()
+}

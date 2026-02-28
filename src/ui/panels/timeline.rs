@@ -34,7 +34,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         return;
     }
 
-    let row_height = theme::ROW_HEIGHT;
+    let font_size = state.ui_font_size;
+    let row_height = theme::row_height(font_size);
 
     // Sort order toolbar — compact single-line bar above the scroll area.
     ui.horizontal(|ui| {
@@ -123,7 +124,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .unwrap_or("?");
             let first_line = entry.message.lines().next().unwrap_or(&entry.message);
 
-            let font = egui::FontId::monospace(12.0);
+            let font = egui::FontId::monospace(font_size);
             let body_colour = theme::row_text_colour(state.dark_mode);
 
             let mut row_job = LayoutJob::default();
@@ -156,14 +157,12 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     | crate::core::model::Severity::Error
                     | crate::core::model::Severity::Warning
             );
-            if show_severity_accent {
-                let cursor = ui.cursor().min;
-                let underline_rect = egui::Rect::from_min_size(
-                    egui::pos2(cursor.x, cursor.y + row_height - 2.0),
-                    egui::vec2(ui.available_width(), 2.0),
-                );
-                ui.painter().rect_filled(underline_rect, 0.0, sev_colour);
-            }
+
+            // Save cursor position and available width BEFORE the row is
+            // laid out, so we can paint the severity underline AFTER the
+            // row content (fixing z-order: underline on top of selection).
+            let row_top = ui.cursor().min;
+            let full_width = ui.available_width();
 
             // Teal tint on correlated rows (drawn first so that the gold
             // bookmark tint on bookmarked+correlated rows takes visual priority).
@@ -215,11 +214,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     let star_btn = ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(star_char).color(star_colour).size(11.0),
+                                egui::RichText::new(star_char)
+                                    .color(star_colour)
+                                    .size((font_size * 0.85).round()),
                             )
                             .small()
                             .frame(false)
-                            .min_size(egui::vec2(14.0, row_height)),
+                            .min_size(egui::vec2((font_size * 1.1).round(), row_height)),
                         )
                         .on_hover_text(if is_bookmarked {
                             "Remove bookmark"
@@ -253,6 +254,16 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         .small(),
                 );
             });
+
+            // Paint severity accent underline AFTER the row content so it
+            // renders on top of the selection/hover highlight (z-order fix).
+            if show_severity_accent {
+                let underline_rect = egui::Rect::from_min_size(
+                    egui::pos2(row_top.x, row_top.y + row_height - 2.0),
+                    egui::vec2(full_width, 2.0),
+                );
+                ui.painter().rect_filled(underline_rect, 0.0, sev_colour);
+            }
         }
     });
 

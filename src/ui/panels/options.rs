@@ -32,9 +32,12 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
     egui::Window::new("Options")
         .open(&mut open)
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .default_width(420.0)
         .show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
             // =========================================================
             // Section 0 — Appearance
             // =========================================================
@@ -462,6 +465,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                     state.show_options = false;
                 }
             });
+            }); // end ScrollArea
         });
 
     if !open {

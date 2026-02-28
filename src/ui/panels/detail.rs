@@ -90,6 +90,6 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
         .id_salt("detail_message")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(&entry.message).monospace().size(11.5));
+            ui.label(egui::RichText::new(&entry.message).monospace());
         });
 }
