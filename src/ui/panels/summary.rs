@@ -12,7 +12,9 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
         return;
     }
 
+    let mut open = true;
     egui::Window::new("Scan Summary")
+        .open(&mut open)
         .collapsible(false)
         .resizable(true)
         .min_width(480.0)
@@ -157,4 +159,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 state.show_summary = false;
             }
         });
+
+    if !open {
+        state.show_summary = false;
+    }
 }

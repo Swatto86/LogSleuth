@@ -916,9 +916,7 @@ impl AppState {
             .map(|s| (s / 60).to_string())
             .unwrap_or_default();
         self.filter_state.bookmarks_only = f.bookmarks_only;
-        if !f.regex_pattern.is_empty()
-            && self.filter_state.set_regex(&f.regex_pattern).is_err()
-        {
+        if !f.regex_pattern.is_empty() && self.filter_state.set_regex(&f.regex_pattern).is_err() {
             tracing::warn!(
                 pattern = %f.regex_pattern,
                 "Session restore: saved regex pattern is invalid, discarding"

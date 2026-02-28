@@ -794,7 +794,7 @@ fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
     let mut star_pi: Option<usize> = None;
     let mut star_ti: usize = 0;
 
-    while ti < txt.len() || pi < pat.len() {
+    while ti < txt.len() {
         if pi < pat.len() && pat[pi] == b'*' {
             // Skip consecutive stars.
             while pi < pat.len() && pat[pi] == b'*' {
@@ -809,7 +809,7 @@ fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
             continue;
         }
 
-        if pi < pat.len() && ti < txt.len() && (pat[pi] == b'?' || pat[pi] == txt[ti]) {
+        if pi < pat.len() && (pat[pi] == b'?' || pat[pi] == txt[ti]) {
             pi += 1;
             ti += 1;
             continue;
@@ -827,7 +827,12 @@ fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
         return false;
     }
 
-    true
+    // Text exhausted: skip any trailing `*` in the pattern (they match empty).
+    while pi < pat.len() && pat[pi] == b'*' {
+        pi += 1;
+    }
+
+    pi == pat.len()
 }
 
 // =============================================================================

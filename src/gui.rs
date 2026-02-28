@@ -424,10 +424,14 @@ impl eframe::App for LogSleuthApp {
             ));
         }
 
-        // If a relative time filter is active, refresh the time window each frame
-        // and schedule a 1-second repaint so the rolling boundary stays current
-        // as the clock advances even when nothing else is happening.
-        if self.state.filter_state.relative_time_secs.is_some() {
+        // If a relative time filter or activity window is active, refresh the
+        // time-dependent filter state each frame and schedule a 1-second repaint
+        // so the rolling boundary stays current as the clock advances.
+        // Consolidated into a single check to avoid calling apply_filters() twice
+        // per frame when both features are active simultaneously.
+        if self.state.filter_state.relative_time_secs.is_some()
+            || self.state.activity_window_secs.is_some()
+        {
             self.state.apply_filters();
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
@@ -443,6 +447,7 @@ impl eframe::App for LogSleuthApp {
             // discovery_date_input intentionally (user preference, not scan state).
             let modified_since = self.state.discovery_modified_since();
             self.state.clear();
+            self.state.scan_in_progress = true;
             self.state.scan_path = Some(path.clone());
             self.scan_manager.start_scan(
                 path,
@@ -461,6 +466,7 @@ impl eframe::App for LogSleuthApp {
         // filter/colour/bookmark state is preserved during the re-scan.
         if let Some(path) = self.state.initial_scan.take() {
             let modified_since = self.state.discovery_modified_since();
+            self.state.scan_in_progress = true;
             self.scan_manager.start_scan(
                 path,
                 self.state.profiles.clone(),
@@ -649,6 +655,7 @@ impl eframe::App for LogSleuthApp {
                             // before we wipe any other transient state.
                             let modified_since = self.state.discovery_modified_since();
                             self.state.clear();
+                            self.state.scan_in_progress = true;
                             self.state.scan_path = Some(path.clone());
                             self.scan_manager.start_scan(
                                 path,
@@ -1101,14 +1108,9 @@ impl eframe::App for LogSleuthApp {
         ui::panels::about::render(ctx, &mut self.state);
         ui::panels::options::render(ctx, &mut self.state);
 
-        // Activity window auto-advance: re-apply filters every second so the
-        // rolling cutoff stays current and stale files/entries age out without
-        // any user interaction.  The repaint_after keeps the UI responsive
-        // without busy-looping at the full frame rate.
-        if self.state.activity_window_secs.is_some() {
-            self.state.apply_filters();
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
-        }
+        // Activity window + relative time auto-advance is handled by the
+        // consolidated block earlier in update() to avoid calling
+        // apply_filters() twice per frame when both features are active.
     }
 
     /// Called by eframe when the application window is about to close.

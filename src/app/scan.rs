@@ -683,14 +683,18 @@ fn run_parse_pipeline(
         check_cancel!();
     }
 
+    let files_with_errors = file_summaries
+        .iter()
+        .filter(|fs| fs.error_count > 0)
+        .count();
     let summary = ScanSummary {
         total_files_discovered: total_files,
         total_entries,
         total_parse_errors: total_errors,
         files_matched: files_with_entries,
+        files_with_errors,
         file_summaries,
         duration: scan_start.elapsed(),
-        ..Default::default()
     };
 
     send!(ScanProgress::ParsingCompleted { summary });
