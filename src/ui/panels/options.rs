@@ -44,7 +44,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             ui.heading("Appearance");
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Font size:");
+                ui.label("Font size:")
+                    .on_hover_text("The base font size for all text in the app. Everything scales proportionally.");
                 let mut v = state.ui_font_size as f64;
                 if ui
                     .add(
@@ -98,7 +99,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 
             // Max files per scan.
             ui.horizontal(|ui| {
-                ui.label("Max files per scan:");
+                ui.label("Max files per scan:")
+                    .on_hover_text("How many files to load per scan. When more files are found, only the most recently modified are loaded.");
                 let mut v = state.max_files_limit as f64;
                 if ui
                     .add(
@@ -139,7 +141,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 
             // Max total entries.
             ui.horizontal(|ui| {
-                ui.label("Max total entries:");
+                ui.label("Max total entries:")
+                    .on_hover_text("Upper limit on the number of log entries held in memory. Prevents excessive memory use on large directories.");
                 let mut v = state.max_total_entries as f64;
                 if ui
                     .add(
@@ -183,7 +186,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 
             // Max scan depth.
             ui.horizontal(|ui| {
-                ui.label("Max scan depth:");
+                ui.label("Max scan depth:")
+                    .on_hover_text("How many levels deep to recurse into subdirectories when discovering log files.");
                 let mut v = state.max_scan_depth as f64;
                 if ui
                     .add(
@@ -240,7 +244,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
-                ui.label("Poll interval:");
+                ui.label("Poll interval:")
+                    .on_hover_text("How often the background thread checks files for new content during Live Tail.");
                 let mut v = state.tail_poll_interval_ms as f64;
                 if ui
                     .add(
@@ -253,6 +258,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                         .suffix(" ms")
                         .logarithmic(true),
                     )
+                    .on_hover_text("Lower = faster updates but more CPU. Higher = less CPU but slower to show new lines.")
                     .changed()
                 {
                     state.tail_poll_interval_ms = (v as u64)
@@ -302,7 +308,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
-                ui.label("Poll interval:");
+                ui.label("Poll interval:")
+                    .on_hover_text("How often the directory watcher polls for newly created files.");
                 let mut v = state.dir_watch_poll_interval_ms as f64;
                 if ui
                     .add(
@@ -315,6 +322,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                         .suffix(" ms")
                         .logarithmic(true),
                     )
+                    .on_hover_text("Lower = detect new files sooner. Higher = fewer directory walks.")
                     .changed()
                 {
                     state.dir_watch_poll_interval_ms = (v as u64).clamp(
@@ -461,7 +469,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 .weak(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Close").clicked() {
+                if ui.button("Close")
+                    .on_hover_text("Close this dialog. Changes are applied automatically.")
+                    .clicked()
+                {
                     state.show_options = false;
                 }
             });

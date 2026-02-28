@@ -44,6 +44,26 @@ pub const ABSOLUTE_MAX_FILES: usize = 10_000;
 pub const ABSOLUTE_MAX_DEPTH: usize = 50;
 
 // =============================================================================
+// Network / UNC I/O tuning
+// =============================================================================
+
+/// Thread-pool multiplier applied to `num_cpus` when scanning UNC/network
+/// paths.  Network I/O is latency-bound (each file open is an SMB round-trip),
+/// so we need more threads than CPUs to overlap that latency and keep the
+/// pipeline saturated.  4x is a good balance: on an 8-core machine this gives
+/// 32 scan threads, which overlaps ~32 concurrent SMB reads.
+pub const NETWORK_PARALLELISM_MULTIPLIER: usize = 4;
+
+/// Hard upper bound on the number of scan threads regardless of CPU count or
+/// multiplier.  Prevents excessive thread creation on high-core-count servers.
+pub const MAX_SCAN_THREADS: usize = 64;
+
+/// I/O buffer size (bytes) used when reading files from network paths.
+/// Larger buffers reduce the number of SMB READ round-trips.  256 KB aligns
+/// well with typical SMB3 max-read sizes and OS read-ahead windows.
+pub const NETWORK_IO_BUFFER_SIZE: usize = 256 * 1024;
+
+// =============================================================================
 // Parsing limits
 // =============================================================================
 

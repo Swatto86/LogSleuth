@@ -151,7 +151,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     .color(count_colour),
             );
             if (active_count > 0 || state.filter_state.hide_all_sources)
-                && ui.small_button("All").clicked()
+                && ui
+                    .small_button("All")
+                    .on_hover_text("Show entries from all files (clear the file filter)")
+                    .clicked()
             {
                 state.filter_state.source_files.clear();
                 state.filter_state.hide_all_sources = false;
@@ -223,7 +226,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::TextEdit::singleline(&mut state.file_list_search)
                     .hint_text("\u{1f50d} search files\u{2026} e.g. \"svcVee*, *iis\"")
                     .desired_width(ui.available_width() - 22.0),
-            );
+            )
+            .on_hover_text("Filter the file list by name. Supports wildcards (* and ?) and comma-separated patterns.");
             // Clear button — visible only when the search box has text.
             if !state.file_list_search.is_empty()
                 && ui
@@ -255,7 +259,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         // Select All / None for the visible subset.
         if visible_count > 1 {
             ui.horizontal(|ui| {
-                if ui.small_button("Select all").clicked() {
+                if ui
+                    .small_button("Select all")
+                    .on_hover_text("Include all visible files in the filter")
+                    .clicked()
+                {
                     let prev_hide_all = state.filter_state.hide_all_sources;
                     let visible_paths: std::collections::HashSet<&std::path::PathBuf> =
                         visible.iter().map(|&i| &file_entries[i].0).collect();
@@ -278,7 +286,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     }
                     state.apply_filters();
                 }
-                if ui.small_button("None").clicked() {
+                if ui
+                    .small_button("None")
+                    .on_hover_text("Exclude all visible files from the filter")
+                    .clicked()
+                {
                     let visible_paths: std::collections::HashSet<&std::path::PathBuf> =
                         visible.iter().map(|&i| &file_entries[i].0).collect();
                     let non_visible_selected: std::collections::HashSet<std::path::PathBuf> =
@@ -495,7 +507,8 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
         egui::RichText::new("File date/time filter:")
             .small()
             .strong(),
-    );
+    )
+    .on_hover_text("Restrict scanning to files whose OS last-modified time is on or after a given date. Useful for large directories where you only care about recent logs.");
     ui.label(
         egui::RichText::new(
             "Only scan files modified on or after this date/time. \
@@ -616,7 +629,11 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             ui.spinner();
             ui.label("Scanning\u{2026}");
         });
-        if ui.button("Cancel").clicked() {
+        if ui
+            .button("Cancel")
+            .on_hover_text("Stop the scan in progress. Files already parsed will be kept.")
+            .clicked()
+        {
             state.request_cancel = true;
         }
     } else {
@@ -717,7 +734,8 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::TextEdit::singleline(&mut state.directory_path_input)
                     .hint_text("Path or \\\\server\\share\\logs")
                     .desired_width(ui.available_width() - 52.0),
-            );
+            )
+            .on_hover_text("Type or paste a local, mapped-drive, or UNC path then press Enter or click Open");
             let pressed_enter =
                 path_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let open_clicked = ui
@@ -800,21 +818,42 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
         let has_session = state.scan_path.is_some() || !state.entries.is_empty();
         if has_session {
             ui.add_space(4.0);
-            if ui
-                .add_enabled(
-                    !state.scan_in_progress,
-                    egui::Button::new(
-                        egui::RichText::new("Clear Session")
-                            .small()
-                            .color(egui::Color32::from_rgb(156, 163, 175)),
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        !state.scan_in_progress,
+                        egui::Button::new(
+                            egui::RichText::new("\u{2717} Clear Session")
+                                .small()
+                                .color(egui::Color32::from_rgb(248, 113, 113)),
+                        ),
                     )
-                    .frame(false),
-                )
-                .on_hover_text("Reset to a blank state with no directory or files selected")
-                .clicked()
-            {
-                state.request_new_session = true;
-            }
+                    .on_hover_text("Close the current session and return to the start screen. All loaded data will be discarded.")
+                    .clicked()
+                {
+                    state.request_new_session = true;
+                }
+
+                // Rescan shortcut -- re-runs the scan on the same directory with the
+                // current date filter and ingest settings.  Handy after changing
+                // options or when the directory contents have changed.
+                if state.scan_path.is_some()
+                    && ui
+                        .add_enabled(
+                            !state.scan_in_progress,
+                            egui::Button::new(
+                                egui::RichText::new("\u{1f504} Rescan")
+                                    .small()
+                                    .color(egui::Color32::from_rgb(96, 165, 250)),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Re-scan the current directory with the active date filter and ingest settings")
+                        .clicked()
+                    {
+                        state.pending_scan = state.scan_path.clone();
+                    }
+            });
         }
     }
 }

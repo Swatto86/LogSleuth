@@ -788,7 +788,10 @@ impl eframe::App for LogSleuthApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("New Session").clicked() {
+                    if ui.button("New Session")
+                        .on_hover_text("Close the current session and start fresh with no files loaded")
+                        .clicked()
+                    {
                         self.state.request_new_session = true;
                         ui.close_menu();
                     }
@@ -797,7 +800,10 @@ impl eframe::App for LogSleuthApp {
                     let has_entries = !self.state.filtered_indices.is_empty();
                     ui.add_enabled_ui(has_entries, |ui| {
                         ui.menu_button("Export", |ui| {
-                            if ui.button("Export CSV...").clicked() {
+                            if ui.button("Export CSV...")
+                                .on_hover_text("Save the filtered entries as a comma-separated values file")
+                                .clicked()
+                            {
                                 if let Some(dest) = rfd::FileDialog::new()
                                     .add_filter("CSV", &["csv"])
                                     .set_file_name("export.csv")
@@ -835,7 +841,10 @@ impl eframe::App for LogSleuthApp {
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("Export JSON...").clicked() {
+                            if ui.button("Export JSON...")
+                                .on_hover_text("Save the filtered entries as a JSON array")
+                                .clicked()
+                            {
                                 if let Some(dest) = rfd::FileDialog::new()
                                     .add_filter("JSON", &["json"])
                                     .set_file_name("export.json")
@@ -876,12 +885,18 @@ impl eframe::App for LogSleuthApp {
                         });
                     });
                     ui.separator();
-                    if ui.button("Exit").clicked() {
+                    if ui.button("Exit")
+                        .on_hover_text("Save the session and close LogSleuth")
+                        .clicked()
+                    {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
                 ui.menu_button("Edit", |ui| {
-                    if ui.button("Options\u{2026}").clicked() {
+                    if ui.button("Options\u{2026}")
+                        .on_hover_text("Configure ingest limits, polling intervals, profiles, and appearance")
+                        .clicked()
+                    {
                         self.state.show_options = true;
                         ui.close_menu();
                     }
@@ -889,14 +904,20 @@ impl eframe::App for LogSleuthApp {
                 ui.menu_button("View", |ui| {
                     let has_summary = self.state.scan_summary.is_some();
                     ui.add_enabled_ui(has_summary, |ui| {
-                        if ui.button("Scan Summary").clicked() {
+                        if ui.button("Scan Summary")
+                            .on_hover_text("Show an overview of the last scan: file counts, entry totals, and per-file breakdown")
+                            .clicked()
+                        {
                             self.state.show_summary = true;
                             ui.close_menu();
                         }
                     });
                     let has_entries = !self.state.filtered_indices.is_empty();
                     ui.add_enabled_ui(has_entries, |ui| {
-                        if ui.button("Log Summary").clicked() {
+                        if ui.button("Log Summary")
+                            .on_hover_text("Show a severity breakdown and message preview of the currently-filtered entries")
+                            .clicked()
+                        {
                             self.state.show_log_summary = true;
                             ui.close_menu();
                         }
@@ -908,7 +929,10 @@ impl eframe::App for LogSleuthApp {
                             "Copy Bookmark Report ({} entries)",
                             self.state.bookmark_count()
                         );
-                        if ui.button(bm_label).clicked() {
+                        if ui.button(bm_label)
+                            .on_hover_text("Copy a plain-text report of all bookmarked entries to the clipboard")
+                            .clicked()
+                        {
                             let report = self.state.bookmarks_report();
                             ctx.copy_text(report);
                             self.state.status_message = format!(
@@ -923,7 +947,10 @@ impl eframe::App for LogSleuthApp {
                     ui.add_enabled_ui(has_entries, |ui| {
                         let n = self.state.filtered_indices.len();
                         let copy_label = format!("Copy Filtered Results ({n} entries)");
-                        if ui.button(copy_label).clicked() {
+                        if ui.button(copy_label)
+                            .on_hover_text("Copy all currently-filtered entries as a plain-text report to the clipboard")
+                            .clicked()
+                        {
                             let report = self.state.filtered_results_report();
                             ctx.copy_text(report);
                             self.state.status_message =
@@ -977,7 +1004,7 @@ impl eframe::App for LogSleuthApp {
         // Status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // LIVE badge — shown while tail is active.
+                // LIVE badge -- shown while tail is active.
                 if self.state.tail_active {
                     ui.label(
                         egui::RichText::new(" \u{25cf} LIVE ")
@@ -986,7 +1013,8 @@ impl eframe::App for LogSleuthApp {
                             .background_color(egui::Color32::from_rgba_premultiplied(
                                 34, 197, 94, 30,
                             )),
-                    );
+                    )
+                    .on_hover_text("Live Tail is active -- new entries are being streamed in real time. Stop via the Files tab.");
                     ui.separator();
                 }
                 // WATCH badge — shown while the directory watcher is active, or
@@ -1044,14 +1072,20 @@ impl eframe::App for LogSleuthApp {
                 }
                 ui.label(&self.state.status_message);
                 // Cancel button visible only while a scan is running
-                if self.state.scan_in_progress && ui.small_button("Cancel").clicked() {
+                if self.state.scan_in_progress && ui.small_button("Cancel")
+                    .on_hover_text("Stop the running scan. Files already parsed will be kept.")
+                    .clicked()
+                {
                     self.scan_manager.cancel_scan();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let total = self.state.entries.len();
                     let filtered = self.state.filtered_indices.len();
                     if total > 0 {
-                        ui.label(format!("{filtered}/{total} entries"));
+                        ui.label(format!("{filtered}/{total} entries"))
+                            .on_hover_text(format!(
+                                "{filtered} entries match the current filters out of {total} total loaded"
+                            ));
                         ui.separator();
                     }
                     // File count — amber when the ingest limit was applied.
@@ -1068,7 +1102,8 @@ impl eframe::App for LogSleuthApp {
                                  Raise the limit in Edit > Options."
                             ));
                         } else {
-                            ui.label(format!("{loaded} files"));
+                            ui.label(format!("{loaded} files"))
+                                .on_hover_text(format!("{loaded} log files loaded in this session"));
                         }
                         ui.separator();
                     }
@@ -1136,6 +1171,7 @@ impl eframe::App for LogSleuthApp {
                     };
                     if ui
                         .selectable_label(self.state.sidebar_tab == 0, files_label)
+                        .on_hover_text("Browse discovered files, manage the scan, and filter which files are included")
                         .clicked()
                     {
                         self.state.sidebar_tab = 0;
@@ -1159,6 +1195,7 @@ impl eframe::App for LogSleuthApp {
                     };
                     if ui
                         .selectable_label(self.state.sidebar_tab == 1, filters_label)
+                        .on_hover_text("Filter the timeline by severity, text, regex, time range, or correlation")
                         .clicked()
                     {
                         self.state.sidebar_tab = 1;

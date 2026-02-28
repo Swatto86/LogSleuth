@@ -29,15 +29,18 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                     .num_columns(2)
                     .spacing([16.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label("Files discovered:");
+                        ui.label("Files discovered:")
+                            .on_hover_text("Total number of candidate files found during the directory walk");
                         ui.label(summary.total_files_discovered.to_string());
                         ui.end_row();
 
-                        ui.label("Files matched:");
+                        ui.label("Files matched:")
+                            .on_hover_text("Files that matched a log format profile and were parsed");
                         ui.label(summary.files_matched.to_string());
                         ui.end_row();
 
-                        ui.label("Files with errors:");
+                        ui.label("Files with errors:")
+                            .on_hover_text("Files that produced one or more parse errors during processing");
                         let err_colour = if summary.files_with_errors > 0 {
                             egui::Color32::from_rgb(248, 113, 113)
                         } else {
@@ -46,11 +49,13 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                         ui.colored_label(err_colour, summary.files_with_errors.to_string());
                         ui.end_row();
 
-                        ui.label("Total entries:");
+                        ui.label("Total entries:")
+                            .on_hover_text("Total number of log entries parsed across all files");
                         ui.label(summary.total_entries.to_string());
                         ui.end_row();
 
-                        ui.label("Parse errors:");
+                        ui.label("Parse errors:")
+                            .on_hover_text("Lines that did not match the profile's pattern and could not be parsed");
                         let pe_colour = if summary.total_parse_errors > 0 {
                             egui::Color32::from_rgb(253, 186, 116)
                         } else {
@@ -59,7 +64,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                         ui.colored_label(pe_colour, summary.total_parse_errors.to_string());
                         ui.end_row();
 
-                        ui.label("Duration:");
+                        ui.label("Duration:")
+                            .on_hover_text("Wall-clock time for the complete scan (discovery + parsing)");
                         ui.label(format!("{:.2}s", summary.duration.as_secs_f64()));
                         ui.end_row();
                     });
@@ -153,7 +159,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 
             ui.add_space(8.0);
             ui.separator();
-            if ui.button("Close").clicked() {
+            if ui.button("Close")
+                .on_hover_text("Close this summary dialog")
+                .clicked()
+            {
                 state.show_summary = false;
             }
         });

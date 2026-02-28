@@ -10,13 +10,18 @@ use crate::ui::theme;
 
 /// Render the filter controls sidebar section.
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("Filters");
+    ui.heading("Filters")
+        .on_hover_text("Narrow down which log entries are shown in the timeline. Filters are combined: an entry must match all active filters to appear.");
     ui.separator();
 
     // Single row — severity presets + utility actions combined.
     ui.horizontal_wrapped(|ui| {
         let fuzzy = state.filter_state.fuzzy;
-        if ui.small_button("Errors only").clicked() {
+        if ui
+            .small_button("Errors only")
+            .on_hover_text("Show only Critical and Error entries, hiding everything else")
+            .clicked()
+        {
             let current_files = std::mem::take(&mut state.filter_state.source_files);
             let hide_all = state.filter_state.hide_all_sources;
             state.filter_state = crate::core::filter::FilterState::errors_only_from(fuzzy);
@@ -24,7 +29,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.filter_state.hide_all_sources = hide_all;
             state.apply_filters();
         }
-        if ui.small_button("Errors + Warn").clicked() {
+        if ui
+            .small_button("Errors + Warn")
+            .on_hover_text("Show Critical, Error, and Warning entries")
+            .clicked()
+        {
             let current_files = std::mem::take(&mut state.filter_state.source_files);
             let hide_all = state.filter_state.hide_all_sources;
             state.filter_state = crate::core::filter::FilterState::errors_and_warnings_from(fuzzy);
@@ -52,7 +61,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.filter_state.relative_time_input.clear();
             state.apply_filters();
         }
-        if ui.small_button("Clear").clicked() {
+        if ui
+            .small_button("Clear")
+            .on_hover_text("Remove all active filters and show every entry")
+            .clicked()
+        {
             state.filter_state = crate::core::filter::FilterState {
                 fuzzy,
                 ..Default::default()
@@ -63,7 +76,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         // Summary shortcut (disabled when no filtered entries yet)
         let has_entries = !state.filtered_indices.is_empty();
         ui.add_enabled_ui(has_entries, |ui| {
-            if ui.small_button("Summary").clicked() {
+            if ui
+                .small_button("Summary")
+                .on_hover_text(
+                    "Open a severity breakdown and message preview of the filtered entries",
+                )
+                .clicked()
+            {
                 state.show_log_summary = true;
             }
         });
@@ -113,13 +132,27 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.separator();
 
     // Severity checkboxes with severity-coloured labels
-    ui.label("Severity:");
+    ui.label("Severity:").on_hover_text(
+        "Check the severity levels you want to see. Unchecked levels are hidden from the timeline.",
+    );
     let mut changed = false;
     for severity in Severity::all() {
         let colour = theme::severity_colour(severity, state.dark_mode);
         let label = egui::RichText::new(severity.label()).color(colour);
         let mut checked = state.filter_state.severity_levels.contains(severity);
-        if ui.checkbox(&mut checked, label).changed() {
+        let tooltip = match severity {
+            Severity::Critical => "Fatal errors that crash or halt a service",
+            Severity::Error => "Failures requiring attention but not necessarily fatal",
+            Severity::Warning => "Potential problems or degraded conditions",
+            Severity::Info => "Normal operational messages",
+            Severity::Debug => "Verbose diagnostic output for developers",
+            Severity::Unknown => "Entries whose severity could not be determined",
+        };
+        if ui
+            .checkbox(&mut checked, label)
+            .on_hover_text(tooltip)
+            .changed()
+        {
             if checked {
                 state.filter_state.severity_levels.insert(*severity);
             } else {
@@ -136,10 +169,14 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.separator();
 
     // Text search (substring or fuzzy depending on mode toggle)
-    ui.label("Text search:");
+    ui.label("Text search:")
+        .on_hover_text("Filter entries whose message contains this text. Toggle the ~ button for fuzzy (non-contiguous) matching.");
     ui.horizontal(|ui| {
         if ui
             .text_edit_singleline(&mut state.filter_state.text_search)
+            .on_hover_text(
+                "Type to search. Matches anywhere in the log message (case-insensitive).",
+            )
             .changed()
         {
             state.apply_filters();
@@ -179,9 +216,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(4.0);
 
     // Regex search with compile-error feedback
-    ui.label("Regex:");
+    ui.label("Regex:")
+        .on_hover_text(r"Filter entries using a regular expression. Examples: ^ERROR, timeout|refused, \d{3}\.\d{3}");
     let re_changed = ui
         .text_edit_singleline(&mut state.filter_state.regex_pattern)
+        .on_hover_text("Regex applied to the full message text (case-insensitive). Invalid patterns are highlighted in red.")
         .changed();
     if re_changed {
         let pattern = state.filter_state.regex_pattern.clone();
@@ -209,7 +248,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // -------------------------------------------------------------------------
     // Time range filter
     // -------------------------------------------------------------------------
-    ui.label("Time range:");
+    ui.label("Time range:")
+        .on_hover_text("Show only entries from within a rolling time window. The window moves forward with the clock so Live Tail entries stay visible.");
 
     // Quick-select buttons (toggle: click active button to clear it)
     ui.horizontal_wrapped(|ui| {
@@ -295,7 +335,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     if !state.entries.is_empty() {
         ui.add_space(6.0);
         ui.separator();
-        ui.label("Correlation:");
+        ui.label("Correlation:")
+            .on_hover_text("Highlight entries from other files that occurred within a time window around the selected entry. Useful for cross-log troubleshooting.");
 
         let corr_active = state.correlation_active;
         let has_selection = state.selected_index.is_some();
@@ -385,9 +426,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         let filtered = state.filtered_indices.len();
         ui.horizontal(|ui| {
             if filtered == total {
-                ui.label(format!("{total} entries"));
+                ui.label(format!("{total} entries"))
+                    .on_hover_text("Total number of log entries loaded in this session");
             } else {
-                ui.label(format!("{filtered} / {total} entries"));
+                ui.label(format!("{filtered} / {total} entries"))
+                    .on_hover_text(format!(
+                        "{filtered} entries match the current filters out of {total} total"
+                    ));
             }
             // Disabled when filtered set is empty (Rule 16: controls reflect valid actions).
             ui.add_enabled_ui(filtered > 0, |ui| {

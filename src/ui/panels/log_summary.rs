@@ -259,7 +259,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 
             ui.add_space(6.0);
             ui.separator();
-            if ui.button("Close").clicked() {
+            if ui.button("Close")
+                .on_hover_text("Close this summary dialog")
+                .clicked()
+            {
                 close_clicked = true;
             }
         });

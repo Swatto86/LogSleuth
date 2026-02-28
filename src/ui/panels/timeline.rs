@@ -24,11 +24,50 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     if filtered == 0 {
         ui.centered_and_justified(|ui| {
             if state.entries.is_empty() {
-                ui.label(
-                    "No log entries loaded.\nOpen a directory via File \u{2192} Open Directory.",
-                );
+                ui.vertical_centered(|ui| {
+                    ui.add_space(80.0);
+                    ui.label(
+                        egui::RichText::new("\u{1f50d}")
+                            .size(48.0)
+                            .color(egui::Color32::from_rgb(107, 114, 128)),
+                    );
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new("Welcome to LogSleuth")
+                            .size(20.0)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Point at a directory of log files and LogSleuth will\n\
+                             discover, parse, and merge them into a single timeline.\n\n\
+                             To get started:\n\
+                             \u{2022} Use File \u{2192} Open Directory to scan a folder\n\
+                             \u{2022} Use File \u{2192} Open Log(s) to open specific files\n\
+                             \u{2022} Or type a path in the sidebar and press Enter",
+                        )
+                        .color(egui::Color32::from_rgb(156, 163, 175)),
+                    );
+                });
             } else {
-                ui.label("No entries match the current filters.");
+                ui.vertical_centered(|ui| {
+                    ui.add_space(80.0);
+                    ui.label(
+                        egui::RichText::new("No entries match the current filters.")
+                            .size(16.0)
+                            .color(egui::Color32::from_rgb(156, 163, 175)),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Try adjusting severity, text, time range, or file filters\n\
+                             in the Filters tab on the left.",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(107, 114, 128)),
+                    );
+                });
             }
         });
         return;
@@ -37,17 +76,17 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     let font_size = state.ui_font_size;
     let row_height = theme::row_height(font_size);
 
-    // Sort order toolbar — compact single-line bar above the scroll area.
+    // Sort order toolbar -- compact single-line bar above the scroll area.
     ui.horizontal(|ui| {
         let (sort_label, sort_hint) = if state.sort_descending {
             (
                 "\u{2193} Newest first",
-                "Switch to ascending order (oldest first)",
+                "Currently showing newest entries at the top. Click to switch to oldest-first order.",
             )
         } else {
             (
                 "\u{2191} Oldest first",
-                "Switch to descending order (newest first)",
+                "Currently showing oldest entries at the top. Click to switch to newest-first order.",
             )
         };
         if ui
@@ -243,8 +282,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 correlation_update_needed = true;
             }
 
-            // Show full path + timestamp as tooltip on hover.
+            // Show full path + timestamp + severity as tooltip on hover.
             response.on_hover_ui(|ui| {
+                ui.label(
+                    egui::RichText::new(entry.severity.label())
+                        .strong()
+                        .color(sev_colour),
+                );
                 if let Some(ts_full) = entry.timestamp {
                     ui.label(ts_full.format("%Y-%m-%d %H:%M:%S UTC").to_string());
                 }
@@ -252,6 +296,19 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     egui::RichText::new(entry.source_file.display().to_string())
                         .monospace()
                         .small(),
+                );
+                if let Some(ref thread) = entry.thread {
+                    ui.label(
+                        egui::RichText::new(format!("Thread: {thread}"))
+                            .small()
+                            .weak(),
+                    );
+                }
+                ui.label(
+                    egui::RichText::new("Click to view full details below")
+                        .small()
+                        .weak()
+                        .italics(),
                 );
             });
 
