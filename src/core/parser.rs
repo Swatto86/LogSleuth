@@ -40,6 +40,27 @@ pub struct ParseResult {
     pub lines_processed: u64,
 }
 
+/// Truncate `s` to at most `max_len` bytes, ensuring the cut point falls on
+/// a valid UTF-8 character boundary.
+///
+/// `String::truncate` panics when `max_len` is not a `char` boundary. This
+/// helper walks backwards from `max_len` (at most 3 bytes for a 4-byte
+/// sequence) to find the nearest valid boundary, avoiding the panic on
+/// multi-byte content such as CJK text, emoji, or accented characters.
+fn truncate_to_char_boundary(s: &mut String, max_len: usize) {
+    if s.len() <= max_len {
+        return;
+    }
+    let mut boundary = max_len;
+    // UTF-8 continuation bytes have the form 10xxxxxx; walk back at most 3
+    // bytes (the maximum number of continuation bytes in a 4-byte sequence)
+    // to land on a leading byte.
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    s.truncate(boundary);
+}
+
 /// Parse a log file using the given format profile.
 ///
 /// Reads the file content and applies the profile's line_pattern to extract
@@ -226,11 +247,11 @@ pub fn parse_content(
         // without bound (memory safety — Rule 11 resource bounds).
         if let Some(last) = entries.last_mut() {
             if last.message.len() > config.max_entry_size {
-                last.message.truncate(config.max_entry_size);
+                truncate_to_char_boundary(&mut last.message, config.max_entry_size);
                 last.message.push_str("... [truncated]");
             }
             if last.raw_text.len() > config.max_entry_size {
-                last.raw_text.truncate(config.max_entry_size);
+                truncate_to_char_boundary(&mut last.raw_text, config.max_entry_size);
                 last.raw_text.push_str("... [truncated]");
             }
         }
@@ -323,9 +344,13 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                     let fixed = if s.len() > 20 {
                         let tail = &s[s.len().saturating_sub(5)..];
                         if !tail.contains(':') && (tail.starts_with('+') || tail.starts_with('-')) {
+                            // Strip the 5-char compact offset (e.g. "+0530") and
+                            // replace with the colon-separated form ("+05:30").
+                            // Bug fix: previously used `s.len() - 4` which kept
+                            // the sign character, producing "+...++05:30".
                             format!(
                                 "{}{}",
-                                &s[..s.len() - 4],
+                                &s[..s.len() - 5],
                                 &format!("{}:{}", &tail[..3], &tail[3..])
                             )
                         } else {
@@ -749,6 +774,79 @@ info = ["Info"]
         assert!(result.entries[0].message.ends_with("... [truncated]"));
     }
 
+    /// Regression: truncation at a byte offset that lands inside a multi-byte
+    /// UTF-8 character must NOT panic.  Previously `String::truncate` was called
+    /// directly, which panics on non-char-boundary offsets.  The fix uses
+    /// `truncate_to_char_boundary` which walks back to the nearest valid boundary.
+    #[test]
+    fn test_parse_entry_truncation_multibyte_utf8() {
+        let profile = make_test_profile();
+        // Build a message where multi-byte characters straddle the truncation
+        // boundary.  Each emoji is 4 bytes in UTF-8.
+        let emoji_msg = "\u{1F600}".repeat(300); // 1200 bytes
+        let content = format!("[2024-01-15 14:30:22] Error {emoji_msg}");
+
+        // max_entry_size falls inside a 4-byte emoji sequence.
+        // 7 ("Error ") + 4*N bytes of emoji; pick 25 = 7 + 4*4 + 2 → mid-emoji.
+        let config = ParseConfig {
+            max_entry_size: 25,
+            ..ParseConfig::default()
+        };
+
+        // Must not panic.
+        let result = parse_content(&content, &PathBuf::from("utf8.log"), &profile, &config, 0);
+
+        assert_eq!(result.entries.len(), 1);
+        assert!(result.entries[0].message.ends_with("... [truncated]"));
+        // The truncated portion must be valid UTF-8 (no partial sequences).
+        // This is implicitly verified because `message` is a String — Rust
+        // guarantees String contents are valid UTF-8.
+    }
+
+    // -------------------------------------------------------------------------
+    // truncate_to_char_boundary unit tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_truncate_char_boundary_ascii() {
+        let mut s = String::from("hello world");
+        truncate_to_char_boundary(&mut s, 5);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn test_truncate_char_boundary_noop_when_shorter() {
+        let mut s = String::from("hi");
+        truncate_to_char_boundary(&mut s, 100);
+        assert_eq!(s, "hi");
+    }
+
+    #[test]
+    fn test_truncate_char_boundary_mid_2byte() {
+        // 'e' with acute: U+00E9 is 2 bytes (0xC3 0xA9)
+        let mut s = String::from("caf\u{00E9}!"); // 6 bytes: c(1) a(1) f(1) e-acute(2) !(1)
+                                                  // Truncating at byte 4 lands inside the 2-byte e-acute.
+        truncate_to_char_boundary(&mut s, 4);
+        assert_eq!(s, "caf"); // walks back to byte 3
+    }
+
+    #[test]
+    fn test_truncate_char_boundary_mid_4byte() {
+        // U+1F600 (grinning face) is 4 bytes
+        let mut s = String::from("\u{1F600}abc"); // 7 bytes: emoji(4) a(1) b(1) c(1)
+                                                  // Truncating at byte 2 lands inside the 4-byte emoji.
+        truncate_to_char_boundary(&mut s, 2);
+        assert_eq!(s, ""); // walks back to byte 0
+    }
+
+    #[test]
+    fn test_truncate_char_boundary_exact_boundary() {
+        let mut s = String::from("\u{1F600}abc"); // 7 bytes
+                                                  // Truncating at byte 4 is exactly after the emoji (a valid boundary).
+        truncate_to_char_boundary(&mut s, 4);
+        assert_eq!(s, "\u{1F600}");
+    }
+
     // -------------------------------------------------------------------------
     // Timestamp parsing tests
     // -------------------------------------------------------------------------
@@ -860,6 +958,35 @@ info = ["Info"]
         assert_eq!(
             sniff("2024-01-15T14:30:22+05:30 something"),
             "2024-01-15 09:00:22", // converted to UTC
+        );
+    }
+
+    /// Tier 1: RFC 3339 with compact (colonless) positive timezone offset.
+    /// Regression: previously `s.len() - 4` kept the sign character, producing
+    /// a double-sign like "...++05:30" which failed to parse.
+    #[test]
+    fn test_sniff_rfc3339_compact_offset_positive() {
+        assert_eq!(
+            sniff("2024-01-15T14:30:22+0530 something"),
+            "2024-01-15 09:00:22", // +05:30 converted to UTC
+        );
+    }
+
+    /// Tier 1: RFC 3339 with compact negative timezone offset.
+    #[test]
+    fn test_sniff_rfc3339_compact_offset_negative() {
+        assert_eq!(
+            sniff("2024-01-15T14:30:22-0800 something"),
+            "2024-01-15 22:30:22", // -08:00 converted to UTC
+        );
+    }
+
+    /// Tier 1: RFC 3339 with compact offset and fractional seconds.
+    #[test]
+    fn test_sniff_rfc3339_compact_offset_with_millis() {
+        assert_eq!(
+            sniff("2024-01-15T14:30:22.999+0530 something"),
+            "2024-01-15 09:00:22", // +05:30 converted to UTC
         );
     }
 
