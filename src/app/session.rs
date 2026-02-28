@@ -78,6 +78,40 @@ pub struct SessionData {
     /// Applied every frame; persisted so the user's preference survives restarts.
     #[serde(default = "default_font_size")]
     pub ui_font_size: f32,
+
+    /// Whether the UI is rendering in dark mode (`true`) or light mode (`false`).
+    /// Defaults to `true` (dark mode) for backwards compatibility with sessions
+    /// that pre-date this field.
+    #[serde(default = "default_dark_mode")]
+    pub dark_mode: bool,
+
+    /// Timeline sort order: `true` = descending (newest first), `false` = ascending.
+    #[serde(default)]
+    pub sort_descending: bool,
+
+    /// Whether auto-scroll is active during Live Tail.
+    #[serde(default = "default_tail_auto_scroll")]
+    pub tail_auto_scroll: bool,
+
+    /// Maximum number of files to ingest per scan.
+    #[serde(default = "default_max_files_limit")]
+    pub max_files_limit: usize,
+
+    /// Maximum total log entries to hold in memory.
+    #[serde(default = "default_max_total_entries")]
+    pub max_total_entries: usize,
+
+    /// Maximum directory recursion depth for scans.
+    #[serde(default = "default_max_scan_depth")]
+    pub max_scan_depth: usize,
+
+    /// Live tail poll interval in milliseconds.
+    #[serde(default = "default_tail_poll_interval_ms")]
+    pub tail_poll_interval_ms: u64,
+
+    /// Directory watcher poll interval in milliseconds.
+    #[serde(default = "default_dir_watch_poll_interval_ms")]
+    pub dir_watch_poll_interval_ms: u64,
 }
 
 fn default_correlation_window() -> i64 {
@@ -86,6 +120,34 @@ fn default_correlation_window() -> i64 {
 
 fn default_font_size() -> f32 {
     crate::util::constants::DEFAULT_FONT_SIZE
+}
+
+fn default_dark_mode() -> bool {
+    true
+}
+
+fn default_tail_auto_scroll() -> bool {
+    true
+}
+
+fn default_max_files_limit() -> usize {
+    crate::util::constants::DEFAULT_MAX_FILES
+}
+
+fn default_max_total_entries() -> usize {
+    crate::util::constants::MAX_TOTAL_ENTRIES
+}
+
+fn default_max_scan_depth() -> usize {
+    crate::util::constants::DEFAULT_MAX_DEPTH
+}
+
+fn default_tail_poll_interval_ms() -> u64 {
+    crate::util::constants::TAIL_POLL_INTERVAL_MS
+}
+
+fn default_dir_watch_poll_interval_ms() -> u64 {
+    crate::util::constants::DIR_WATCH_POLL_INTERVAL_MS
 }
 
 /// Serialisable snapshot of `FilterState`.
@@ -236,6 +298,14 @@ mod tests {
             correlation_window_secs: 60,
             discovery_date_input: "2025-06-01 08:00:00".to_string(),
             ui_font_size: 14.0,
+            dark_mode: false,
+            sort_descending: true,
+            tail_auto_scroll: false,
+            max_files_limit: 250,
+            max_total_entries: 500_000,
+            max_scan_depth: 5,
+            tail_poll_interval_ms: 1_000,
+            dir_watch_poll_interval_ms: 4_000,
         }
     }
 
@@ -265,6 +335,22 @@ mod tests {
             loaded.discovery_date_input, "2025-06-01 08:00:00",
             "discovery_date_input must survive a save/load round-trip"
         );
+        // User preferences must round-trip.
+        assert!(!loaded.dark_mode, "dark_mode must survive round-trip");
+        assert!(
+            loaded.sort_descending,
+            "sort_descending must survive round-trip"
+        );
+        assert!(
+            !loaded.tail_auto_scroll,
+            "tail_auto_scroll must survive round-trip"
+        );
+        // Options / ingest limits must round-trip.
+        assert_eq!(loaded.max_files_limit, 250);
+        assert_eq!(loaded.max_total_entries, 500_000);
+        assert_eq!(loaded.max_scan_depth, 5);
+        assert_eq!(loaded.tail_poll_interval_ms, 1_000);
+        assert_eq!(loaded.dir_watch_poll_interval_ms, 4_000);
     }
 
     /// Load must return None when the file does not exist (first run).

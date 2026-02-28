@@ -734,7 +734,9 @@ impl AppState {
             filter_parts.push(format!("Severity: {}", sevs.join("+")));
         }
         if let Some(secs) = self.filter_state.relative_time_secs {
-            if secs < 3_600 {
+            if secs < 60 {
+                filter_parts.push(format!("Last {secs}s"));
+            } else if secs < 3_600 {
                 filter_parts.push(format!("Last {}m", secs / 60));
             } else {
                 filter_parts.push(format!("Last {}h", secs / 3_600));
@@ -761,7 +763,9 @@ impl AppState {
             filter_parts.push("Bookmarks only".to_string());
         }
         if let Some(secs) = self.activity_window_secs {
-            if secs < 3_600 {
+            if secs < 60 {
+                filter_parts.push(format!("Activity window: {secs}s"));
+            } else if secs < 3_600 {
                 filter_parts.push(format!("Activity window: {}m", secs / 60));
             } else {
                 filter_parts.push(format!("Activity window: {}h", secs / 3_600));
@@ -1006,6 +1010,14 @@ impl AppState {
             correlation_window_secs: self.correlation_window_secs,
             discovery_date_input: self.discovery_date_input.clone(),
             ui_font_size: self.ui_font_size,
+            dark_mode: self.dark_mode,
+            sort_descending: self.sort_descending,
+            tail_auto_scroll: self.tail_auto_scroll,
+            max_files_limit: self.max_files_limit,
+            max_total_entries: self.max_total_entries,
+            max_scan_depth: self.max_scan_depth,
+            tail_poll_interval_ms: self.tail_poll_interval_ms,
+            dir_watch_poll_interval_ms: self.dir_watch_poll_interval_ms,
         };
         if let Err(e) = crate::app::session::save(&data, session_path) {
             tracing::warn!(error = %e, "Failed to save session");
@@ -1068,6 +1080,16 @@ impl AppState {
         // applies the same modified_since cutoff as the original scan.
         self.discovery_date_input = data.discovery_date_input;
         self.ui_font_size = data.ui_font_size;
+        // Restore user preferences so they survive application restarts.
+        self.dark_mode = data.dark_mode;
+        self.sort_descending = data.sort_descending;
+        self.tail_auto_scroll = data.tail_auto_scroll;
+        // Restore options / ingest limits.
+        self.max_files_limit = data.max_files_limit;
+        self.max_total_entries = data.max_total_entries;
+        self.max_scan_depth = data.max_scan_depth;
+        self.tail_poll_interval_ms = data.tail_poll_interval_ms;
+        self.dir_watch_poll_interval_ms = data.dir_watch_poll_interval_ms;
     }
 }
 
@@ -1499,6 +1521,14 @@ mod tests {
             correlation_window_secs: crate::util::constants::DEFAULT_CORRELATION_WINDOW_SECS,
             discovery_date_input: String::new(),
             ui_font_size: crate::util::constants::DEFAULT_FONT_SIZE,
+            dark_mode: true,
+            sort_descending: false,
+            tail_auto_scroll: true,
+            max_files_limit: crate::util::constants::DEFAULT_MAX_FILES,
+            max_total_entries: crate::util::constants::MAX_TOTAL_ENTRIES,
+            max_scan_depth: crate::util::constants::DEFAULT_MAX_DEPTH,
+            tail_poll_interval_ms: crate::util::constants::TAIL_POLL_INTERVAL_MS,
+            dir_watch_poll_interval_ms: crate::util::constants::DIR_WATCH_POLL_INTERVAL_MS,
         };
 
         state.restore_from_session(data);

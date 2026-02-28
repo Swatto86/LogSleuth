@@ -550,7 +550,10 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             state.discovery_date_input.clear();
             // Clear means "scan all files": trigger a rescan immediately when a
             // path is already configured so the user doesn't have to press Open.
-            state.pending_scan = state.scan_path.clone();
+            // Guard against interrupting an active scan (Bug fix).
+            if !state.scan_in_progress {
+                state.pending_scan = state.scan_path.clone();
+            }
         }
     });
 
@@ -603,7 +606,7 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             did_update_date = true;
         }
     });
-    if did_update_date {
+    if did_update_date && !state.scan_in_progress {
         state.pending_scan = state.scan_path.clone();
     }
 
