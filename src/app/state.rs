@@ -297,6 +297,34 @@ pub struct AppState {
     /// Pure UI state — not saved to the session file.
     pub directory_path_input: String,
 
+    // -------------------------------------------------------------------------
+    // UNC / network credentials
+    // -------------------------------------------------------------------------
+    /// Username for authenticating to a UNC path (e.g. `DOMAIN\user`).
+    /// Pure UI state — never persisted to the session file.
+    pub unc_username: String,
+
+    /// Password for authenticating to a UNC path.
+    /// Pure UI state — NEVER persisted, NEVER logged (Rule 12).
+    pub unc_password: String,
+
+    /// Share root (`\\server\share`) of the currently authenticated network
+    /// connection established via `net use`.  Used to disconnect on session
+    /// clear so stale connections do not accumulate.
+    /// `None` means no authenticated UNC connection is active.
+    pub unc_connected_share: Option<String>,
+
+    /// Holds the last error message from a `net use` attempt so the UI can
+    /// display it inline next to the credentials section.
+    /// Cleared when the user modifies the username or password fields.
+    pub unc_connect_error: Option<String>,
+
+    /// Set by the credentials UI "Connect" button (or implicitly by "Open" when
+    /// credentials are populated) to request a `net use` authentication pass.
+    /// Consumed and cleared by `gui.rs` before the pending-scan handler runs so
+    /// the connection is always established before the discovery phase begins.
+    pub pending_unc_connect: bool,
+
     /// Path to the user external-profiles directory (`%APPDATA%\LogSleuth\profiles\`).
     /// Set by main.rs after platform paths are resolved.  `None` only if platform
     /// path resolution failed entirely (should not happen in normal use).
@@ -364,6 +392,11 @@ impl AppState {
             discovery_date_input: String::new(),
             sidebar_tab: 0,
             directory_path_input: String::new(),
+            unc_username: String::new(),
+            unc_password: String::new(),
+            unc_connected_share: None,
+            unc_connect_error: None,
+            pending_unc_connect: false,
             user_profiles_dir: None,
             request_reload_profiles: false,
         }
@@ -774,6 +807,14 @@ impl AppState {
         self.total_files_found = 0;
         self.pending_replace_files = None;
         self.request_new_session = false;
+        // Clear UNC password and error state on session clear (Rule 12).
+        // Username is preserved as a convenience so re-scanning the same UNC
+        // path does not require re-typing credentials.
+        // unc_connected_share is intentionally NOT cleared here; gui.rs
+        // disconnects the share first and then sets it to None itself.
+        self.unc_password.clear();
+        self.unc_connect_error = None;
+        self.pending_unc_connect = false;
     }
 
     /// Reset to the initial blank state: clears everything `clear()` clears

@@ -437,6 +437,42 @@ impl eframe::App for LogSleuthApp {
         }
 
         // ---- Handle flags set by discovery panel ----
+        // pending_unc_connect: user clicked "Connect" (or "Open" on a UNC path
+        // with credentials filled).  Runs `net use` synchronously — the brief
+        // UI freeze (~1-2 s) is acceptable for a one-time authentication step.
+        // Handled BEFORE pending_scan so the connection is always established
+        // before discovery begins.
+        if std::mem::take(&mut self.state.pending_unc_connect) {
+            let share = crate::platform::unc_auth::unc_share_root(&std::path::PathBuf::from(
+                self.state.directory_path_input.trim(),
+            ));
+            if let Some(ref share_root) = share {
+                tracing::info!(share = %share_root, "Connecting to UNC share");
+                match crate::platform::unc_auth::connect_unc(
+                    share_root,
+                    &self.state.unc_username,
+                    // Password intentionally not included in log (Rule 12).
+                    &self.state.unc_password,
+                ) {
+                    Ok(()) => {
+                        self.state.unc_connected_share = Some(share_root.clone());
+                        self.state.unc_connect_error = None;
+                        self.state.status_message = format!("Connected to {share_root}.");
+                    }
+                    Err(e) => {
+                        tracing::warn!(share = %share_root, error = %e, "UNC connect failed");
+                        self.state.unc_connect_error = Some(e.to_string());
+                        self.state.unc_connected_share = None;
+                        // Cancel the pending scan — no point scanning without access.
+                        self.state.pending_scan = None;
+                    }
+                }
+            } else {
+                // Path does not look like a valid UNC share; ignore silently.
+                tracing::debug!("pending_unc_connect set but no valid share root found");
+            }
+        }
+
         // pending_scan: a panel requested a new scan via Open Directory button.
         if let Some(path) = self.state.pending_scan.take() {
             // Stop any current dir watcher before starting the new scan.
@@ -606,6 +642,11 @@ impl eframe::App for LogSleuthApp {
             // re-populate the state we are about to clear.
             if self.state.scan_in_progress {
                 self.scan_manager.cancel_scan();
+            }
+            // Disconnect any active UNC network connection before clearing state
+            // so stale `net use` connections do not accumulate across sessions.
+            if let Some(share) = self.state.unc_connected_share.take() {
+                crate::platform::unc_auth::disconnect_unc(&share);
             }
             self.state.new_session();
             // Persist the blank state so the next launch starts fresh and does

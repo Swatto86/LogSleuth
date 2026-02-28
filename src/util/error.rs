@@ -258,12 +258,16 @@ impl fmt::Display for DiscoveryError {
             Self::NotADirectory { path } => {
                 write!(f, "Scan path '{}' is not a directory", path.display())
             }
-            Self::PermissionDenied { path, source } => {
-                write!(
-                    f,
-                    "Permission denied accessing '{}': {source}",
-                    path.display()
-                )
+            Self::PermissionDenied { path, .. } => {
+                let p = path.display();
+                let hint = if path.to_string_lossy().starts_with("\\\\")
+                    || path.to_string_lossy().starts_with("//")
+                {
+                    " Use the Network Credentials section to connect with a username and password."
+                } else {
+                    ""
+                };
+                write!(f, "Access denied to '{p}'.{hint}")
             }
             Self::MaxFilesExceeded { max } => {
                 write!(

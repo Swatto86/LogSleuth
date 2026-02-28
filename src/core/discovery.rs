@@ -127,37 +127,68 @@ where
     use crate::util::constants;
 
     // --- Pre-flight validation (Rule 17) ---
-    // Run existence and directory checks on a background thread with a
-    // short timeout.  On a UNC/SMB path whose host is unreachable, calls like
-    // `Path::exists()` can block for 30+ seconds while Windows retries the
-    // name-resolution / connect cycle.  If the check times out we treat the
-    // path as not found rather than hanging the scan thread (Rule 11).
+    // Run the metadata check on a background thread with a short timeout.
+    // On a UNC/SMB path whose host is unreachable, `fs::metadata()` can block
+    // for 30+ seconds while Windows retries the name-resolution / connect cycle.
+    // Running it in a thread lets us enforce a wall-clock deadline (Rule 11).
+    //
+    // We use `fs::metadata()` rather than `Path::exists()` / `Path::is_dir()`
+    // because those helpers map ALL errors — including PermissionDenied — to
+    // `false`, making it impossible to distinguish an access-denied UNC path
+    // from a path that genuinely does not exist.
     const PREFLIGHT_TIMEOUT_SECS: u64 = 10;
     {
-        // Send a 3-tuple: (is_dir, exists, path) so that the entire check —
-        // including the secondary root.exists() call — runs inside the timeout-
-        // guarded thread.  Previously the secondary exists() was called on the
-        // scan thread after the spawn returned, leaving it unprotected against
-        // a 30-second hang on an unreachable UNC host (Rule 11 / Bug 5).
+        /// Outcome categories that need to be communicated back to the scan thread.
+        enum PreflightResult {
+            /// Path exists and is a directory — safe to proceed.
+            IsDirectory,
+            /// Path exists but is a regular file (or symlink) — not a directory.
+            IsFile,
+            /// Path does not exist (fs::metadata returned NotFound).
+            NotFound,
+            /// Path exists but access was denied (requires credentials).
+            AccessDenied(std::io::Error),
+            /// Other I/O error (e.g. invalid name, broken symlink); treated
+            /// the same as not-found for user messaging purposes.
+            OtherError,
+        }
+
         let root_buf = root.to_path_buf();
-        let (tx, rx) = std::sync::mpsc::channel::<(bool, bool)>();
+        let (tx, rx) = std::sync::mpsc::channel::<PreflightResult>();
         std::thread::spawn(move || {
-            // is_dir() returns false for both missing paths and plain files;
-            // exists() distinguishes the two cases.
-            let is_dir = root_buf.is_dir();
-            let exists = if is_dir { true } else { root_buf.exists() };
-            let _ = tx.send((is_dir, exists));
+            let result = match std::fs::metadata(&root_buf) {
+                Ok(meta) => {
+                    if meta.is_dir() {
+                        PreflightResult::IsDirectory
+                    } else {
+                        PreflightResult::IsFile
+                    }
+                }
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::PermissionDenied => PreflightResult::AccessDenied(e),
+                    std::io::ErrorKind::NotFound => PreflightResult::NotFound,
+                    _ => PreflightResult::OtherError,
+                },
+            };
+            let _ = tx.send(result);
         });
+
         match rx.recv_timeout(std::time::Duration::from_secs(PREFLIGHT_TIMEOUT_SECS)) {
-            Ok((true, _)) => {} // root exists and is a directory — proceed
-            Ok((false, true)) => {
+            Ok(PreflightResult::IsDirectory) => {} // root exists and is a directory — proceed
+            Ok(PreflightResult::IsFile) => {
                 return Err(DiscoveryError::NotADirectory {
                     path: root.to_path_buf(),
                 });
             }
-            Ok((false, false)) => {
+            Ok(PreflightResult::NotFound) | Ok(PreflightResult::OtherError) => {
                 return Err(DiscoveryError::RootNotFound {
                     path: root.to_path_buf(),
+                });
+            }
+            Ok(PreflightResult::AccessDenied(source)) => {
+                return Err(DiscoveryError::PermissionDenied {
+                    path: root.to_path_buf(),
+                    source,
                 });
             }
             Err(_) => {

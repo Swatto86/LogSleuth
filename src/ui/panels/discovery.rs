@@ -620,6 +620,96 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             state.request_cancel = true;
         }
     } else {
+        // UNC Network Credentials — collapsible section, always visible.
+        // Lets the user supply credentials before entering the UNC path so
+        // the WNet API can authenticate to the share when "Open" is clicked.
+        {
+            let is_connected = state.unc_connected_share.is_some();
+            let has_error = state.unc_connect_error.is_some();
+            egui::CollapsingHeader::new(
+                egui::RichText::new("\u{1f512} Network Credentials").small(),
+            )
+            .default_open(is_connected || has_error)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Supply credentials when the path requires authentication.",
+                    )
+                    .small()
+                    .weak(),
+                );
+                ui.add_space(4.0);
+
+                egui::Grid::new("unc_cred_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        // Username row.
+                        ui.label(egui::RichText::new("Username:").small());
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut state.unc_username)
+                                .hint_text("user@domain.co.uk")
+                                .desired_width(180.0),
+                        );
+                        if resp.changed() {
+                            state.unc_connect_error = None;
+                        }
+                        ui.end_row();
+
+                        // Password row.
+                        ui.label(egui::RichText::new("Password:").small());
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut state.unc_password)
+                                .hint_text("password")
+                                .password(true)
+                                .desired_width(180.0),
+                        );
+                        if resp.changed() {
+                            state.unc_connect_error = None;
+                        }
+                        ui.end_row();
+                    });
+
+                ui.add_space(4.0);
+
+                // Connect button + status indicator row.
+                ui.horizontal(|ui| {
+                    let can_connect = !state.unc_username.is_empty()
+                        && !state.unc_password.is_empty()
+                        && !state.scan_in_progress;
+                    if ui
+                        .add_enabled(can_connect, egui::Button::new("Connect"))
+                        .on_hover_text(
+                            "Authenticate to the network share using the supplied credentials",
+                        )
+                        .clicked()
+                    {
+                        state.pending_unc_connect = true;
+                    }
+
+                    if let Some(ref share) = state.unc_connected_share {
+                        let label = format!("\u{2714} Connected to {share}");
+                        ui.label(
+                            egui::RichText::new(label)
+                                .small()
+                                .color(egui::Color32::from_rgb(74, 222, 128)),
+                        );
+                    }
+                });
+
+                // Error message from last failed connect attempt.
+                if let Some(ref err_msg) = state.unc_connect_error {
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(format!("\u{2717} {err_msg}"))
+                            .small()
+                            .color(egui::Color32::from_rgb(248, 113, 113)),
+                    );
+                }
+            });
+        }
+        ui.add_space(4.0);
+
         // Path text input — accepts any local, mapped-drive, or UNC path.
         // Committed on Enter or by clicking the "Open" button.
         ui.horizontal(|ui| {
@@ -643,7 +733,16 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 // while Windows retries the SMB connection (~30 s).  The
                 // pre-flight inside discover_files is already timeout-guarded
                 // and will report a clear error if the path is invalid.
-                let p = std::path::PathBuf::from(state.directory_path_input.trim());
+                let input = state.directory_path_input.trim();
+                let is_unc = input.starts_with("\\\\") || input.starts_with("//");
+                // If this is a UNC path and credentials are populated, request a
+                // net-use authentication pass before the scan begins.  gui.rs
+                // consumes pending_unc_connect BEFORE pending_scan so the
+                // connection is always established first.
+                if is_unc && !state.unc_username.is_empty() && !state.unc_password.is_empty() {
+                    state.pending_unc_connect = true;
+                }
+                let p = std::path::PathBuf::from(input);
                 state.pending_scan = Some(p);
             }
         });
