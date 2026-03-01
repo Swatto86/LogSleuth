@@ -258,6 +258,28 @@ pub fn parse_content(
     }
 
     // -------------------------------------------------------------------------
+    // Post-loop entry size enforcement (Rule 11: resource bounds)
+    //
+    // The in-loop truncation check only runs inside the `else` (non-matching
+    // line) branch, so it catches entries that grew via continuation appends.
+    // However, a single matching line whose captured message or raw_text
+    // exceeds max_entry_size — e.g. a 100 KB JSON log line — would escape
+    // truncation entirely because no subsequent non-matching line triggers
+    // the check.  This post-loop pass guarantees every entry is bounded
+    // regardless of how it was created.
+    // -------------------------------------------------------------------------
+    for entry in &mut entries {
+        if entry.message.len() > config.max_entry_size {
+            truncate_to_char_boundary(&mut entry.message, config.max_entry_size);
+            entry.message.push_str("... [truncated]");
+        }
+        if entry.raw_text.len() > config.max_entry_size {
+            truncate_to_char_boundary(&mut entry.raw_text, config.max_entry_size);
+            entry.raw_text.push_str("... [truncated]");
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Timestamp sniff fallback
     //
     // Any entry whose structured capture (or timestamp_format parse) produced
@@ -1256,6 +1278,52 @@ multiline_mode = "raw"
         assert!(
             !content.trim().is_empty(),
             "content is non-empty (fallback eligible)"
+        );
+    }
+
+    /// Regression: a single matching line longer than max_entry_size was never
+    /// truncated because the in-loop truncation check only runs inside the
+    /// non-matching-line else branch (continuation append protection).  The
+    /// post-loop truncation pass added to fix this bug must cap both message
+    /// and raw_text for every entry regardless of origin.
+    #[test]
+    fn test_single_long_matching_line_is_truncated() {
+        let profile = make_test_profile();
+        // Build one matching line whose message is far longer than max_entry_size.
+        let long_body = "x".repeat(2_000);
+        let content = format!("[2024-01-15 14:30:22] Error {long_body}");
+
+        let config = ParseConfig {
+            max_entry_size: 200,
+            ..ParseConfig::default()
+        };
+
+        let result = parse_content(
+            &content,
+            &PathBuf::from("single_line.log"),
+            &profile,
+            &config,
+            0,
+        );
+
+        assert_eq!(result.entries.len(), 1, "should parse exactly one entry");
+        assert!(
+            result.entries[0].message.len() < 300,
+            "message must be truncated (got {} bytes)",
+            result.entries[0].message.len()
+        );
+        assert!(
+            result.entries[0].message.ends_with("... [truncated]"),
+            "truncated message must have the truncation suffix"
+        );
+        assert!(
+            result.entries[0].raw_text.len() < 300,
+            "raw_text must be truncated (got {} bytes)",
+            result.entries[0].raw_text.len()
+        );
+        assert!(
+            result.entries[0].raw_text.ends_with("... [truncated]"),
+            "truncated raw_text must have the truncation suffix"
         );
     }
 }

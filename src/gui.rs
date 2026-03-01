@@ -208,6 +208,13 @@ impl eframe::App for LogSleuthApp {
                             known,
                             DirWatchConfig {
                                 poll_interval_ms: self.state.dir_watch_poll_interval_ms,
+                                // Bug fix: forward the user-configured max depth so the
+                                // watcher monitors the same directory tree depth as the
+                                // initial scan.  Previously used DirWatchConfig::default()
+                                // which hardcoded DEFAULT_MAX_DEPTH, causing new files in
+                                // deeper directories to be silently missed when the user
+                                // increased the depth limit in Options.
+                                max_depth: self.state.max_scan_depth,
                                 // Do NOT forward modified_since to the watcher.  The date
                                 // filter governs which existing files are loaded on the
                                 // initial scan.  For live watching the rule is simpler: any
@@ -709,10 +716,21 @@ impl eframe::App for LogSleuthApp {
                     Some(crate::app::tail::TailFileInfo {
                         path: f.path.clone(),
                         profile,
-                        // Seed from file size at scan time so the first poll
-                        // tick catches any entries appended after the scan
-                        // completed but before tail was activated (the gap).
-                        initial_offset: Some(f.size),
+                        // Bug fix: use the CURRENT file size (live stat) rather
+                        // than the stale DiscoveredFile.size from scan time.
+                        // When tail is stopped and restarted (e.g., after a
+                        // dir-watcher append scan), the file has grown since the
+                        // initial scan.  Using the old size re-reads all content
+                        // between the scan-time size and the current size,
+                        // producing duplicate entries with new IDs.  Falling back
+                        // to f.size when the stat fails preserves the original
+                        // gap-closing behaviour for the first-ever tail start
+                        // (before any writes have occurred).
+                        initial_offset: Some(
+                            std::fs::metadata(&f.path)
+                                .map(|m| m.len())
+                                .unwrap_or(f.size),
+                        ),
                     })
                 })
                 .collect();
@@ -1210,6 +1228,9 @@ impl eframe::App for LogSleuthApp {
                         known,
                         DirWatchConfig {
                             poll_interval_ms: self.state.dir_watch_poll_interval_ms,
+                            // Bug fix: forward user-configured depth limit so the
+                            // watcher covers the same directory tree as the scan.
+                            max_depth: self.state.max_scan_depth,
                             modified_since: None,
                             ..DirWatchConfig::default()
                         },
