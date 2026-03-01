@@ -196,8 +196,21 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    // Initialise logging subsystem
-    util::logging::init(cli.debug, None, None);
+    // Resolve platform paths first so config.toml can be loaded before
+    // logging is initialised (the config may specify a log level).
+    let platform_paths = platform::config::PlatformPaths::resolve();
+
+    // Load and validate config.toml (Rule 13: external configuration,
+    // validated at startup, misconfiguration warns and falls back to defaults).
+    // Loaded before logging init so the [logging] level/file settings take effect.
+    let (app_config, config_warnings) = platform::config::load_config(&platform_paths.config_dir);
+
+    // Initialise logging subsystem with priority: RUST_LOG > CLI > config > default.
+    util::logging::init(
+        cli.debug,
+        app_config.log_level.as_deref(),
+        app_config.log_file.as_deref(),
+    );
 
     tracing::info!(
         version = util::constants::APP_VERSION,
@@ -205,8 +218,10 @@ fn main() {
         "LogSleuth starting"
     );
 
-    // Resolve platform paths
-    let platform_paths = platform::config::PlatformPaths::resolve();
+    // Report any config validation warnings now that logging is ready.
+    for warning in &config_warnings {
+        tracing::warn!("{}", warning);
+    }
 
     // Determine profile directory: CLI override > platform default
     let user_profile_dir = cli
@@ -227,6 +242,14 @@ fn main() {
 
     // Create application state
     let mut state = app::state::AppState::new(profiles, cli.debug);
+
+    // Apply config.toml values where they override defaults (Rule 13).
+    state.max_files_limit = app_config.max_files;
+    state.max_scan_depth = app_config.max_depth;
+    state.dark_mode = app_config.dark_mode;
+    state.correlation_window_secs = app_config.correlation_window_secs;
+    state.correlation_window_input = app_config.correlation_window_secs.to_string();
+    state.ui_font_size = app_config.font_size;
 
     // Expose the external profiles directory to the UI so Options can show it
     // and trigger reloads without a restart.

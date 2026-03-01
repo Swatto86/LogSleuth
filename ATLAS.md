@@ -1,7 +1,7 @@
 # LogSleuth -- Project Atlas
 
-> **Status**: Increment 37 complete — (37) external profiles: `%APPDATA%\LogSleuth\profiles\` auto-loaded at startup; `load_all_profiles(user_dir)` merges user .toml files over built-ins by ID; `AppState` gains `user_profiles_dir` + `request_reload_profiles` fields; Options panel Section 4 shows profile folder path, loaded counts (built-in vs external), Open Folder and Reload Profiles buttons; `gui.rs` handler executes reload immediately on flag; PowerShell generator script (`scripts/New-LogSleuthProfile.ps1`) samples any log directory and emits a ready-to-review .toml; (34) timestamp robustness: `parse_timestamp` 4th fallback (separator normalisation `/`→`-`, `T`→` `) and 5th fallback (year injection for year-less formats); `sniff_timestamp` 12-tier post-parse fallback covering RFC 3339, ISO 8601, log4j comma-millis, slash year-first, dot day-first (Veeam), Apache combined, US/GB slash, Windows DHCP, month-name, BSD syslog year-less, compact ISO, Unix epoch; profile fixes for sccm/intune (`date=` capture), veeam_vbr (ms + space-padded thread), syslog_rfc3164 (year injection comment); (35) US vs GB slash-date disambiguation in Tiers 7 and 8 — first field > 12 → DD/MM, second field > 12 → MM/DD, ambiguous both-≤12 defaults to US; (36) live mtime display in file list: `DirWatchProgress::FileMtimeUpdates` variant, dir_watcher background thread tracks `tracked_mtimes: HashMap<PathBuf, SystemTime>` and sends mtime changes each poll cycle, gui.rs updates `DiscoveredFile::modified` in-place, discovery panel shows compact mtime beside each file (today: `HH:MM:SS`, this year: `D Mon HH:MM`, prior year: `YYYY-MM-DD`) with hover tooltip. 123 tests passing (94 unit + 29 E2E), zero clippy warnings, clean fmt.
-> **Last updated**: 2026-02-27
+> **Status**: Increment 38 complete — (38) full compliance audit against DevWorkflow AI Operating Contract Parts A-E: (a) Rule 2 fix: removed `.unwrap()` panic site in `scan.rs` rayon pool fallback (now returns `ScanProgress::Failed` with actionable message instead of panicking); removed `.expect()` in `parser.rs` `sniff_timestamp` static regex initialisation (now filters out failed compilations gracefully via `try_re()` returning `Option<Regex>`); (b) Rule 13 compliance: implemented `config.toml` loading and validation at startup via `platform::config::load_config()` — deserialises `RawConfig` from `%APPDATA%\LogSleuth\config.toml`, validates each field against named constants with actionable error messages, accumulates all warnings before reporting, falls back to defaults for missing/invalid/unparseable files; `main.rs` loads config before logging init so `[logging] level` and `[logging] file` take effect; validated fields applied to `AppState` (max_files, max_depth, dark_mode, correlation_window_secs, font_size); (c) Rule 18 compliance: created `update-application.sh` Unix release script (bash) with same feature set as `.ps1` — semver validation, cargo build/fmt/clippy/test, git tag/push, old-tag pruning, dry-run/force modes, rollback on failure. 146 tests passing (117 unit + 29 E2E), zero clippy warnings, clean fmt.
+> **Last updated**: 2026-03-01
 
 ---
 
@@ -95,7 +95,7 @@ LogSleuth/
 |   +-- platform/
 |   |   +-- mod.rs
 |   |   +-- fs.rs                # FileReader trait + OS implementations; 128 KB BufReader buffers for network-efficient SMB reads
-|   |   +-- config.rs            # Platform-specific config/data paths
+|   |   +-- config.rs            # Platform-specific config/data paths + config.toml loading/validation (Rule 13: `load_config()` deserialises `RawConfig`, validates against named constants, returns `AppConfig` + warnings)
 |   |   +-- unc_auth.rs          # Windows UNC network authentication via `net use`; **is_unc_path(path)** detects `\\server\share` prefixes; **unc_share_root(path)** extracts the `\\server\share` root from any deeper UNC path; **connect_unc(share, username, password)** runs `net use share password /user:username /persistent:no` with CREATE_NO_WINDOW so no console flashes; pre-emptively disconnects stale connections (avoids Windows error 1219); passwords NEVER logged (Rule 12); **disconnect_unc(share)** runs `net use share /delete /yes` as best-effort cleanup; non-Windows builds compile to no-ops with UncAuthError::NotSupported
 |   +-- util/
 |       +-- mod.rs
@@ -158,7 +158,7 @@ LogSleuth/
 +-- scripts/
 |   +-- New-LogSleuthProfile.ps1  # PowerShell profile generator: samples a log directory, infers timestamp/severity/line patterns, writes a .toml to %APPDATA%\LogSleuth\profiles\ for use as an external profile
 +-- update-application.ps1       # Windows release script
-+-- update-application.sh        # Unix release script
++-- update-application.sh        # Unix release script (bash): semver validation, build/test/lint, git tag/push, old-tag pruning, dry-run/force/rollback
 +-- LogSleuth-Specification.md   # Full specification document
 +-- ATLAS.md                     # This file
 +-- PROGRESS.md                  # Implementation progress tracker
@@ -195,6 +195,7 @@ LogSleuth/
 | `profile::auto_detect(file_name, sample_lines, profiles) -> Option<DetectionResult>` | `core::profile` | `app::scan` background thread. Confidence = content_match ratio + `AUTO_DETECT_FILENAME_BONUS` (0.3) if filename glob matches; threshold is `AUTO_DETECT_MIN_CONFIDENCE` (0.3). A filename match alone is sufficient. |
 | `apply_filters(entries, state) -> Vec<usize>` | `core::filter` | App layer |
 | `load_all_profiles(user_dir) -> (Vec<FormatProfile>, Vec<ProfileError>)` | `app::profile_mgr` | `main.rs` at startup |
+| `load_config(config_dir) -> (AppConfig, Vec<String>)` | `platform::config` | `main.rs` at startup — loads and validates `config.toml`, falls back to defaults for missing/invalid files |
 | `export_csv(entries, path)` / `export_json(entries, path)` | `core::export` | App layer |
 
 ### Extension Points
@@ -274,7 +275,9 @@ RUST_LOG=debug cargo test -- --nocapture
 
 See `config.example.toml` and Specification Section 6.
 
-**Validation**: All config values validated at startup with named-constant limits. Invalid values produce actionable error messages listing the invalid value, the expected range, and the default that will be used.
+**Loading**: `platform::config::load_config()` reads `config.toml` from `%APPDATA%\LogSleuth\config.toml` (or XDG equivalent). Missing file is silently accepted (first-run default). Unparseable file produces a warning and falls back to defaults (fail-fast per Rule 13).
+
+**Validation**: All config values validated at startup with named-constant limits. Invalid values produce actionable error messages listing the invalid value, the expected range, and the default that will be used. All validation errors are accumulated before reporting (Rule 11).
 
 **Versioning**: Config file includes no explicit version field; unknown keys are warned and ignored for forward compatibility.
 

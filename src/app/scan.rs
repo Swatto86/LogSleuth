@@ -560,15 +560,29 @@ fn run_parse_pipeline(
     // is not penalised by excessive context switching.
     let representative = discovered_files.first().map(|f| f.path.as_path());
     let parallelism = compute_scan_parallelism(representative);
-    let pool = rayon::ThreadPoolBuilder::new()
+    let pool = match rayon::ThreadPoolBuilder::new()
         .num_threads(parallelism)
         .thread_name(|idx| format!("logsleuth-scan-{idx}"))
         .build()
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "Failed to build custom rayon pool; using global");
-            // Fallback: build a minimal pool (will use default size).
-            rayon::ThreadPoolBuilder::new().build().unwrap()
-        });
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to build custom rayon pool; trying defaults");
+            match rayon::ThreadPoolBuilder::new().build() {
+                Ok(p) => p,
+                Err(e2) => {
+                    tracing::error!(error = %e2, "Failed to build any rayon pool");
+                    send!(ScanProgress::Failed {
+                        error: format!(
+                            "Could not initialise parallel processing: {e2}. \
+                             Try restarting the application."
+                        ),
+                    });
+                    return;
+                }
+            }
+        }
+    };
 
     let file_results: Vec<FileResult> = pool.install(|| {
         discovered_files

@@ -343,14 +343,26 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
     static SNIFFERS: OnceLock<Vec<Sniffer>> = OnceLock::new();
 
     let sniffers = SNIFFERS.get_or_init(|| {
-        // Helper to compile a regex without panicking at runtime.
-        // Patterns are tested in the unit tests below, so any mistake there
-        // shows up as a failing test rather than a runtime panic.
-        fn re(pat: &str) -> Regex {
-            Regex::new(pat).expect("sniff_timestamp: invalid regex")
+        // Helper to compile a regex. Returns None on error so the containing
+        // Sniffer can be filtered out instead of panicking (Rule 2: no panics
+        // in library code). Patterns are compile-time literals validated by
+        // the test suite; a failure here indicates a programming error.
+        fn try_re(pat: &str) -> Option<Regex> {
+            match Regex::new(pat) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::error!(
+                        pattern = pat,
+                        error = %e,
+                        "sniff_timestamp: failed to compile regex (programming error)"
+                    );
+                    None
+                }
+            }
         }
 
-        vec![
+        // Build candidates, discarding any whose regex failed to compile.
+        let candidates: Vec<Option<Sniffer>> = vec![
             // ------------------------------------------------------------------
             // Tier 1 — RFC 3339 / ISO 8601 with explicit timezone
             // Examples:
@@ -359,39 +371,43 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
             //   2024-01-15T14:30:22+05:30
             //   2024-01-15T14:30:22.999+05:30
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})"),
-                parse: |s| {
-                    // Normalise `+0530` -> `+05:30` so parse_from_rfc3339 accepts it.
-                    let fixed = if s.len() > 20 {
-                        let tail = &s[s.len().saturating_sub(5)..];
-                        if !tail.contains(':') && (tail.starts_with('+') || tail.starts_with('-')) {
-                            // Strip the 5-char compact offset (e.g. "+0530") and
-                            // replace with the colon-separated form ("+05:30").
-                            // Bug fix: previously used `s.len() - 4` which kept
-                            // the sign character, producing "+...++05:30".
-                            format!(
-                                "{}{}",
-                                &s[..s.len() - 5],
-                                &format!("{}:{}", &tail[..3], &tail[3..])
-                            )
+            try_re(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})").map(
+                |r| Sniffer {
+                    re: r,
+                    parse: |s| {
+                        // Normalise `+0530` -> `+05:30` so parse_from_rfc3339 accepts it.
+                        let fixed = if s.len() > 20 {
+                            let tail = &s[s.len().saturating_sub(5)..];
+                            if !tail.contains(':')
+                                && (tail.starts_with('+') || tail.starts_with('-'))
+                            {
+                                // Strip the 5-char compact offset (e.g. "+0530") and
+                                // replace with the colon-separated form ("+05:30").
+                                // Bug fix: previously used `s.len() - 4` which kept
+                                // the sign character, producing "+...++05:30".
+                                format!(
+                                    "{}{}",
+                                    &s[..s.len() - 5],
+                                    &format!("{}:{}", &tail[..3], &tail[3..])
+                                )
+                            } else {
+                                s.to_owned()
+                            }
                         } else {
                             s.to_owned()
-                        }
-                    } else {
-                        s.to_owned()
-                    };
-                    DateTime::parse_from_rfc3339(&fixed)
-                        .ok()
-                        .map(|dt| dt.into())
+                        };
+                        DateTime::parse_from_rfc3339(&fixed)
+                            .ok()
+                            .map(|dt| dt.into())
+                    },
                 },
-            },
+            ),
             // ------------------------------------------------------------------
             // Tier 2 — ISO 8601 with comma milliseconds (log4j style)
             // Example: 2024-01-15 14:30:22,123
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2},\d+"),
+            try_re(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2},\d+").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     // Replace comma with dot so chrono's %.f specifier accepts it.
                     let s = s.replace(',', ".").replace('T', " ");
@@ -399,7 +415,7 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
             // Tier 3 — ISO 8601 without timezone, optional dot-millis
             // Examples:
@@ -408,8 +424,8 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
             //   2024-01-15T14:30:22
             //   2024-01-15T14:30:22.123456
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?"),
+            try_re(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     let s = s.replace('T', " ");
                     // Try with fractional seconds first, then without.
@@ -418,13 +434,13 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
             // Tier 4 — Slash year-first: YYYY/MM/DD HH:MM:SS[.mmm]
             // Example: 2024/01/15 14:30:22
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{4}/\d{2}/\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?"),
+            try_re(r"\d{4}/\d{2}/\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     let s = s.replace('/', "-").replace('T', " ");
                     NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
@@ -432,40 +448,40 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
             // Tier 5 — Dot day-first: DD.MM.YYYY HH:MM:SS[.mmm]  (Veeam style)
             // Example: 26.02.2026 22:07:56.535
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}(?:\.\d+)?"),
+            try_re(r"\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}(?:\.\d+)?").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     NaiveDateTime::parse_from_str(s, "%d.%m.%Y %H:%M:%S%.f")
                         .or_else(|_| NaiveDateTime::parse_from_str(s, "%d.%m.%Y %H:%M:%S"))
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
             // Tier 6 — Apache combined log: DD/Mon/YYYY:HH:MM:SS +ZZZZ
             // Example: 15/Jan/2024:14:30:22 +0000
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}"),
+            try_re(r"\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     DateTime::parse_from_str(s, "%d/%b/%Y:%H:%M:%S %z")
                         .ok()
                         .map(|dt| dt.into())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
             // Tier 7 — Slash-delimited date + time: handles both MM/DD/YYYY
             //          (US) and DD/MM/YYYY (GB/EU).
             //
             // Disambiguation strategy (same logic used in Tier 8):
-            //   first field > 12  → unambiguously DD/MM/YYYY  (e.g. 15/01/2024)
-            //   second field > 12 → unambiguously MM/DD/YYYY  (e.g. 01/15/2024)
-            //   both ≤ 12         → ambiguous; try MM/DD/YYYY (US) first,
+            //   first field > 12  -> unambiguously DD/MM/YYYY  (e.g. 15/01/2024)
+            //   second field > 12 -> unambiguously MM/DD/YYYY  (e.g. 01/15/2024)
+            //   both <= 12        -> ambiguous; try MM/DD/YYYY (US) first,
             //                       then DD/MM/YYYY (GB) as fallback.
             //
             // NOTE: truly ambiguous dates such as 01/02/2024 cannot be resolved
@@ -473,8 +489,8 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
             // as the default.  If the source is consistently GB/EU, use a
             // profile with an explicit timestamp_format = "%d/%m/%Y %H:%M:%S".
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}"),
+            try_re(r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     // Extract the two leading numeric fields.
                     let mut parts = s.splitn(3, '/');
@@ -504,16 +520,16 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                             .map(|ndt| ndt.and_utc())
                     }
                 },
-            },
+            }),
             // ------------------------------------------------------------------
-            // Tier 8 — Windows DHCP two-digit year: MM/DD/YY,HH:MM:SS or
+            // Tier 8 -- Windows DHCP two-digit year: MM/DD/YY,HH:MM:SS or
             //          DD/MM/YY,HH:MM:SS.  Same disambiguation as Tier 7.
             // Examples:
-            //   01/15/24,14:30:22  → US  (second > 12, unambiguous)
-            //   15/01/24,14:30:22  → GB  (first > 12, unambiguous)
+            //   01/15/24,14:30:22  -> US  (second > 12, unambiguous)
+            //   15/01/24,14:30:22  -> GB  (first > 12, unambiguous)
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{2}/\d{2}/\d{2},\d{2}:\d{2}:\d{2}"),
+            try_re(r"\d{2}/\d{2}/\d{2},\d{2}:\d{2}:\d{2}").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     let mut parts = s.splitn(3, '/');
                     let (first, second) = match (
@@ -540,16 +556,16 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                             .map(|ndt| ndt.and_utc())
                     }
                 },
-            },
+            }),
             // ------------------------------------------------------------------
-            // Tier 9 — Month-name with 4-digit year
+            // Tier 9 -- Month-name with 4-digit year
             // Examples:
             //   Jan 15 2024 14:30:22
             //   January 15, 2024 14:30:22
             //   Jan 15, 2024 14:30:22
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"[A-Z][a-z]{2,8} \d{1,2},? \d{4} \d{2}:\d{2}:\d{2}"),
+            try_re(r"[A-Z][a-z]{2,8} \d{1,2},? \d{4} \d{2}:\d{2}:\d{2}").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     // Normalise: remove optional comma, collapse multiple spaces.
                     let s = s.replace(',', " ");
@@ -558,14 +574,14 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
-            // Tier 10 — BSD syslog year-less: Mon DD HH:MM:SS
+            // Tier 10 -- BSD syslog year-less: Mon DD HH:MM:SS
             // Example: Jan 15 14:30:22  (space-padded single digit: Jan  5)
             // Year is injected from current UTC year (best-effort).
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2}"),
+            try_re(r"[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2}").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     let year = Utc::now().year();
                     let with_year = format!("{year} {s}");
@@ -573,27 +589,27 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
-            // Tier 11 — Compact ISO: YYYYMMDDTHHMMSS or YYYYMMDD HHMMSS
+            // Tier 11 -- Compact ISO: YYYYMMDDTHHMMSS or YYYYMMDD HHMMSS
             // Example: 20240115T143022
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"\d{8}[T ]\d{6}"),
+            try_re(r"\d{8}[T ]\d{6}").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     let s = s.replace(' ', "T");
                     NaiveDateTime::parse_from_str(&s, "%Y%m%dT%H%M%S")
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
-            },
+            }),
             // ------------------------------------------------------------------
-            // Tier 12 — Unix epoch seconds (10 digits, only at line start to
+            // Tier 12 -- Unix epoch seconds (10 digits, only at line start to
             // avoid matching large port numbers / PIDs mid-line).
             // Example: 1705329022 ... or 1705329022.123 ...
             // ------------------------------------------------------------------
-            Sniffer {
-                re: re(r"^\d{10}(?:\.\d+)?"),
+            try_re(r"^\d{10}(?:\.\d+)?").map(|r| Sniffer {
+                re: r,
                 parse: |s| {
                     let (secs_str, _) = s.split_once('.').unwrap_or((s, ""));
                     secs_str
@@ -601,8 +617,9 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
                         .ok()
                         .and_then(|secs| DateTime::from_timestamp(secs, 0))
                 },
-            },
-        ]
+            }),
+        ];
+        candidates.into_iter().flatten().collect()
     });
 
     for sniffer in sniffers {
