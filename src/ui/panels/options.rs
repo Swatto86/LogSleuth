@@ -435,6 +435,13 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                 tracing::warn!(dir = %dir.display(), error = %e, "Failed to open profiles folder");
                                 state.status_message = format!("Cannot open folder: {e}");
                             }
+                            #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+                            {
+                                state.status_message = format!(
+                                    "Profile folder: {}  (auto-open not supported on this platform)",
+                                    dir.display()
+                                );
+                            }
                         }
                     }
                 }

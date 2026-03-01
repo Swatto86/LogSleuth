@@ -240,6 +240,12 @@ pub const MAX_CORRELATION_WINDOW_SECS: i64 = 3_600;
 /// Debounce delay in milliseconds for text filter input.
 pub const DEFAULT_FILTER_DEBOUNCE_MS: u64 = 300;
 
+/// Maximum value (in minutes) accepted by custom time-range and activity-window
+/// text inputs. Prevents meaningless multi-million-year windows and avoids the
+/// `u64` overflow edge case in `checked_mul(60)` for extremely large inputs.
+/// 525 600 minutes = one year — generous upper bound for any realistic use.
+pub const MAX_CUSTOM_TIME_MINUTES: u64 = 525_600;
+
 /// Default UI body font size in points.
 pub const DEFAULT_FONT_SIZE: f32 = 14.5;
 

@@ -113,9 +113,12 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     // Build the scroll area; optionally snap to the top for descending mode.
     let snap_top = state.scroll_top_requested && state.sort_descending && state.tail_auto_scroll;
-    if snap_top {
-        state.scroll_top_requested = false;
-    }
+    // Bug fix: always clear the flag after reading it. Previously the flag
+    // was only cleared when snap_top was true (sort_descending && tail_auto_scroll).
+    // If the user toggled either setting between the frame that set the flag
+    // and the next render, the flag persisted indefinitely and caused an
+    // unexpected scroll-to-top when the original conditions were re-enabled.
+    state.scroll_top_requested = false;
     let mut scroll_area = egui::ScrollArea::vertical()
         .auto_shrink([false; 2])
         .stick_to_bottom(stick);

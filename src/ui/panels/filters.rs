@@ -294,7 +294,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             if let Ok(mins) = trimmed.parse::<u64>() {
                 // Bug fix: use checked_mul to prevent u64 overflow (silent
                 // wrapping in release / panic in debug) for very large inputs.
-                if mins > 0 {
+                // Bug fix: cap to MAX_CUSTOM_TIME_MINUTES so users cannot set
+                // meaningless multi-million-year windows that bypass the filter.
+                if mins > 0 && mins <= crate::util::constants::MAX_CUSTOM_TIME_MINUTES {
                     if let Some(secs) = mins.checked_mul(60) {
                         state.filter_state.relative_time_secs = Some(secs);
                         state.apply_filters();

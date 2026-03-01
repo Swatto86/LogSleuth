@@ -293,7 +293,8 @@ pub fn load_config(config_dir: &Path) -> (AppConfig, Vec<String>) {
 
     // -- UI: correlation_window_seconds --
     if let Some(secs) = raw.ui.correlation_window_seconds {
-        if (constants::MIN_CORRELATION_WINDOW_SECS..=constants::MAX_CORRELATION_WINDOW_SECS).contains(&secs)
+        if (constants::MIN_CORRELATION_WINDOW_SECS..=constants::MAX_CORRELATION_WINDOW_SECS)
+            .contains(&secs)
         {
             config.correlation_window_secs = secs;
         } else {

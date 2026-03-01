@@ -986,23 +986,31 @@ fn matches_file_search(query: &str, name: &str) -> bool {
 
 /// Iterative glob matcher (case-insensitive inputs expected).
 ///
-/// `*` matches 0..N characters; `?` matches exactly one.
+/// `*` matches 0..N characters; `?` matches exactly one Unicode character.
 /// Uses a two-pointer approach that runs in O(n*m) worst case without
 /// exponential backtracking, making it safe for any user-typed pattern.
+///
+/// Bug fix: previous implementation operated on raw bytes (`&[u8]`), which
+/// caused `?` to match a single byte instead of a single Unicode character.
+/// For file names containing multi-byte UTF-8 characters (e.g. accented
+/// letters), `?` would match only the first byte of the character, causing
+/// the overall match to fail. Now operates on `char` slices for correctness.
 fn glob_match(pat: &str, txt: &str) -> bool {
-    glob_match_bytes(pat.as_bytes(), txt.as_bytes())
+    let pat_chars: Vec<char> = pat.chars().collect();
+    let txt_chars: Vec<char> = txt.chars().collect();
+    glob_match_chars(&pat_chars, &txt_chars)
 }
 
-fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
+fn glob_match_chars(pat: &[char], txt: &[char]) -> bool {
     let (mut pi, mut ti) = (0usize, 0usize);
     // Saved positions for the last `*` we encountered.
     let mut star_pi: Option<usize> = None;
     let mut star_ti: usize = 0;
 
     while ti < txt.len() {
-        if pi < pat.len() && pat[pi] == b'*' {
+        if pi < pat.len() && pat[pi] == '*' {
             // Skip consecutive stars.
-            while pi < pat.len() && pat[pi] == b'*' {
+            while pi < pat.len() && pat[pi] == '*' {
                 pi += 1;
             }
             // If `*` is at the end of the pattern, it matches everything remaining.
@@ -1014,7 +1022,7 @@ fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
             continue;
         }
 
-        if pi < pat.len() && (pat[pi] == b'?' || pat[pi] == txt[ti]) {
+        if pi < pat.len() && (pat[pi] == '?' || pat[pi] == txt[ti]) {
             pi += 1;
             ti += 1;
             continue;
@@ -1033,7 +1041,7 @@ fn glob_match_bytes(pat: &[u8], txt: &[u8]) -> bool {
     }
 
     // Text exhausted: skip any trailing `*` in the pattern (they match empty).
-    while pi < pat.len() && pat[pi] == b'*' {
+    while pi < pat.len() && pat[pi] == '*' {
         pi += 1;
     }
 
@@ -1158,7 +1166,9 @@ fn render_activity_window(ui: &mut egui::Ui, state: &mut crate::app::state::AppS
             if let Ok(mins) = state.activity_window_input.trim().parse::<u64>() {
                 // Bug fix: use checked_mul to prevent u64 overflow (silent
                 // wrapping in release / panic in debug) for very large inputs.
-                if mins > 0 {
+                // Bug fix: cap to MAX_CUSTOM_TIME_MINUTES so users cannot set
+                // meaningless multi-million-year windows that bypass the filter.
+                if mins > 0 && mins <= crate::util::constants::MAX_CUSTOM_TIME_MINUTES {
                     if let Some(secs) = mins.checked_mul(60) {
                         state.activity_window_secs = Some(secs);
                         changed = true;
