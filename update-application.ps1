@@ -404,8 +404,17 @@ try {
             Invoke-Git @('add', 'Cargo.lock')
         }
 
-        Write-Info "Creating version bump commit"
-        Invoke-Git @('commit', '-m', "chore: bump version to $Version")
+        # Only commit if staged content actually differs from HEAD.
+        # A previous run may have already committed this version bump
+        # before failing at a later step (tag/push); the file-level
+        # rollback restores disk contents but cannot undo a git commit.
+        & git diff --cached --quiet
+        if ($LASTEXITCODE -ne 0) {
+            Write-Info "Creating version bump commit"
+            Invoke-Git @('commit', '-m', "chore: bump version to $Version")
+        } else {
+            Write-WarnLine "No staged changes vs HEAD -- version bump already committed. Skipping commit."
+        }
     } else {
         Write-WarnLine "No version files changed -- skipping stage and commit."
     }
