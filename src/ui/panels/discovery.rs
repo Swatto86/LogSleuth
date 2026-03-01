@@ -269,6 +269,24 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         visible.iter().map(|&i| &file_entries[i].0).collect();
                     let mut new_selected: std::collections::HashSet<std::path::PathBuf> =
                         visible.iter().map(|&i| file_entries[i].0.clone()).collect();
+                    // Preserve selection state of ALL non-visible files, including
+                    // files hidden by the activity window.  Bug fix: the previous
+                    // loop only iterated file_entries (activity-filtered), so files
+                    // outside the window that were explicitly selected were silently
+                    // dropped, causing them to disappear from the filter when the
+                    // activity window was later disabled.
+                    let file_entry_paths: std::collections::HashSet<&std::path::PathBuf> =
+                        file_entries.iter().map(|(p, _, _, _, _, _)| p).collect();
+                    for f in &state.discovered_files {
+                        if !visible_paths.contains(&f.path) && !file_entry_paths.contains(&f.path) {
+                            let was_selected = !prev_hide_all
+                                && (state.filter_state.source_files.is_empty()
+                                    || state.filter_state.source_files.contains(&f.path));
+                            if was_selected {
+                                new_selected.insert(f.path.clone());
+                            }
+                        }
+                    }
                     for (path, _, _, _, _, _) in &file_entries {
                         if !visible_paths.contains(path) {
                             let was_selected = !prev_hide_all
@@ -281,7 +299,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     }
                     state.filter_state.source_files = new_selected;
                     state.filter_state.hide_all_sources = false;
-                    if state.filter_state.source_files.len() >= total {
+                    // Bug fix: compare against total_all (all discovered files)
+                    // instead of total (activity-filtered count).  When the activity
+                    // window is on, total < total_all so the premature clear caused
+                    // out-of-window files to silently appear in the filter.
+                    if state.filter_state.source_files.len() >= total_all {
                         state.filter_state.source_files.clear();
                     }
                     state.apply_filters();
@@ -293,7 +315,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 {
                     let visible_paths: std::collections::HashSet<&std::path::PathBuf> =
                         visible.iter().map(|&i| &file_entries[i].0).collect();
-                    let non_visible_selected: std::collections::HashSet<std::path::PathBuf> =
+                    let mut non_visible_selected: std::collections::HashSet<std::path::PathBuf> =
                         file_entries
                             .iter()
                             .filter(|(p, _, _, _, _, _)| !visible_paths.contains(p))
@@ -304,6 +326,22 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                             })
                             .map(|(p, _, _, _, _, _)| p.clone())
                             .collect();
+                    // Bug fix: also preserve selection state of files outside the
+                    // activity window.  The loop above only iterates file_entries
+                    // (activity-filtered); without this, out-of-window files that
+                    // were previously selected are lost when "None" is clicked.
+                    let file_entry_paths: std::collections::HashSet<&std::path::PathBuf> =
+                        file_entries.iter().map(|(p, _, _, _, _, _)| p).collect();
+                    for f in &state.discovered_files {
+                        if !file_entry_paths.contains(&f.path) {
+                            let was_selected = !state.filter_state.hide_all_sources
+                                && (state.filter_state.source_files.is_empty()
+                                    || state.filter_state.source_files.contains(&f.path));
+                            if was_selected {
+                                non_visible_selected.insert(f.path.clone());
+                            }
+                        }
+                    }
                     state.filter_state.source_files = non_visible_selected;
                     if state.filter_state.source_files.is_empty() {
                         state.filter_state.hide_all_sources = true;
@@ -365,11 +403,16 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                             if cb_resp.changed() {
                                 if !checked {
                                     // Unchecking: seed the whitelist from all-pass then remove.
+                                    // Bug fix: seed from ALL discovered files, not just
+                                    // the activity-filtered file_entries.  When the activity
+                                    // window is later disabled, files that were outside the
+                                    // window must remain in the whitelist so they are not
+                                    // silently excluded.
                                     if state.filter_state.source_files.is_empty()
                                         && !state.filter_state.hide_all_sources
                                     {
-                                        for (p, _, _, _, _, _) in &file_entries {
-                                            state.filter_state.source_files.insert(p.clone());
+                                        for f in &state.discovered_files {
+                                            state.filter_state.source_files.insert(f.path.clone());
                                         }
                                     }
                                     state.filter_state.source_files.remove(path);
@@ -379,7 +422,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 } else {
                                     state.filter_state.hide_all_sources = false;
                                     state.filter_state.source_files.insert((*path).clone());
-                                    if state.filter_state.source_files.len() == total {
+                                    // Bug fix: compare against total_all (all discovered
+                                    // files) instead of total (activity-filtered count).
+                                    if state.filter_state.source_files.len() >= total_all {
                                         state.filter_state.source_files.clear();
                                     }
                                 }
