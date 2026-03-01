@@ -19,44 +19,6 @@ concurrency:
   cancel-in-progress: true
 
 # ---------------------------------------------------------------------------
-# Windows: build binary + NSIS installer
-# ---------------------------------------------------------------------------
-
-jobs:
-  build-windows:
-    name: Build Windows installer
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release binary
-        run: cargo build --release
-
-      - name: Install NSIS
-        run: choco install nsis --yes --no-progress
-
-      - name: Build NSIS installer
-        # Use the absolute path because choco's PATH update is not visible
-        # across step boundaries on GitHub-hosted Windows runners.
-        run: '&"C:\Program Files (x86)\NSIS\makensis.exe" installer\windows\logsleuth.nsi'
-        shell: pwsh
-
-      - name: Upload Windows installer artefact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: LogSleuth-Setup-*.exe
-          if-no-files-found: error
-
-# ---------------------------------------------------------------------------
 # Windows: standalone portable EXE (no installer, no runtime dependencies)
 #
 # Built with +crt-static so the MSVC CRT is embedded directly in the binary.
@@ -64,6 +26,7 @@ jobs:
 # installing anything or requiring the Visual C++ Redistributable.
 # ---------------------------------------------------------------------------
 
+jobs:
   build-windows-portable:
     name: Build Windows portable EXE
     runs-on: windows-latest
@@ -189,7 +152,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-windows, build-windows-portable, build-macos, build-linux]
+    needs: [build-windows-portable, build-macos, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create releases and upload assets
@@ -211,7 +174,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            LogSleuth-Setup-*.exe
             LogSleuth-*-windows-portable.exe
             LogSleuth-*.dmg
             LogSleuth-*.AppImage

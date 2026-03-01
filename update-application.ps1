@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Validates and bumps the semantic version, updates Cargo.toml and Cargo.lock,
-    runs a release build and full test suite, optionally builds the NSIS installer,
-    commits the version bump, creates an annotated git tag, pushes to origin, and
-    prunes older release tags/GitHub releases so only the new tag remains.
+    runs a release build and full test suite, commits the version bump, creates
+    an annotated git tag, pushes to origin, and prunes older release tags/GitHub
+    releases so only the new tag remains.
 
     Dry-run mode (-DryRun) describes every planned action without making any changes.
     Force mode (-Force) allows overwriting an existing tag and re-releasing the same
@@ -167,21 +167,7 @@ function Update-PackageVersion([string]$CargoTomlPath, [string]$OldVersion, [str
     [System.IO.File]::WriteAllText($CargoTomlPath, $updated, $utf8NoBom)
 }
 
-# Optionally update the version string inside the NSIS installer script so the
-# Windows installer EXE shows the correct product version in Add/Remove Programs.
-function Update-NsisVersion([string]$NsisPath, [string]$OldVersion, [string]$NewVersion) {
-    if (-not (Test-Path $NsisPath)) { return }
 
-    $content = [System.IO.File]::ReadAllText($NsisPath)
-    $pattern = [regex]::Escape($OldVersion)
-    $updated = $content -replace $pattern, $NewVersion
-
-    if ($updated -ne $content) {
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        [System.IO.File]::WriteAllText($NsisPath, $updated, $utf8NoBom)
-        Write-Info "Updated version in $(Split-Path -Leaf $NsisPath)"
-    }
-}
 
 # ---------------------------------------------------------------------------
 # Main
@@ -201,7 +187,6 @@ if ($DryRun) {
 }
 
 $cargoToml  = Join-Path $workspaceRoot "Cargo.toml"
-$nsisScript = Join-Path $workspaceRoot "installer" "windows" "logsleuth.nsi"
 
 $currentVersion = Get-PackageVersion -CargoTomlPath $cargoToml
 
@@ -266,19 +251,6 @@ if ($isGitRepo) {
     }
 }
 
-# --- Detect optional tools ---
-# Prefer makensis on PATH; fall back to the default NSIS install location on Windows.
-$makensisCmd = Get-Command makensis -ErrorAction SilentlyContinue
-if ($null -eq $makensisCmd) {
-    $nsisDefaultPath = 'C:\Program Files (x86)\NSIS\makensis.exe'
-    if (Test-Path $nsisDefaultPath) {
-        $makensisCmd = $nsisDefaultPath
-    }
-}
-$makensisAvailable = $null -ne $makensisCmd
-$nsisExists        = Test-Path $nsisScript
-$buildInstaller    = $makensisAvailable -and $nsisExists
-
 # --- Snapshot originals for rollback ---
 $originalCargoToml  = [System.IO.File]::ReadAllText($cargoToml)
 $lockPath           = Join-Path $workspaceRoot "Cargo.lock"
@@ -287,11 +259,6 @@ $originalLock       = $null
 if ($lockExistedBefore) {
     $originalLock = [System.IO.File]::ReadAllText($lockPath)
 }
-$originalNsis = $null
-if ($nsisExists) {
-    $originalNsis = [System.IO.File]::ReadAllText($nsisScript)
-}
-
 $changedFiles = [System.Collections.Generic.List[string]]::new()
 
 try {
@@ -311,9 +278,6 @@ try {
         Write-Info "Planned actions:"
         if ($Version -ne $currentVersion) {
             Write-Host "  - Update [package] version in Cargo.toml: $currentVersion -> $Version"
-            if ($nsisExists) {
-                Write-Host "  - Update version in installer/windows/logsleuth.nsi"
-            }
             Write-Host "  - Run: cargo update"
         } else {
             Write-Host "  - No version bump needed (same version re-release)"
@@ -322,16 +286,9 @@ try {
         Write-Host "  - Run: cargo fmt -- --check"
         Write-Host "  - Run: cargo clippy -- -D warnings"
         Write-Host "  - Run: cargo test"
-        if ($buildInstaller) {
-            Write-Host "  - Run: makensis installer/windows/logsleuth.nsi"
-        } elseif ($nsisExists -and -not $makensisAvailable) {
-            Write-Host "  - SKIP installer build (makensis not found in PATH)"
-        } else {
-            Write-Host "  - SKIP installer build (installer/windows/logsleuth.nsi not yet created)"
-        }
         if ($isGitRepo) {
             if ($Version -ne $currentVersion) {
-                Write-Host "  - Run: git add Cargo.toml Cargo.lock$(if ($nsisExists) { ' installer/windows/logsleuth.nsi' })"
+                Write-Host "  - Run: git add Cargo.toml Cargo.lock"
                 Write-Host "  - Run: git commit -m `"chore: bump version to $Version`""
             }
             Write-Host "  - Run: git tag -a $newTag -m <notes>"
@@ -353,12 +310,6 @@ try {
         Write-Info "Updating [package] version in Cargo.toml: $currentVersion -> $Version"
         Update-PackageVersion -CargoTomlPath $cargoToml -OldVersion $currentVersion -NewVersion $Version
         $changedFiles.Add("Cargo.toml") | Out-Null
-
-        if ($nsisExists) {
-            Write-Info "Updating version in NSIS installer script"
-            Update-NsisVersion -NsisPath $nsisScript -OldVersion $currentVersion -NewVersion $Version
-            $changedFiles.Add("installer/windows/logsleuth.nsi") | Out-Null
-        }
 
         Write-Info "Refreshing Cargo.lock via cargo update"
         & cargo update
@@ -430,23 +381,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed" }
 
     # -----------------------------------------------------------------------
-    # Step 4 — NSIS installer build (optional)
-    # -----------------------------------------------------------------------
-    if ($buildInstaller) {
-        Write-Info "Building NSIS installer"
-        $makensisExe = if ($makensisCmd -is [string]) { $makensisCmd } else { $makensisCmd.Source }
-        & $makensisExe $nsisScript
-        if ($LASTEXITCODE -ne 0) { throw "makensis failed for $nsisScript" }
-        Write-Success "NSIS installer built"
-    } elseif ($nsisExists -and -not $makensisAvailable) {
-        Write-WarnLine "makensis not found in PATH -- skipping installer build."
-        Write-WarnLine "Install NSIS (https://nsis.sourceforge.io/) and re-run to produce an installer EXE."
-    } else {
-        Write-WarnLine "installer/windows/logsleuth.nsi not yet created -- skipping installer build."
-    }
-
-    # -----------------------------------------------------------------------
-    # Step 5 — Handle existing tag (Force scenario)
+    # Step 4 — Handle existing tag (Force scenario)
     # -----------------------------------------------------------------------
     if ($Force -and -not [string]::IsNullOrWhiteSpace($existingTag)) {
         Write-WarnLine "Removing existing local tag $newTag (-Force)"
@@ -460,16 +395,13 @@ try {
     }
 
     # -----------------------------------------------------------------------
-    # Step 6 — Commit version bump
+    # Step 5 — Commit version bump
     # -----------------------------------------------------------------------
     if ($changedFiles.Count -gt 0) {
         Write-Info "Staging changed files"
         Invoke-Git @('add', 'Cargo.toml')
         if (Test-Path $lockPath) {
             Invoke-Git @('add', 'Cargo.lock')
-        }
-        if ($nsisExists) {
-            Invoke-Git @('add', 'installer/windows/logsleuth.nsi')
         }
 
         Write-Info "Creating version bump commit"
@@ -479,7 +411,7 @@ try {
     }
 
     # -----------------------------------------------------------------------
-    # Step 7 — Tag and push
+    # Step 6 — Tag and push
     # -----------------------------------------------------------------------
     Write-Info "Creating annotated tag $newTag"
     Invoke-Git @('tag', '-a', $newTag, '-m', $Notes)
@@ -489,7 +421,7 @@ try {
     Invoke-Git @('push', 'origin', $newTag)
 
     # -----------------------------------------------------------------------
-    # Step 8 — Prune older release tags
+    # Step 7 — Prune older release tags
     # -----------------------------------------------------------------------
     Write-Info "Cleaning up older release tags (keeping $newTag)"
     $allReleaseTags = (& git tag -l 'v*.*.*') | Where-Object { $_ -ne $newTag }
@@ -521,13 +453,13 @@ try {
     Write-Host ""
     if ($repoUrl) {
         Write-Success "Release $newTag submitted."
-        Write-Success "Windows binary and installer built locally."
-        Write-Success "CI will build macOS and Linux binaries and publish the GitHub Release."
+        Write-Success "Windows binary built locally."
+        Write-Success "CI will build all platform binaries and publish the GitHub Release."
         Write-Success "Monitor pipeline: $repoUrl/actions"
     } else {
         Write-Success "Release $newTag submitted."
-        Write-Success "Windows binary and installer built locally."
-        Write-Success "CI will build macOS and Linux binaries and publish the GitHub Release."
+        Write-Success "Windows binary built locally."
+        Write-Success "CI will build all platform binaries and publish the GitHub Release."
         Write-Success "Monitor CI/CD in your remote repository Actions page."
     }
     Write-Host ""
@@ -549,10 +481,6 @@ catch {
         [System.IO.File]::WriteAllText($lockPath, $originalLock, $utf8NoBom)
     } elseif (-not $lockExistedBefore -and (Test-Path $lockPath)) {
         Remove-Item -Path $lockPath -Force
-    }
-
-    if ($nsisExists -and $null -ne $originalNsis) {
-        [System.IO.File]::WriteAllText($nsisScript, $originalNsis, $utf8NoBom)
     }
 
     Write-WarnLine "Rollback completed"
