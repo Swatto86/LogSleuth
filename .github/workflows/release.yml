@@ -48,17 +48,15 @@ jobs:
           RUSTFLAGS: "-C target-feature=+crt-static"
         run: cargo build --release
 
-      - name: Rename to versioned portable filename
+      - name: Rename release binary
         shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          Copy-Item target\release\logsleuth.exe "LogSleuth-${version}-windows-portable.exe"
+        run: Copy-Item target\release\logsleuth.exe LogSleuth.exe
 
       - name: Upload Windows portable artefact
         uses: actions/upload-artifact@v4
         with:
           name: windows-portable
-          path: LogSleuth-*-windows-portable.exe
+          path: LogSleuth.exe
           if-no-files-found: error
 
 # ---------------------------------------------------------------------------
@@ -174,6 +172,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            LogSleuth-*-windows-portable.exe
+            LogSleuth.exe
             LogSleuth-*.dmg
             LogSleuth-*.AppImage
