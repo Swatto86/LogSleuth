@@ -22,8 +22,8 @@ concurrency:
 # Windows: standalone portable EXE (no installer, no runtime dependencies)
 #
 # Built with +crt-static so the MSVC CRT is embedded directly in the binary.
-# Users can run LogSleuth-*-windows-portable.exe from any location without
-# installing anything or requiring the Visual C++ Redistributable.
+# Users can run LogSleuth.exe from any location without installing anything
+# or requiring the Visual C++ Redistributable.
 # ---------------------------------------------------------------------------
 
 jobs:
@@ -60,11 +60,11 @@ jobs:
           if-no-files-found: error
 
 # ---------------------------------------------------------------------------
-# macOS: build binary + DMG
+# macOS: standalone binary
 # ---------------------------------------------------------------------------
 
   build-macos:
-    name: Build macOS DMG
+    name: Build macOS binary
     runs-on: macos-latest
 
     steps:
@@ -80,28 +80,22 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-      - name: Install create-dmg
-        run: brew install create-dmg
+      - name: Rename release binary
+        run: cp target/release/logsleuth LogSleuth-macos
 
-      - name: Build DMG
-        run: |
-          chmod +x installer/macos/create-dmg.sh
-          VERSION="${GITHUB_REF_NAME#v}"
-          installer/macos/create-dmg.sh "$VERSION"
-
-      - name: Upload macOS DMG artefact
+      - name: Upload macOS artefact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg
-          path: LogSleuth-*.dmg
+          name: macos-binary
+          path: LogSleuth-macos
           if-no-files-found: error
 
 # ---------------------------------------------------------------------------
-# Linux: build binary + AppImage
+# Linux: standalone binary
 # ---------------------------------------------------------------------------
 
   build-linux:
-    name: Build Linux AppImage
+    name: Build Linux binary
     runs-on: ubuntu-latest
 
     steps:
@@ -124,24 +118,19 @@ jobs:
             libxcb-xfixes0-dev \
             libxkbcommon-dev \
             libssl-dev \
-            pkg-config \
-            wget \
-            fuse
+            pkg-config
 
       - name: Build release binary
         run: cargo build --release
 
-      - name: Build AppImage
-        run: |
-          chmod +x installer/linux/create-appimage.sh
-          VERSION="${GITHUB_REF_NAME#v}"
-          installer/linux/create-appimage.sh "$VERSION"
+      - name: Rename release binary
+        run: cp target/release/logsleuth LogSleuth-linux
 
-      - name: Upload Linux AppImage artefact
+      - name: Upload Linux artefact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
-          path: LogSleuth-*.AppImage
+          name: linux-binary
+          path: LogSleuth-linux
           if-no-files-found: error
 
 # ---------------------------------------------------------------------------
@@ -173,5 +162,5 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             LogSleuth.exe
-            LogSleuth-*.dmg
-            LogSleuth-*.AppImage
+            LogSleuth-macos
+            LogSleuth-linux
