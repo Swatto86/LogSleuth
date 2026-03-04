@@ -1,0 +1,62 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo: build (debug)",
+      "type": "shell",
+      "command": "cargo build",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "cargo: build (release)",
+      "type": "shell",
+      "command": "cargo build --release",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "cargo: test",
+      "type": "shell",
+      "command": "cargo test",
+      "group": "test",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "cargo: clippy",
+      "type": "shell",
+      "command": "cargo clippy -- -D warnings",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "cargo: fmt",
+      "type": "shell",
+      "command": "cargo fmt",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "nsis: build installer",
+      "type": "shell",
+      "command": "\"C:\\Program Files (x86)\\NSIS\\makensis.exe\" installer\\windows\\logsleuth.nsi",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "dependsOn": "cargo: build (release)"
+    },
+    {
+      "label": "release: run update script",
+      "type": "shell",
+      "command": "pwsh -ExecutionPolicy Bypass -File update-application.ps1",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared", "focus": true }
+    }
+  ]
+}

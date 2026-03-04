@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+# Cargo.lock is committed for binary projects (reproducible builds)
+
+# IDE
+.vscode/
+!.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+*.exe
+*.msi
+*.dmg
+*.AppImage
+
+# Installer output
+installer/output/
+
+# Log files (from testing) — exclude generated/runtime logs but keep fixtures
+*.log
+!tests/fixtures/*.log
+!profiles/*.toml
+
+# User config (contains local paths)
+config.toml
+veeam_samples.txt
+veeam_filenames.txt
