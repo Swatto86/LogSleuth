@@ -1,0 +1,171 @@
+name: Release
+
+# Triggered when a version tag (e.g. v1.2.3) is pushed.
+# update-application.ps1 creates this tag as part of the release workflow.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.2.3)'
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Cancel any in-progress run for the same tag so only the latest survives
+# if the tag is force-pushed or pushed multiple times in quick succession.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Windows: standalone portable EXE (no installer, no runtime dependencies)
+#
+# Built with +crt-static so the MSVC CRT is embedded directly in the binary.
+# Users can run LogSleuth.exe from any location without installing anything
+# or requiring the Visual C++ Redistributable.
+# ---------------------------------------------------------------------------
+
+jobs:
+  build-windows-portable:
+    name: Build Windows portable EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build portable release binary (static CRT)
+        # +crt-static links the MSVC runtime into the EXE so it runs on any
+        # Windows 10/11 machine without the VC++ Redistributable pre-installed.
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: cargo build --release
+
+      - name: Rename release binary
+        shell: pwsh
+        run: Copy-Item target\release\logsleuth.exe LogSleuth.exe
+
+      - name: Upload Windows portable artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: LogSleuth.exe
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# macOS: standalone binary
+# ---------------------------------------------------------------------------
+
+  build-macos:
+    name: Build macOS binary
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Rename release binary
+        run: cp target/release/logsleuth LogSleuth-macos
+
+      - name: Upload macOS artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binary
+          path: LogSleuth-macos
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# Linux: standalone binary
+# ---------------------------------------------------------------------------
+
+  build-linux:
+    name: Build Linux binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system libraries (eframe / egui / rfd)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Rename release binary
+        run: cp target/release/logsleuth LogSleuth-linux
+
+      - name: Upload Linux artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          path: LogSleuth-linux
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# Create GitHub Release and attach all artefacts
+# ---------------------------------------------------------------------------
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows-portable, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create releases and upload assets
+
+    steps:
+      - name: Download all build artefacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true   # all artefacts land in the working directory
+
+      - name: List downloaded artefacts (diagnostic)
+        run: ls -lh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: LogSleuth ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            LogSleuth.exe
+            LogSleuth-macos
+            LogSleuth-linux

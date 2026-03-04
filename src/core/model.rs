@@ -1,0 +1,493 @@
+// LogSleuth - core/model.rs
+//
+// Core data model types. Pure data definitions with no I/O, no UI,
+// no platform dependencies (Atlas Layer Rule: Core depends on std only).
+//
+// These types are the shared vocabulary across all layers.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+// =============================================================================
+// Log Entry (normalised output of parsing)
+// =============================================================================
+
+/// A single parsed log event, normalised across all formats.
+///
+/// This is the core data unit that flows through filtering, display,
+/// and export. Every format profile produces these regardless of the
+/// source log's native structure.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogEntry {
+    /// Monotonically increasing unique ID within the scan session.
+    pub id: u64,
+
+    /// Parsed timestamp in UTC. `None` if the source line had no
+    /// parseable timestamp (sorted to end of timeline with indicator).
+    pub timestamp: Option<DateTime<Utc>>,
+
+    /// Normalised severity level.
+    pub severity: Severity,
+
+    /// Path to the source log file.
+    pub source_file: PathBuf,
+
+    /// Line number in the source file where this entry begins.
+    pub line_number: u64,
+
+    /// Thread or process ID extracted from the log line (format-dependent).
+    pub thread: Option<String>,
+
+    /// Source component or module name (format-dependent).
+    pub component: Option<String>,
+
+    /// Full message text, including any continuation/multi-line content.
+    pub message: String,
+
+    /// Original unparsed text from the source file.
+    pub raw_text: String,
+
+    /// ID of the format profile used to parse this entry.
+    pub profile_id: String,
+
+    /// Last-modified time of the **source file** as recorded by the OS at scan
+    /// time (or at the tail-tick time for live-tail entries).
+    ///
+    /// Used as the time-range filter key instead of the parsed log timestamp so
+    /// that filtering works correctly for:
+    ///   - Profiles with no timestamp capture group (plain-text fallback)
+    ///   - Logs whose embedded timestamps are unreliable or in an unsupported
+    ///     timezone
+    ///   - Live-tail entries written right now whose log timestamps may lag
+    ///
+    /// Not serialised to CSV/JSON export (internal bookkeeping only).
+    #[serde(skip)]
+    pub file_modified: Option<DateTime<Utc>>,
+}
+
+// =============================================================================
+// Severity
+// =============================================================================
+
+/// Normalised severity levels, ordered from most to least severe.
+///
+/// All format-specific level strings (Error, ERR, E, error, Failed, etc.)
+/// are mapped to one of these variants via the profile's severity_mapping.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
+)]
+pub enum Severity {
+    Critical,
+    Error,
+    Warning,
+    Info,
+    Debug,
+    #[default]
+    Unknown,
+}
+
+impl Severity {
+    /// Returns all variants in display order (most severe first).
+    pub fn all() -> &'static [Severity] {
+        &[
+            Severity::Critical,
+            Severity::Error,
+            Severity::Warning,
+            Severity::Info,
+            Severity::Debug,
+            Severity::Unknown,
+        ]
+    }
+
+    /// Human-readable label for display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Severity::Critical => "Critical",
+            Severity::Error => "Error",
+            Severity::Warning => "Warning",
+            Severity::Info => "Info",
+            Severity::Debug => "Debug",
+            Severity::Unknown => "Unknown",
+        }
+    }
+
+    /// Short label for compact display (e.g. table columns).
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Severity::Critical => "CRIT",
+            Severity::Error => "ERR",
+            Severity::Warning => "WARN",
+            Severity::Info => "INFO",
+            Severity::Debug => "DBG",
+            Severity::Unknown => "???",
+        }
+    }
+}
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+// =============================================================================
+// Multiline mode
+// =============================================================================
+
+/// How the parser handles lines that do not match the profile's line_pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum MultilineMode {
+    /// Append non-matching lines to the previous entry's message.
+    /// This is the correct behaviour for stack traces and multi-line messages.
+    #[default]
+    Continuation,
+
+    /// Skip non-matching lines entirely.
+    Skip,
+
+    /// Treat non-matching lines as standalone entries with no parsed fields.
+    Raw,
+}
+
+// =============================================================================
+// Format Profile (runtime representation)
+// =============================================================================
+
+/// Runtime representation of a format profile after TOML parsing and
+/// regex compilation. This is what the parser uses at scan time.
+///
+/// Built from `ProfileDefinition` (the raw TOML structure) via validation.
+#[derive(Debug, Clone)]
+pub struct FormatProfile {
+    /// Unique profile identifier (e.g. "veeam-vbr").
+    pub id: String,
+
+    /// Human-readable name (e.g. "Veeam Backup & Replication").
+    pub name: String,
+
+    /// Profile schema version.
+    pub version: String,
+
+    /// Description of what this profile covers.
+    pub description: String,
+
+    /// Glob patterns for filename-based detection hints.
+    pub file_patterns: Vec<String>,
+
+    /// Pre-compiled glob patterns for filename-based detection.
+    ///
+    /// Built at profile-load time from `file_patterns` so that `auto_detect`
+    /// does not have to parse and compile glob strings on every file.  With
+    /// 20+ profiles and up to 10 000 files this eliminates O(profiles x files)
+    /// glob compilations per scan.
+    pub compiled_file_patterns: Vec<glob::Pattern>,
+
+    /// Compiled regex for content-based format detection.
+    /// Applied to the first N lines of a file; match rate determines confidence.
+    pub content_match: regex::Regex,
+
+    /// Compiled regex for parsing individual log lines.
+    /// Named capture groups: timestamp, level, thread, component, message.
+    pub line_pattern: regex::Regex,
+
+    /// chrono format string for parsing the timestamp capture group.
+    pub timestamp_format: String,
+
+    /// How to handle lines that do not match line_pattern.
+    pub multiline_mode: MultilineMode,
+
+    /// Maps normalised Severity variants to lists of format-specific strings.
+    /// Matching is case-insensitive.
+    pub severity_mapping: HashMap<Severity, Vec<String>>,
+
+    /// Optional compiled regex patterns applied to the **message text** when
+    /// the primary severity determination (level capture + severity_mapping)
+    /// returns Unknown, or when there is no level capture group and message
+    /// keyword inference finds nothing.  Checked in Severity order
+    /// (Critical first).  First matching pattern wins.
+    ///
+    /// Populated from the optional `[severity_override]` TOML section.
+    pub severity_override: HashMap<Severity, Vec<regex::Regex>>,
+
+    /// Whether this is a built-in profile (true) or user-defined (false).
+    pub is_builtin: bool,
+
+    /// Default log file locations for this format (informational).
+    /// Shown as a tooltip in the discovery panel when this profile is matched.
+    /// Each entry is a human-readable path string, e.g. "Windows: C:\\ProgramData\\...".
+    pub log_locations: Vec<String>,
+}
+
+impl FormatProfile {
+    /// Determines the normalised severity for a raw level string.
+    ///
+    /// Checks each severity mapping (case-insensitive). Returns `Severity::Unknown`
+    /// if no mapping matches.
+    pub fn map_severity(&self, raw_level: &str) -> Severity {
+        let raw_lower = raw_level.to_lowercase();
+        for (severity, patterns) in &self.severity_mapping {
+            for pattern in patterns {
+                if raw_lower == pattern.to_lowercase() {
+                    return *severity;
+                }
+            }
+        }
+        Severity::Unknown
+    }
+
+    /// Determines severity by scanning the message text for keywords.
+    ///
+    /// Used for formats that have no explicit severity field (e.g. VBO365).
+    /// Checks severity mappings as substring matches against the message.
+    /// Returns the highest (most severe) match found.
+    pub fn infer_severity_from_message(&self, message: &str) -> Severity {
+        let msg_lower = message.to_lowercase();
+
+        // Check in order of severity (highest first) so the most severe match wins
+        for severity in Severity::all() {
+            if let Some(patterns) = self.severity_mapping.get(severity) {
+                for pattern in patterns {
+                    if msg_lower.contains(&pattern.to_lowercase()) {
+                        return *severity;
+                    }
+                }
+            }
+        }
+
+        // No keyword matched — return Unknown so entries without a
+        // recognisable severity token show as '???' rather than
+        // incorrectly inflating the Info count.
+        Severity::Unknown
+    }
+
+    /// Apply regex-based severity override patterns against `text`.
+    ///
+    /// Patterns are compiled from the optional `[severity_override]` TOML
+    /// section.  Checked in `Severity::all()` order (most severe first).
+    /// Returns the first matching severity, or `None` if no pattern matches.
+    ///
+    /// Unlike `infer_severity_from_message` (which uses plain substring
+    /// matching against the `severity_mapping` strings), these patterns can
+    /// use full regex syntax — e.g. `\[WARN\]` to require literal brackets,
+    /// or `\bERROR\b` for word-boundary precision.
+    pub fn apply_severity_override(&self, text: &str) -> Option<Severity> {
+        for severity in Severity::all() {
+            if let Some(patterns) = self.severity_override.get(severity) {
+                for pattern in patterns {
+                    if pattern.is_match(text) {
+                        return Some(*severity);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+// =============================================================================
+// Discovered File (output of discovery phase)
+// =============================================================================
+
+/// Metadata about a file found during directory scanning, before parsing.
+#[derive(Debug, Clone)]
+pub struct DiscoveredFile {
+    /// Full path to the file.
+    pub path: PathBuf,
+
+    /// File size in bytes.
+    pub size: u64,
+
+    /// Last modification timestamp.
+    pub modified: Option<DateTime<Utc>>,
+
+    /// Detected format profile ID (None if no profile matched).
+    pub profile_id: Option<String>,
+
+    /// Auto-detection confidence score (0.0-1.0).
+    pub detection_confidence: f64,
+
+    /// Whether this file exceeds the large file threshold.
+    pub is_large: bool,
+
+    /// Set to `true` when the file was discovered and profile-assigned but
+    /// deliberately skipped during the parsing phase because it did not match
+    /// the active parse-path filter.
+    ///
+    /// Skipped files appear in the discovery panel with a "(not parsed)"
+    /// indicator.  The user can trigger a follow-up parse via
+    /// "Parse skipped files (N)" in the discovery panel.
+    pub parsing_skipped: bool,
+}
+
+// =============================================================================
+// Scan Summary
+// =============================================================================
+
+/// Summary statistics for a completed scan operation.
+#[derive(Debug, Clone, Default)]
+pub struct ScanSummary {
+    /// Total files discovered (before filtering by format).
+    pub total_files_discovered: usize,
+
+    /// Files that matched a format profile.
+    pub files_matched: usize,
+
+    /// Files that could not be read (permissions, encoding, etc.).
+    pub files_with_errors: usize,
+
+    /// Total log entries parsed across all files.
+    pub total_entries: usize,
+
+    /// Total parse errors (lines that could not be parsed).
+    pub total_parse_errors: usize,
+
+    /// Per-file breakdown.
+    pub file_summaries: Vec<FileSummary>,
+
+    /// Wall-clock scan duration.
+    pub duration: std::time::Duration,
+}
+
+/// Per-file scan statistics.
+#[derive(Debug, Clone)]
+pub struct FileSummary {
+    /// File path.
+    pub path: PathBuf,
+
+    /// Format profile ID used.
+    pub profile_id: String,
+
+    /// Number of entries parsed from this file.
+    pub entry_count: usize,
+
+    /// Number of parse errors in this file.
+    pub error_count: usize,
+
+    /// Earliest timestamp found (if any).
+    pub earliest: Option<DateTime<Utc>>,
+
+    /// Latest timestamp found (if any).
+    pub latest: Option<DateTime<Utc>>,
+}
+
+// =============================================================================
+// Scan Progress (for UI updates)
+// =============================================================================
+
+/// Progress messages sent from the scan thread to the UI thread.
+#[derive(Debug, Clone)]
+pub enum ScanProgress {
+    /// Discovery phase started.
+    DiscoveryStarted,
+
+    /// A file was discovered.
+    FileDiscovered { path: PathBuf, files_found: usize },
+
+    /// Discovery phase completed.
+    ///
+    /// `total_files`  — files that will actually be processed (after the limit
+    ///                  is applied and truncation to most-recently-modified).
+    /// `total_found`  — raw count of matching files before any limit was applied.
+    ///                  Equals `total_files` when no truncation occurred.
+    DiscoveryCompleted {
+        total_files: usize,
+        total_found: usize,
+    },
+
+    /// Parsing phase started.
+    ParsingStarted { total_files: usize },
+
+    /// A file has been parsed.
+    FileParsed {
+        path: PathBuf,
+        entries: usize,
+        errors: usize,
+        files_completed: usize,
+        total_files: usize,
+    },
+
+    /// Parsing phase completed.
+    ParsingCompleted { summary: ScanSummary },
+
+    /// A non-fatal warning occurred during scanning.
+    Warning { message: String },
+
+    /// Scan failed with a fatal error.
+    Failed { error: String },
+
+    /// Scan was cancelled by the user before completion.
+    Cancelled,
+
+    /// All discovered file metadata, sent once after auto-detection completes
+    /// so the UI can populate the discovery panel before parsing begins.
+    FilesDiscovered { files: Vec<DiscoveredFile> },
+
+    /// Additional files discovered when "Add File(s)" appends to an existing
+    /// session. Unlike `FilesDiscovered` (which replaces the list), this
+    /// message extends the UI's discovered-file list.
+    AdditionalFilesDiscovered { files: Vec<DiscoveredFile> },
+
+    /// A batch of parsed log entries, streamed to the UI during parsing.
+    ///
+    /// Batched (see ENTRY_BATCH_SIZE in app::scan) to amortise channel overhead
+    /// while still allowing the UI to display partial results before the scan
+    /// finishes.
+    EntriesBatch { entries: Vec<LogEntry> },
+}
+
+// =============================================================================
+// Directory Watch Progress (for real-time new-file notifications)
+// =============================================================================
+
+/// Progress messages sent from the directory watcher thread to the UI thread.
+#[derive(Debug, Clone)]
+pub enum DirWatchProgress {
+    /// One or more new log files were detected in the watched directory tree.
+    NewFiles(Vec<std::path::PathBuf>),
+
+    /// One or more already-known files have a newer OS modification timestamp.
+    ///
+    /// Each element is `(path, new_mtime)`.  The UI should update
+    /// `DiscoveredFile::modified` for each matching path so the file list
+    /// shows a live "last modified" time without requiring a full rescan.
+    FileMtimeUpdates(Vec<(std::path::PathBuf, DateTime<Utc>)>),
+
+    /// The watcher has just spawned a walk thread to scan for new files.
+    /// Sent once per walk cycle so the UI can show a "scanning..." indicator.
+    WalkStarted,
+
+    /// A directory walk completed.  Sent whether or not new files were found.
+    /// `new_count` is the number of new files that passed all filters (zero
+    /// means the directory is up-to-date; non-zero means a `NewFiles` message
+    /// was already sent in the same cycle).
+    WalkComplete { new_count: usize },
+
+    /// A directory walk was abandoned because it exceeded `DIR_WATCH_WALK_TIMEOUT_SECS`.
+    /// The walk sub-thread is still running in the background but its results will
+    /// be discarded.  A fresh walk will be started on the next poll cycle.
+    WalkTimedOut,
+}
+
+// =============================================================================
+// Tail Progress (for live tail UI updates)
+// =============================================================================
+
+/// Progress messages sent from the tail watcher thread to the UI thread.
+#[derive(Debug, Clone)]
+pub enum TailProgress {
+    /// Tail watcher started successfully; watching this many files.
+    Started { file_count: usize },
+
+    /// One or more new entries were parsed from a watched file.
+    NewEntries { entries: Vec<LogEntry> },
+
+    /// Tail was stopped (either by user request or a fatal error).
+    Stopped,
+
+    /// A non-fatal per-file error occurred (file temporarily inaccessible etc).
+    FileError { path: PathBuf, message: String },
+}

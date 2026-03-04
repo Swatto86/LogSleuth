@@ -1,0 +1,43 @@
+# LogSleuth Format Profile: Generic Timestamp
+#
+# Catches logs with a leading ISO-style timestamp but no standard format:
+#   2024-01-15 14:30:22 Something happened here
+#   2024-01-15T14:30:22 Starting service
+#   2024/01/15 14:30:22 Completed operation
+#
+# This is a low-priority fallback. More specific profiles should match first.
+
+[profile]
+id = "generic-timestamp"
+name = "Generic Timestamp + Message"
+version = "1.0"
+description = "Fallback for logs with a leading ISO-style timestamp and unstructured message"
+log_locations = [
+    "Generic fallback - applies to any log with an ISO 8601 timestamp prefix",
+]
+
+[detection]
+file_patterns = []
+content_match = '^\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}:\d{2}'
+
+[parsing]
+line_pattern = '^(?P<timestamp>\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}:\d{2})\s+(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+critical = ["CRITICAL", "FATAL", "EMERGENCY"]
+error = ["ERROR", "ERR", "FAIL", "FAILED", "Exception"]
+warning = ["WARNING", "WARN"]
+info = ["INFO"]
+debug = ["DEBUG", "TRACE", "VERBOSE"]
+
+# Regex-based severity override: applied when the parsed severity is Unknown
+# (no level capture group, or level string not in severity_mapping).
+# Catches bracket-style markers and word-bounded keywords with regex precision.
+[severity_override]
+critical = ['\[CRIT(ICAL)?\]', '\[FATAL\]']
+error    = ['\[ERR(OR)?\]', '\bException\b', '\bStackTrace\b']
+warning  = ['\[WARN(ING)?\]']
+info     = ['\[INFO(RMATION)?\]']
+debug    = ['\[DEBUG\]', '\[TRACE\]', '\[VERBOSE\]']

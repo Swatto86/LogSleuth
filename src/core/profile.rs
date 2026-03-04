@@ -1,0 +1,812 @@
+// LogSleuth - core/profile.rs
+//
+// Format profile loading, validation, and auto-detection.
+// Core layer: accepts TOML strings and file content, never touches the filesystem.
+// I/O is handled by the app::profile_mgr which feeds content here.
+
+use crate::core::model::{FormatProfile, MultilineMode, Severity};
+use crate::util::constants;
+use crate::util::error::ProfileError;
+use regex::Regex;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+// =============================================================================
+// TOML deserialization structures (raw input)
+// =============================================================================
+
+/// Raw TOML profile definition as deserialized from a .toml file.
+/// This is validated and compiled into a `FormatProfile` for runtime use.
+#[derive(Debug, Deserialize)]
+pub struct ProfileDefinition {
+    pub profile: ProfileMeta,
+    pub detection: DetectionDef,
+    pub parsing: ParsingDef,
+    #[serde(default)]
+    pub severity_mapping: SeverityMappingDef,
+    #[serde(default)]
+    pub severity_override: SeverityOverrideDef,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileMeta {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_version")]
+    pub version: String,
+    #[serde(default)]
+    pub description: String,
+    /// Optional list of default log file locations shown as a UI tooltip.
+    #[serde(default)]
+    pub log_locations: Vec<String>,
+}
+
+fn default_version() -> String {
+    "1.0".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DetectionDef {
+    #[serde(default)]
+    pub file_patterns: Vec<String>,
+    pub content_match: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ParsingDef {
+    pub line_pattern: String,
+    pub timestamp_format: String,
+    #[serde(default)]
+    pub multiline_mode: MultilineMode,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct SeverityMappingDef {
+    #[serde(default)]
+    pub critical: Vec<String>,
+    #[serde(default)]
+    pub error: Vec<String>,
+    #[serde(default)]
+    pub warning: Vec<String>,
+    #[serde(default)]
+    pub info: Vec<String>,
+    #[serde(default)]
+    pub debug: Vec<String>,
+}
+
+/// Raw TOML representation of the optional `[severity_override]` section.
+///
+/// Each field is a list of **regex** patterns (not plain strings).  When a
+/// parsed entry's severity is Unknown -- or when no `level` capture group is
+/// present in the line pattern -- these regexes are tested against the
+/// message text in severity order (Critical first).  The first match wins.
+///
+/// Compiled into `FormatProfile::severity_override` by `validate_and_compile`.
+#[derive(Debug, Deserialize, Default)]
+pub struct SeverityOverrideDef {
+    #[serde(default)]
+    pub critical: Vec<String>,
+    #[serde(default)]
+    pub error: Vec<String>,
+    #[serde(default)]
+    pub warning: Vec<String>,
+    #[serde(default)]
+    pub info: Vec<String>,
+    #[serde(default)]
+    pub debug: Vec<String>,
+}
+
+// =============================================================================
+// Profile validation and compilation
+// =============================================================================
+
+/// Parse a TOML string into a `ProfileDefinition`.
+///
+/// `source_path` is used for error messages only (not for I/O).
+pub fn parse_profile_toml(
+    toml_content: &str,
+    source_path: &Path,
+) -> Result<ProfileDefinition, ProfileError> {
+    toml::from_str(toml_content).map_err(|e| ProfileError::TomlParse {
+        path: source_path.to_path_buf(),
+        source: Box::new(e),
+    })
+}
+
+/// Validate a `ProfileDefinition` and compile it into a runtime `FormatProfile`.
+///
+/// Validates:
+/// - Required fields are present and non-empty
+/// - Regex patterns are valid and within size limits
+/// - Timestamp format is plausible
+///
+/// Returns a fully compiled `FormatProfile` ready for use.
+pub fn validate_and_compile(
+    def: ProfileDefinition,
+    source_path: &Path,
+    is_builtin: bool,
+) -> Result<FormatProfile, ProfileError> {
+    let id = &def.profile.id;
+
+    // Validate required fields
+    if id.is_empty() {
+        return Err(ProfileError::MissingField {
+            profile_id: "(empty)".to_string(),
+            field: "profile.id",
+        });
+    }
+    if def.profile.name.is_empty() {
+        return Err(ProfileError::MissingField {
+            profile_id: id.clone(),
+            field: "profile.name",
+        });
+    }
+    if def.detection.content_match.is_empty() {
+        return Err(ProfileError::MissingField {
+            profile_id: id.clone(),
+            field: "detection.content_match",
+        });
+    }
+    if def.parsing.line_pattern.is_empty() {
+        return Err(ProfileError::MissingField {
+            profile_id: id.clone(),
+            field: "parsing.line_pattern",
+        });
+    }
+    if def.parsing.timestamp_format.is_empty() {
+        return Err(ProfileError::MissingField {
+            profile_id: id.clone(),
+            field: "parsing.timestamp_format",
+        });
+    }
+
+    // Validate and compile content_match regex
+    let content_match = compile_regex(id, "detection.content_match", &def.detection.content_match)?;
+
+    // Validate and compile line_pattern regex
+    let line_pattern = compile_regex(id, "parsing.line_pattern", &def.parsing.line_pattern)?;
+
+    // Validate line_pattern has at least a 'message' capture group
+    let capture_names: Vec<&str> = line_pattern.capture_names().flatten().collect();
+
+    if !capture_names.contains(&"message") {
+        tracing::warn!(
+            profile_id = id,
+            source = %source_path.display(),
+            "Profile line_pattern has no 'message' capture group; \
+             entire match will be used as message"
+        );
+    }
+
+    // Build severity mapping
+    let mut severity_mapping = HashMap::new();
+    if !def.severity_mapping.critical.is_empty() {
+        severity_mapping.insert(Severity::Critical, def.severity_mapping.critical);
+    }
+    if !def.severity_mapping.error.is_empty() {
+        severity_mapping.insert(Severity::Error, def.severity_mapping.error);
+    }
+    if !def.severity_mapping.warning.is_empty() {
+        severity_mapping.insert(Severity::Warning, def.severity_mapping.warning);
+    }
+    if !def.severity_mapping.info.is_empty() {
+        severity_mapping.insert(Severity::Info, def.severity_mapping.info);
+    }
+    if !def.severity_mapping.debug.is_empty() {
+        severity_mapping.insert(Severity::Debug, def.severity_mapping.debug);
+    }
+
+    // Compile severity_override regex patterns (optional section).
+    // Each pattern is compiled with the same length limit as other profile
+    // regexes.  An invalid pattern is a hard error so misconfigured profiles
+    // fail loudly at load time rather than silently producing wrong results.
+    let mut severity_override: HashMap<Severity, Vec<Regex>> = HashMap::new();
+    let ovr = &def.severity_override;
+    for (sev, raw_patterns) in &[
+        (Severity::Critical, &ovr.critical),
+        (Severity::Error, &ovr.error),
+        (Severity::Warning, &ovr.warning),
+        (Severity::Info, &ovr.info),
+        (Severity::Debug, &ovr.debug),
+    ] {
+        if !raw_patterns.is_empty() {
+            let compiled: Result<Vec<Regex>, ProfileError> = raw_patterns
+                .iter()
+                .map(|p| compile_regex(id, "severity_override", p))
+                .collect();
+            severity_override.insert(*sev, compiled?);
+        }
+    }
+
+    Ok(FormatProfile {
+        id: id.clone(),
+        name: def.profile.name,
+        version: def.profile.version,
+        description: def.profile.description,
+        log_locations: def.profile.log_locations,
+        file_patterns: def.detection.file_patterns.clone(),
+        // Pre-compile glob patterns once at load time so auto_detect never
+        // repeats the compilation work per-file.  Patterns that fail to
+        // compile are silently skipped (a ParseError at profile load would be
+        // disproportionate for an optional detection hint).
+        compiled_file_patterns: def
+            .detection
+            .file_patterns
+            .iter()
+            .filter_map(|p| glob::Pattern::new(&p.to_lowercase()).ok())
+            .collect(),
+        content_match,
+        line_pattern,
+        timestamp_format: def.parsing.timestamp_format,
+        multiline_mode: def.parsing.multiline_mode,
+        severity_mapping,
+        severity_override,
+        is_builtin,
+    })
+}
+
+/// Compile a regex pattern with length validation to prevent ReDoS.
+fn compile_regex(
+    profile_id: &str,
+    field: &'static str,
+    pattern: &str,
+) -> Result<Regex, ProfileError> {
+    if pattern.len() > constants::MAX_REGEX_PATTERN_LENGTH {
+        return Err(ProfileError::RegexTooLong {
+            profile_id: profile_id.to_string(),
+            field,
+            length: pattern.len(),
+            max_length: constants::MAX_REGEX_PATTERN_LENGTH,
+        });
+    }
+
+    Regex::new(pattern).map_err(|e| ProfileError::InvalidRegex {
+        profile_id: profile_id.to_string(),
+        field,
+        pattern: pattern.to_string(),
+        source: e,
+    })
+}
+
+// =============================================================================
+// Auto-detection
+// =============================================================================
+
+/// Result of attempting to auto-detect a file's format.
+#[derive(Debug, Clone)]
+pub struct DetectionResult {
+    /// Profile ID of the best match.
+    pub profile_id: String,
+    /// Confidence score (0.0 - 1.0). Ratio of lines matching content_match.
+    pub confidence: f64,
+}
+
+/// Attempt to auto-detect the format of a file by sampling its first lines.
+///
+/// Tests each profile's `content_match` regex against the sample lines.
+/// Returns the profile with the highest match ratio, or None if no profile
+/// exceeds the minimum confidence threshold.
+///
+/// For profiles with `file_patterns`, a filename match adds a bonus to confidence.
+/// Filename matching is **case-insensitive** so Windows paths do not require
+/// patterns to enumerate every casing variant.
+///
+/// Empty sample lines (file not yet written, permission denied on sample read,
+/// etc.) do NOT short-circuit detection: filename patterns are still checked
+/// and can assign the correct profile with the `AUTO_DETECT_FILENAME_BONUS`
+/// alone.  Without this, a Veeam PerfLog or Satellite log that is empty at
+/// scan time would fall through to plain-text even though its name uniquely
+/// identifies it.
+pub fn auto_detect(
+    file_name: &str,
+    sample_lines: &[String],
+    profiles: &[FormatProfile],
+) -> Option<DetectionResult> {
+    if profiles.is_empty() {
+        return None;
+    }
+
+    // Lowercase once for case-insensitive filename matching below.
+    let file_name_lower = file_name.to_lowercase();
+
+    let mut best: Option<DetectionResult> = None;
+
+    for profile in profiles {
+        // Skip the plain-text fallback; it matches everything
+        if profile.id == "plain-text" {
+            continue;
+        }
+
+        // Content confidence: ratio of sample lines matching content_match.
+        // When there are no sample lines the ratio is 0.0 (not NaN from 0/0)
+        // so that a filename pattern bonus can still lift the total above the
+        // detection threshold for empty / not-yet-written files.
+        let mut confidence = if sample_lines.is_empty() {
+            0.0_f64
+        } else {
+            let matches = sample_lines
+                .iter()
+                .filter(|line| profile.content_match.is_match(line))
+                .count();
+            matches as f64 / sample_lines.len() as f64
+        };
+
+        // Bonus for filename pattern match (case-insensitive).
+        // Uses AUTO_DETECT_FILENAME_BONUS (0.3) so that an explicit filename
+        // match alone is sufficient to pass the 0.3 threshold — covering VBR
+        // service logs (e.g. WmiServer.BackupSrv.log, Satellite_Console.log)
+        // whose first sample lines may be separator/header text that won't
+        // match content_match, or whose file is empty at scan time.
+        //
+        // Uses pre-compiled glob::Pattern values from FormatProfile to avoid
+        // re-parsing and compiling the same pattern strings on every file.
+        let filename_match = profile
+            .compiled_file_patterns
+            .iter()
+            .any(|p| p.matches(&file_name_lower));
+        if filename_match {
+            confidence = (confidence + constants::AUTO_DETECT_FILENAME_BONUS).min(1.0);
+        }
+
+        if confidence >= constants::AUTO_DETECT_MIN_CONFIDENCE
+            && best.as_ref().map_or(true, |b| confidence > b.confidence)
+        {
+            best = Some(DetectionResult {
+                profile_id: profile.id.clone(),
+                confidence,
+            });
+        }
+    }
+
+    tracing::debug!(
+        file = file_name,
+        result = ?best,
+        "Auto-detection complete"
+    );
+
+    best
+}
+
+// =============================================================================
+// Built-in profiles (embedded at compile time)
+// =============================================================================
+
+/// Embedded TOML content for built-in profiles.
+/// Each tuple is (filename, TOML content).
+pub fn builtin_profile_sources() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "veeam_vbr.toml",
+            include_str!("../../profiles/veeam_vbr.toml"),
+        ),
+        (
+            "veeam_vbo365.toml",
+            include_str!("../../profiles/veeam_vbo365.toml"),
+        ),
+        ("iis_w3c.toml", include_str!("../../profiles/iis_w3c.toml")),
+        (
+            "syslog_rfc3164.toml",
+            include_str!("../../profiles/syslog_rfc3164.toml"),
+        ),
+        (
+            "syslog_rfc5424.toml",
+            include_str!("../../profiles/syslog_rfc5424.toml"),
+        ),
+        (
+            "json_lines.toml",
+            include_str!("../../profiles/json_lines.toml"),
+        ),
+        (
+            "log4j_default.toml",
+            include_str!("../../profiles/log4j_default.toml"),
+        ),
+        (
+            "sql_server_error.toml",
+            include_str!("../../profiles/sql_server_error.toml"),
+        ),
+        (
+            "sql_server_agent.toml",
+            include_str!("../../profiles/sql_server_agent.toml"),
+        ),
+        (
+            "apache_combined.toml",
+            include_str!("../../profiles/apache_combined.toml"),
+        ),
+        (
+            "nginx_error.toml",
+            include_str!("../../profiles/nginx_error.toml"),
+        ),
+        (
+            "windows_dhcp.toml",
+            include_str!("../../profiles/windows_dhcp.toml"),
+        ),
+        (
+            "intune_ime.toml",
+            include_str!("../../profiles/intune_ime.toml"),
+        ),
+        (
+            "windows_cluster.toml",
+            include_str!("../../profiles/windows_cluster.toml"),
+        ),
+        (
+            "kubernetes_klog.toml",
+            include_str!("../../profiles/kubernetes_klog.toml"),
+        ),
+        (
+            "exchange_tracking.toml",
+            include_str!("../../profiles/exchange_tracking.toml"),
+        ),
+        (
+            "postgresql_log.toml",
+            include_str!("../../profiles/postgresql_log.toml"),
+        ),
+        (
+            "tomcat_catalina.toml",
+            include_str!("../../profiles/tomcat_catalina.toml"),
+        ),
+        (
+            "sccm_cmtrace.toml",
+            include_str!("../../profiles/sccm_cmtrace.toml"),
+        ),
+        (
+            "windows_firewall.toml",
+            include_str!("../../profiles/windows_firewall.toml"),
+        ),
+        (
+            "generic_timestamp.toml",
+            include_str!("../../profiles/generic_timestamp.toml"),
+        ),
+        (
+            "plain_text.toml",
+            include_str!("../../profiles/plain_text.toml"),
+        ),
+    ]
+}
+
+/// Load and validate all built-in profiles.
+///
+/// Invalid profiles are logged as warnings and skipped (non-fatal).
+/// Returns the successfully loaded profiles.
+pub fn load_builtin_profiles() -> Vec<FormatProfile> {
+    let mut profiles = Vec::new();
+    let mut errors = Vec::new();
+
+    for (filename, content) in builtin_profile_sources() {
+        let path = PathBuf::from(format!("<builtin>/{filename}"));
+        match parse_profile_toml(content, &path)
+            .and_then(|def| validate_and_compile(def, &path, true))
+        {
+            Ok(profile) => {
+                tracing::debug!(profile_id = %profile.id, "Loaded built-in profile");
+                profiles.push(profile);
+            }
+            Err(e) => {
+                // Built-in profile failures are bugs, but we still degrade gracefully
+                tracing::error!(file = filename, error = %e, "Failed to load built-in profile");
+                errors.push(e);
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        tracing::warn!(
+            count = errors.len(),
+            "Some built-in profiles failed to load"
+        );
+    }
+
+    profiles
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID_PROFILE_TOML: &str = r#"
+[profile]
+id = "test-profile"
+name = "Test Profile"
+version = "1.0"
+description = "A test profile"
+
+[detection]
+file_patterns = ["test*.log"]
+content_match = '^\[\d{4}-\d{2}-\d{2}'
+
+[parsing]
+line_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})\s(?P<level>\w+)\s+(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+error = ["Error", "ERR"]
+warning = ["Warning", "WARN"]
+info = ["Info", "INFO"]
+"#;
+
+    #[test]
+    fn test_parse_valid_profile() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        assert_eq!(def.profile.id, "test-profile");
+        assert_eq!(def.profile.name, "Test Profile");
+        assert_eq!(def.detection.file_patterns, vec!["test*.log"]);
+    }
+
+    #[test]
+    fn test_compile_valid_profile() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        assert_eq!(profile.id, "test-profile");
+        assert!(!profile.is_builtin);
+        assert_eq!(profile.multiline_mode, MultilineMode::Continuation);
+    }
+
+    #[test]
+    fn test_severity_mapping() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        assert_eq!(profile.map_severity("Error"), Severity::Error);
+        assert_eq!(profile.map_severity("ERR"), Severity::Error);
+        assert_eq!(profile.map_severity("error"), Severity::Error); // case-insensitive
+        assert_eq!(profile.map_severity("Warning"), Severity::Warning);
+        assert_eq!(profile.map_severity("UNKNOWN_LEVEL"), Severity::Unknown);
+    }
+
+    #[test]
+    fn test_missing_required_field() {
+        let toml = r#"
+[profile]
+id = ""
+name = "Empty ID"
+
+[detection]
+content_match = "test"
+
+[parsing]
+line_pattern = "(?P<message>.+)"
+timestamp_format = "%Y"
+"#;
+        let path = PathBuf::from("bad.toml");
+        let def = parse_profile_toml(toml, &path).unwrap();
+        let result = validate_and_compile(def, &path, false);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ProfileError::MissingField { field, .. } => assert_eq!(field, "profile.id"),
+            other => panic!("Expected MissingField, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_regex() {
+        let toml = r#"
+[profile]
+id = "bad-regex"
+name = "Bad Regex"
+
+[detection]
+content_match = "[invalid"
+
+[parsing]
+line_pattern = "(?P<message>.+)"
+timestamp_format = "%Y"
+"#;
+        let path = PathBuf::from("bad.toml");
+        let def = parse_profile_toml(toml, &path).unwrap();
+        let result = validate_and_compile(def, &path, false);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ProfileError::InvalidRegex { .. }
+        ));
+    }
+
+    #[test]
+    fn test_regex_too_long() {
+        let long_pattern = "a".repeat(constants::MAX_REGEX_PATTERN_LENGTH + 1);
+        let toml = format!(
+            r#"
+[profile]
+id = "long-regex"
+name = "Long Regex"
+
+[detection]
+content_match = '{long_pattern}'
+
+[parsing]
+line_pattern = "(?P<message>.+)"
+timestamp_format = "%Y"
+"#
+        );
+        let path = PathBuf::from("long.toml");
+        let def = parse_profile_toml(&toml, &path).unwrap();
+        let result = validate_and_compile(def, &path, false);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ProfileError::RegexTooLong { .. }
+        ));
+    }
+
+    #[test]
+    fn test_auto_detect_matches_best_profile() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        let sample_lines = vec![
+            "[2024-01-15 14:30:22 Error Something failed".to_string(),
+            "[2024-01-15 14:30:23 Info Normal operation".to_string(),
+            "Some unrelated line".to_string(),
+        ];
+
+        let result = auto_detect("test.log", &sample_lines, &[profile]);
+        assert!(result.is_some());
+        let det = result.unwrap();
+        assert_eq!(det.profile_id, "test-profile");
+        // 2/3 lines match + AUTO_DETECT_FILENAME_BONUS (0.3) filename bonus
+        assert!(det.confidence > 0.5);
+    }
+
+    #[test]
+    fn test_auto_detect_no_match() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        let sample_lines = vec![
+            "no match here".to_string(),
+            "also no match".to_string(),
+            "nothing at all".to_string(),
+        ];
+
+        let result = auto_detect("random.dat", &sample_lines, &[profile]);
+        assert!(result.is_none());
+    }
+
+    /// A file that matches a `file_patterns` glob but has no sample lines
+    /// (empty file, file not yet written, read error on sample) must still be
+    /// assigned the correct profile using the filename bonus alone.
+    ///
+    /// This is a regression test for the original early-return bug:
+    ///   `if sample_lines.is_empty() || profiles.is_empty() { return None; }`
+    /// which caused Veeam PerfLog and Satellite logs to show "plain-text
+    /// (fallback)" even though their filenames uniquely identify the profile.
+    #[test]
+    fn test_auto_detect_empty_samples_filename_match() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        // "test-something.log" matches the "test*.log" file_pattern.
+        let result = auto_detect("test-something.log", &[], &[profile.clone()]);
+        assert!(
+            result.is_some(),
+            "empty samples + filename match should produce a detection result"
+        );
+        let det = result.unwrap();
+        assert_eq!(det.profile_id, "test-profile");
+        // Confidence must be exactly AUTO_DETECT_FILENAME_BONUS (content = 0.0)
+        assert!(
+            (det.confidence - 0.3_f64).abs() < 1e-9,
+            "expected confidence 0.3, got {}",
+            det.confidence
+        );
+
+        // A file whose name does NOT match any pattern must still return None
+        // when samples are empty (no content, no name match = genuine unknown).
+        let result2 = auto_detect("unknown.dat", &[], &[profile]);
+        assert!(
+            result2.is_none(),
+            "empty samples + no filename match must return None"
+        );
+    }
+
+    #[test]
+    fn test_infer_severity_from_message() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        assert_eq!(
+            profile.infer_severity_from_message("An Error occurred in module X"),
+            Severity::Error
+        );
+        assert_eq!(
+            profile.infer_severity_from_message("Warning: disk space low"),
+            Severity::Warning
+        );
+        assert_eq!(
+            profile.infer_severity_from_message("Everything is fine"),
+            Severity::Unknown // Default when no keyword matches — Unknown not Info
+        );
+    }
+
+    #[test]
+    fn test_load_builtin_profiles() {
+        let profiles = load_builtin_profiles();
+        // All built-in profiles should load successfully
+        assert!(!profiles.is_empty(), "No built-in profiles loaded");
+        // Check that the Veeam VBR profile loaded
+        assert!(
+            profiles.iter().any(|p| p.id == "veeam-vbr"),
+            "veeam-vbr profile not found"
+        );
+        // All should be marked as built-in
+        assert!(profiles.iter().all(|p| p.is_builtin));
+    }
+
+    const OVERRIDE_PROFILE_TOML: &str = r#"
+[profile]
+id = "override-test"
+name = "Override Test"
+
+[detection]
+content_match = '.'
+
+[parsing]
+line_pattern = '^(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "raw"
+
+[severity_override]
+error   = ['\[ERROR\]', '\bFAILED\b']
+warning = ['\[WARN\]', '\[WARNING\]']
+info    = ['\[INFO\]']
+debug   = ['\[DEBUG\]']
+"#;
+
+    #[test]
+    fn test_severity_override_regex_matching() {
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(OVERRIDE_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        // Patterns match with full regex precision (brackets required)
+        assert_eq!(
+            profile.apply_severity_override("[ERROR] disk full"),
+            Some(Severity::Error)
+        );
+        assert_eq!(
+            profile.apply_severity_override("Job FAILED to complete"),
+            Some(Severity::Error)
+        );
+        assert_eq!(
+            profile.apply_severity_override("[WARN] disk low"),
+            Some(Severity::Warning)
+        );
+        assert_eq!(
+            profile.apply_severity_override("[INFO] service started"),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            profile.apply_severity_override("[DEBUG] entering loop"),
+            Some(Severity::Debug)
+        );
+        // "ERROR" without brackets does NOT match \[ERROR\] — regex precision
+        assert_eq!(profile.apply_severity_override("ERROR code 123"), None);
+        // No pattern at all
+        assert_eq!(profile.apply_severity_override("everything is fine"), None);
+    }
+
+    #[test]
+    fn test_severity_override_absent_when_not_configured() {
+        // VALID_PROFILE_TOML has no [severity_override] section --
+        // apply_severity_override should always return None.
+        let path = PathBuf::from("test.toml");
+        let def = parse_profile_toml(VALID_PROFILE_TOML, &path).unwrap();
+        let profile = validate_and_compile(def, &path, false).unwrap();
+
+        assert_eq!(profile.apply_severity_override("[ERROR] something"), None);
+        assert_eq!(profile.apply_severity_override("[WARN] disk low"), None);
+    }
+}

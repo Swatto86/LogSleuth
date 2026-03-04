@@ -1,0 +1,18 @@
+3/27/2019 9:21:14 AM 1 (2384) Veeam.Archiver.Shell.exe: Version=9.6.3.594
+3/27/2019 9:21:14 AM 1 (2384) Veeam.Archiver.Shell.exe: Component started
+3/27/2019 9:21:15 AM 7 (2228) Connecting to 127.0.0.1 (port: 9191) using current account...
+3/27/2019 9:21:15 AM 7 (2228) Connected successfully to archiver service
+3/27/2019 9:21:16 AM 3 (2400) Starting backup job: Exchange Online Backup
+3/27/2019 9:21:17 AM 3 (2400) Processing mailbox: john.doe@contoso.com
+3/27/2019 9:21:18 AM 3 (2400) Processing mailbox: jane.smith@contoso.com
+3/27/2019 9:21:19 AM 3 (2400) Processing mailbox: admin@contoso.com
+3/27/2019 9:22:01 AM 5 (2412) Warning: Mailbox quota nearly exceeded for john.doe@contoso.com
+3/27/2019 9:22:03 AM 3 (2400) Processing mailbox: service@contoso.com
+3/27/2019 9:22:45 AM 7 (2228) Failed to access mailbox: disabled@contoso.com - The user account has been disabled
+3/27/2019 9:22:46 AM 7 (2228) Error: Cannot enumerate items in folder: Inbox - Access denied
+3/27/2019 9:22:47 AM 3 (2400) Retrying failed mailbox: disabled@contoso.com (attempt 2)
+3/27/2019 9:22:50 AM 3 (2400) Retry failed - skipping mailbox
+3/27/2019 9:23:10 AM 1 (2384) Backup job completed with warnings: 1 mailbox skipped, 4 mailboxes processed
+3/27/2019 9:23:11 AM 1 (2384) Total items backed up: 12487
+3/27/2019 9:23:11 AM 1 (2384) Duration: 00:01:57
+3/27/2019 9:23:12 AM 1 (2384) Veeam.Archiver.Shell.exe: Component stopped
