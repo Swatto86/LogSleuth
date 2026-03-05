@@ -198,7 +198,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .min_size(egui::vec2(18.0, 0.0)),
         );
         if fuzzy_btn
-            .on_hover_text("Toggle fuzzy (subsequence) matching")
+            .on_hover_text(
+                "Toggle fuzzy matching.\n\
+                 When ON, your search term is treated as a sequence of characters \
+                 that must all appear in order, but not necessarily adjacent \
+                 — e.g. \"cnerr\" matches \"Connection error\".\n\
+                 When OFF, only exact substring matches are shown.",
+            )
             .clicked()
         {
             state.filter_state.fuzzy = !state.filter_state.fuzzy;
@@ -495,113 +501,121 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
              Setting an absolute bound clears the rolling time window.",
         );
 
-    // -- From --
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("From:").small());
-        let from_resp = ui
-            .add(
-                egui::TextEdit::singleline(&mut state.filter_state.abs_time_start_input)
-                    .desired_width(130.0)
-                    .hint_text("YYYY-MM-DD HH:MM"),
-            )
-            .on_hover_text(
-                "Earliest log time to show (inclusive). Tab or click away to apply.\n\
-                 Clears the rolling time window when set.",
-            );
-        // Commit when focus leaves the field (Tab / click-away / Enter).
-        if from_resp.lost_focus() {
-            let s = state.filter_state.abs_time_start_input.clone();
-            if s.trim().is_empty() {
-                // User cleared the field: remove the start bound.
-                state.filter_state.time_start = None;
-                state.apply_filters();
-            } else if let Some(dt) = crate::app::state::parse_filter_datetime(&s) {
-                // Valid datetime: pin the absolute start, clear rolling window.
-                state.filter_state.relative_time_secs = None;
-                state.filter_state.relative_time_input.clear();
-                state.filter_state.time_start = Some(dt);
-                state.apply_filters();
-            } else {
-                // Unparseable: reset the buffer to the current active value so
-                // stale/invalid text does not persist after the user clicks away.
-                state.filter_state.abs_time_start_input = state
-                    .filter_state
-                    .time_start
-                    .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                    .unwrap_or_default();
-            }
-        }
-        // Validity indicator when a non-empty value is present.
-        if !state.filter_state.abs_time_start_input.is_empty() {
-            let valid =
-                crate::app::state::parse_filter_datetime(&state.filter_state.abs_time_start_input)
-                    .is_some();
-            if valid {
-                ui.label(
-                    egui::RichText::new("\u{2713}")
-                        .small()
-                        .color(egui::Color32::from_rgb(74, 222, 128)),
+    // -- From / To -- laid out in a two-column grid so the labels share a
+    // fixed-width column and both input fields start at the same horizontal
+    // position regardless of label length.
+    egui::Grid::new("abs_time_grid")
+        .num_columns(3)
+        .spacing([4.0, 4.0])
+        .show(ui, |ui| {
+            // --- From row ---
+            ui.label(egui::RichText::new("From:").small());
+            let from_resp = ui
+                .add(
+                    egui::TextEdit::singleline(&mut state.filter_state.abs_time_start_input)
+                        .desired_width(150.0)
+                        .hint_text("YYYY-MM-DD HH:MM"),
+                )
+                .on_hover_text(
+                    "Earliest log time to show (inclusive). Tab or click away to apply.\n\
+                     Clears the rolling time window when set.",
                 );
-            } else {
-                ui.label(
-                    egui::RichText::new("\u{2717}")
-                        .small()
-                        .color(egui::Color32::from_rgb(248, 113, 113)),
-                );
+            // Commit when focus leaves the field (Tab / click-away / Enter).
+            if from_resp.lost_focus() {
+                let s = state.filter_state.abs_time_start_input.clone();
+                if s.trim().is_empty() {
+                    state.filter_state.time_start = None;
+                    state.apply_filters();
+                } else if let Some(dt) = crate::app::state::parse_filter_datetime(&s) {
+                    state.filter_state.relative_time_secs = None;
+                    state.filter_state.relative_time_input.clear();
+                    state.filter_state.time_start = Some(dt);
+                    state.apply_filters();
+                } else {
+                    state.filter_state.abs_time_start_input = state
+                        .filter_state
+                        .time_start
+                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_default();
+                }
             }
-        }
-    });
+            // Validity indicator (occupies column 3).
+            if !state.filter_state.abs_time_start_input.is_empty() {
+                let valid = crate::app::state::parse_filter_datetime(
+                    &state.filter_state.abs_time_start_input,
+                )
+                .is_some();
+                if valid {
+                    ui.label(
+                        egui::RichText::new("\u{2713}")
+                            .small()
+                            .color(egui::Color32::from_rgb(74, 222, 128)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new("\u{2717}")
+                            .small()
+                            .color(egui::Color32::from_rgb(248, 113, 113)),
+                    );
+                }
+            } else {
+                ui.label(""); // keep column 3 present so grid stays stable
+            }
+            ui.end_row();
 
-    // -- To --
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("To:    ").small());
-        let to_resp = ui
-            .add(
-                egui::TextEdit::singleline(&mut state.filter_state.abs_time_end_input)
-                    .desired_width(130.0)
-                    .hint_text("YYYY-MM-DD HH:MM"),
-            )
-            .on_hover_text(
-                "Latest log time to show (inclusive). Tab or click away to apply.\n\
-                 Clears the rolling time window when set.",
-            );
-        if to_resp.lost_focus() {
-            let s = state.filter_state.abs_time_end_input.clone();
-            if s.trim().is_empty() {
-                state.filter_state.time_end = None;
-                state.apply_filters();
-            } else if let Some(dt) = crate::app::state::parse_filter_datetime(&s) {
-                state.filter_state.relative_time_secs = None;
-                state.filter_state.relative_time_input.clear();
-                state.filter_state.time_end = Some(dt);
-                state.apply_filters();
-            } else {
-                state.filter_state.abs_time_end_input = state
-                    .filter_state
-                    .time_end
-                    .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                    .unwrap_or_default();
-            }
-        }
-        if !state.filter_state.abs_time_end_input.is_empty() {
-            let valid =
-                crate::app::state::parse_filter_datetime(&state.filter_state.abs_time_end_input)
-                    .is_some();
-            if valid {
-                ui.label(
-                    egui::RichText::new("\u{2713}")
-                        .small()
-                        .color(egui::Color32::from_rgb(74, 222, 128)),
+            // --- To row ---
+            ui.label(egui::RichText::new("To:").small());
+            let to_resp = ui
+                .add(
+                    egui::TextEdit::singleline(&mut state.filter_state.abs_time_end_input)
+                        .desired_width(150.0)
+                        .hint_text("YYYY-MM-DD HH:MM"),
+                )
+                .on_hover_text(
+                    "Latest log time to show (inclusive). Tab or click away to apply.\n\
+                     Clears the rolling time window when set.",
                 );
-            } else {
-                ui.label(
-                    egui::RichText::new("\u{2717}")
-                        .small()
-                        .color(egui::Color32::from_rgb(248, 113, 113)),
-                );
+            if to_resp.lost_focus() {
+                let s = state.filter_state.abs_time_end_input.clone();
+                if s.trim().is_empty() {
+                    state.filter_state.time_end = None;
+                    state.apply_filters();
+                } else if let Some(dt) = crate::app::state::parse_filter_datetime(&s) {
+                    state.filter_state.relative_time_secs = None;
+                    state.filter_state.relative_time_input.clear();
+                    state.filter_state.time_end = Some(dt);
+                    state.apply_filters();
+                } else {
+                    state.filter_state.abs_time_end_input = state
+                        .filter_state
+                        .time_end
+                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_default();
+                }
             }
-        }
-    });
+            if !state.filter_state.abs_time_end_input.is_empty() {
+                let valid = crate::app::state::parse_filter_datetime(
+                    &state.filter_state.abs_time_end_input,
+                )
+                .is_some();
+                if valid {
+                    ui.label(
+                        egui::RichText::new("\u{2713}")
+                            .small()
+                            .color(egui::Color32::from_rgb(74, 222, 128)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new("\u{2717}")
+                            .small()
+                            .color(egui::Color32::from_rgb(248, 113, 113)),
+                    );
+                }
+            } else {
+                ui.label("");
+            }
+            ui.end_row();
+        });
 
     // Clear absolute bounds button (only shown when at least one bound is set
     // via an absolute input -- i.e. the rolling window is not responsible).
