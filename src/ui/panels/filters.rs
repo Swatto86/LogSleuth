@@ -741,50 +741,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Entry-count summary and "Copy Filtered" action at the bottom of the filter section.
     if !state.entries.is_empty() {
         // -------------------------------------------------------------------------
-        // Thread filter (only shown when the loaded entries contain thread data)
-        // -------------------------------------------------------------------------
-        let thread_values: Vec<String> = state.unique_thread_values.clone();
-        if !thread_values.is_empty() {
-            ui.add_space(6.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Thread:").on_hover_text(
-                    "Show only entries from selected thread / process IDs.\n\
-                     When nothing is checked all threads are shown.",
-                );
-                // Clear all button -- only shown when a filter is active.
-                if !state.filter_state.thread_filter.is_empty()
-                    && ui
-                        .small_button("\u{d7} clear")
-                        .on_hover_text("Remove thread filter (show all threads)")
-                        .clicked()
-                {
-                    state.filter_state.thread_filter.clear();
-                    state.apply_filters();
-                }
-            });
-            let mut thread_changed = false;
-            for t in &thread_values {
-                let mut checked = state.filter_state.thread_filter.contains(t.as_str());
-                if ui
-                    .checkbox(&mut checked, t)
-                    .on_hover_text(format!("Show only entries from thread '{t}'"))
-                    .changed()
-                {
-                    if checked {
-                        state.filter_state.thread_filter.insert(t.clone());
-                    } else {
-                        state.filter_state.thread_filter.remove(t.as_str());
-                    }
-                    thread_changed = true;
-                }
-            }
-            if thread_changed {
-                state.apply_filters();
-            }
-        }
-
-        // -------------------------------------------------------------------------
         // Component filter (only shown when entries contain component data)
         // -------------------------------------------------------------------------
         let component_values: Vec<String> = state.unique_component_values.clone();

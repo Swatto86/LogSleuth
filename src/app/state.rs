@@ -359,12 +359,6 @@ pub struct AppState {
     /// they are located (for the detail panel "Occurrences" section).
     pub dedup_info: HashMap<usize, DedupInfo>,
 
-    /// Sorted, deduplicated list of all `thread` values observed across
-    /// `self.entries`.  Rebuilt by `apply_filters()` and cleared by `clear()`.
-    /// Used by the Filters panel to enumerate available thread IDs without
-    /// iterating the full entry list on every frame.
-    pub unique_thread_values: Vec<String>,
-
     /// Sorted, deduplicated list of all `component` values observed across
     /// `self.entries`.  Rebuilt by `apply_filters()` and cleared by `clear()`.
     pub unique_component_values: Vec<String>,
@@ -524,7 +518,6 @@ impl AppState {
             notimestamp_entry_count: 0,
             filter_dirty_at: None,
             fresh_scan_in_progress: false,
-            unique_thread_values: Vec::new(),
             unique_component_values: Vec::new(),
             dedup_info: HashMap::new(),
         }
@@ -770,29 +763,18 @@ impl AppState {
             .and_then(|&entry_idx| self.entries.get(entry_idx))
     }
 
-    /// Rebuild the unique-thread and unique-component caches from `self.entries`.
+    /// Rebuild the unique-component cache from `self.entries`.
     ///
     /// Iterates the full entry set once, collecting all distinct non-None values
-    /// for `thread` and `component` into sorted Vecs.  Called at the end of
-    /// `apply_filters()` so the caches are always consistent with the loaded data.
-    ///
-    /// Complexity: O(n) where n = `self.entries.len()`.  Each insert into the
-    /// internal HashSet is O(1) amortised, making the full rebuild cheaper than
-    /// the O(n) filter pass that precedes it.
+    /// for `component` into a sorted Vec.  Called at the end of `apply_filters()`
+    /// so the cache is always consistent with the loaded data.
     fn rebuild_unique_values(&mut self) {
-        let mut threads: HashSet<String> = HashSet::new();
         let mut components: HashSet<String> = HashSet::new();
         for entry in &self.entries {
-            if let Some(t) = &entry.thread {
-                threads.insert(t.clone());
-            }
             if let Some(c) = &entry.component {
                 components.insert(c.clone());
             }
         }
-        let mut tv: Vec<String> = threads.into_iter().collect();
-        tv.sort_unstable();
-        self.unique_thread_values = tv;
         let mut cv: Vec<String> = components.into_iter().collect();
         cv.sort_unstable();
         self.unique_component_values = cv;
@@ -1274,8 +1256,7 @@ impl AppState {
         self.filter_dirty_at = None;
         self.fresh_scan_in_progress = false;
         // Clear derived caches so stale values from the previous session are
-        // not shown in the thread / component filter panels.
-        self.unique_thread_values.clear();
+        // not shown in the component filter panel.
         self.unique_component_values.clear();
         // Clear dedup metadata.
         self.dedup_info.clear();
@@ -1363,11 +1344,6 @@ impl AppState {
             relative_time_secs: self.filter_state.relative_time_secs,
             bookmarks_only: self.filter_state.bookmarks_only,
             exclude_text: self.filter_state.exclude_text.clone(),
-            thread_filter: {
-                let mut v: Vec<String> = self.filter_state.thread_filter.iter().cloned().collect();
-                v.sort_unstable();
-                v
-            },
             component_filter: {
                 let mut v: Vec<String> =
                     self.filter_state.component_filter.iter().cloned().collect();
@@ -1437,11 +1413,10 @@ impl AppState {
             .map(|s| (s / 60).to_string())
             .unwrap_or_default();
         self.filter_state.bookmarks_only = f.bookmarks_only;
-        // Restore the new content filters.  thread_filter and component_filter
-        // reference thread/component strings that are re-discovered on the next
-        // scan parse, so they remain semantically valid on restore.
+        // Restore the component filter.  component_filter references component
+        // strings that are re-discovered on the next scan parse, so it remains
+        // semantically valid on restore.
         self.filter_state.exclude_text = f.exclude_text.clone();
-        self.filter_state.thread_filter = f.thread_filter.iter().cloned().collect();
         self.filter_state.component_filter = f.component_filter.iter().cloned().collect();
         self.filter_state.hide_no_timestamp = f.hide_no_timestamp;
         self.filter_state.dedup_mode = f.dedup_mode;
