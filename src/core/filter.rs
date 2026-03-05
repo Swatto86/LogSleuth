@@ -269,12 +269,6 @@ pub struct FilterState {
     /// Empty = no exclusion filter active.
     pub exclude_text: String,
 
-    /// Thread / process IDs to include.  When non-empty, only entries whose
-    /// `thread` value is present in this set pass.  Entries with no parsed thread
-    /// value are excluded when this filter is active.
-    /// An empty set means all threads pass.
-    pub thread_filter: HashSet<String>,
-
     /// Component / module names to include.  When non-empty, only entries whose
     /// `component` value is present in this set pass.  Entries with no parsed
     /// component value are excluded when this filter is active.
@@ -321,7 +315,6 @@ impl FilterState {
             && self.relative_time_secs.is_none()
             && !self.bookmarks_only
             && self.exclude_text.is_empty()
-            && self.thread_filter.is_empty()
             && self.component_filter.is_empty()
             && !self.hide_no_timestamp
             && self.dedup_mode == DedupMode::Off
@@ -420,7 +413,6 @@ pub fn apply_filters(entries: &[LogEntry], filter: &FilterState) -> Vec<usize> {
     let has_text_filter = !text_lower.is_empty()
         || filter.regex_search.is_some()
         || !excl_lower.is_empty()
-        || !filter.thread_filter.is_empty()
         || !filter.component_filter.is_empty();
     let initial_capacity = if has_text_filter {
         entries.len() / 4
@@ -619,17 +611,7 @@ fn matches_all(entry: &LogEntry, filter: &FilterState, text_lower: &str, excl_lo
         }
     }
 
-    // Thread filter: when a non-empty set of thread IDs is selected, only entries
-    // whose parsed thread value is in that set pass.  Entries with no thread value
-    // (thread = None) are excluded — they cannot be associated with a requested thread.
-    if !filter.thread_filter.is_empty() {
-        match entry.thread.as_deref() {
-            Some(t) if filter.thread_filter.contains(t) => {}
-            _ => return false,
-        }
-    }
-
-    // Component filter: same membership-gate as thread_filter but for the
+    // Component filter: membership-gate for the
     // component / module field.  Entries with no component value are excluded.
     if !filter.component_filter.is_empty() {
         match entry.component.as_deref() {
@@ -950,53 +932,6 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Thread-filter tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_thread_filter_keeps_only_selected_threads() {
-        let mut e1 = make_entry(1, Severity::Info, "msg");
-        let mut e2 = make_entry(2, Severity::Info, "msg");
-        let mut e3 = make_entry(3, Severity::Info, "msg");
-        e1.thread = Some("worker-1".to_string());
-        e2.thread = Some("worker-2".to_string());
-        e3.thread = None;
-        let entries = vec![e1, e2, e3];
-
-        let mut thread_filter = HashSet::new();
-        thread_filter.insert("worker-1".to_string());
-        let filter = FilterState {
-            thread_filter,
-            ..Default::default()
-        };
-        let result = apply_filters(&entries, &filter);
-        // Only worker-1 passes; worker-2 is not selected; None is excluded.
-        assert_eq!(result, vec![0]);
-    }
-
-    #[test]
-    fn test_thread_filter_empty_set_passes_all() {
-        let mut e1 = make_entry(1, Severity::Info, "msg");
-        let mut e2 = make_entry(2, Severity::Info, "msg");
-        e1.thread = Some("t1".to_string());
-        e2.thread = None;
-        let entries = vec![e1, e2];
-        // Empty thread_filter = no thread restriction.
-        let result = apply_filters(&entries, &FilterState::default());
-        assert_eq!(result, vec![0, 1]);
-    }
-
-    #[test]
-    fn test_thread_filter_tracked_in_is_empty() {
-        let mut filter = FilterState::default();
-        assert!(filter.is_empty());
-        filter.thread_filter.insert("main".to_string());
-        assert!(!filter.is_empty());
-        filter.thread_filter.clear();
-        assert!(filter.is_empty());
-    }
-
-    // -------------------------------------------------------------------------
     // Component-filter tests
     // -------------------------------------------------------------------------
 
@@ -1031,30 +966,24 @@ mod tests {
     }
 
     #[test]
-    fn test_thread_and_component_filter_combined() {
+    fn test_component_filter_excludes_non_matching_component() {
         let mut e1 = make_entry(1, Severity::Error, "msg1");
         let mut e2 = make_entry(2, Severity::Error, "msg2");
         let mut e3 = make_entry(3, Severity::Error, "msg3");
-        e1.thread = Some("t1".to_string());
         e1.component = Some("auth".to_string());
-        e2.thread = Some("t1".to_string());
         e2.component = Some("db".to_string());
-        e3.thread = Some("t2".to_string());
         e3.component = Some("auth".to_string());
         let entries = vec![e1, e2, e3];
 
-        let mut thread_filter = HashSet::new();
-        thread_filter.insert("t1".to_string());
         let mut component_filter = HashSet::new();
         component_filter.insert("auth".to_string());
         let filter = FilterState {
-            thread_filter,
             component_filter,
             ..Default::default()
         };
-        // Only entry 0 has both t1 AND auth.
+        // Entries 0 and 2 are "auth"; entry 1 is "db" and is excluded.
         let result = apply_filters(&entries, &filter);
-        assert_eq!(result, vec![0]);
+        assert_eq!(result, vec![0, 2]);
     }
 
     /// Regression: `errors_and_warnings_from` must include Critical, Error,

@@ -206,11 +206,6 @@ pub struct PersistedFilter {
     #[serde(default)]
     pub exclude_text: String,
 
-    /// Active thread filter: thread IDs to include.
-    /// Empty = all threads pass.  Serialised as a sorted Vec for stable JSON output.
-    #[serde(default)]
-    pub thread_filter: Vec<String>,
-
     /// Active component filter: component names to include.
     /// Empty = all components pass.  Serialised as a sorted Vec.
     #[serde(default)]
