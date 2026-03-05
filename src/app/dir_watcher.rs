@@ -21,7 +21,8 @@
 
 use crate::core::model::DirWatchProgress;
 use crate::util::constants::{
-    DIR_WATCH_CANCEL_CHECK_INTERVAL_MS, DIR_WATCH_WALK_TIMEOUT_SECS, WALK_BATCH_SIZE,
+    DIR_WATCH_CANCEL_CHECK_INTERVAL_MS, DIR_WATCH_WALK_TIMEOUT_SECS,
+    MAX_MTIME_TRACK_FILES_PER_CYCLE, WALK_BATCH_SIZE,
 };
 use chrono::{DateTime, Utc};
 use glob::Pattern;
@@ -62,6 +63,13 @@ pub struct DirWatchConfig {
     /// Fail-open: files whose mtime cannot be read are always included so that
     /// a permission-restricted metadata call never silently hides a log file.
     pub modified_since: Option<DateTime<Utc>>,
+    /// Minimum interval (ms) between mtime-tracking passes on the background
+    /// thread.  Defaults to `DIR_WATCH_MTIME_INTERVAL_MS` (10 s), which is
+    /// deliberately slower than `poll_interval_ms` (new-file detection at 2 s)
+    /// to reduce peak stat() syscall pressure on large directories.  Each pass
+    /// also checks at most `MAX_MTIME_TRACK_FILES_PER_CYCLE` files in a
+    /// rotating batch so the per-cycle stat count is strictly bounded.
+    pub mtime_poll_interval_ms: u64,
 }
 
 impl Default for DirWatchConfig {
@@ -78,6 +86,7 @@ impl Default for DirWatchConfig {
                 .collect(),
             max_depth: constants::DEFAULT_MAX_DEPTH,
             poll_interval_ms: constants::DIR_WATCH_POLL_INTERVAL_MS,
+            mtime_poll_interval_ms: constants::DIR_WATCH_MTIME_INTERVAL_MS,
             modified_since: None,
         }
     }
@@ -250,6 +259,26 @@ fn run_dir_watcher(
         })
         .collect();
 
+    // Mtime-rotation state:
+    //   mtime_file_list — append-only Vec mirroring known_paths, built so the
+    //     mtime loop has a stable iteration order for round-robin rotation.
+    //     New files are pushed here at the same time they are inserted into
+    //     known_paths so the Vec stays in sync.
+    //   mtime_cursor — index of the next file to check in the rotation.
+    //   last_mtime_check — wall-clock gate: the mtime loop only runs when at
+    //     least mtime_poll_interval has elapsed since the previous pass.
+    //
+    // Pre-subtract the interval so the very first poll cycle runs the mtime
+    // loop immediately.  checked_sub falls back to now() if the program just
+    // started and the subtraction would underflow (cosmetic: first pass is
+    // delayed by one interval, which is fine).
+    let mut mtime_file_list: Vec<PathBuf> = known_paths.iter().cloned().collect();
+    let mut mtime_cursor: usize = 0;
+    let mtime_poll_duration = Duration::from_millis(config.mtime_poll_interval_ms);
+    let mut last_mtime_check = std::time::Instant::now()
+        .checked_sub(mtime_poll_duration)
+        .unwrap_or_else(std::time::Instant::now);
+
     // Receiver + start-time for the currently in-flight walk sub-thread.
     //
     // Only ONE walk sub-thread is allowed at a time to prevent thread
@@ -383,10 +412,13 @@ fn run_dir_watcher(
                 count = new_files.len(),
                 "Directory watcher: new files detected (batch)"
             );
-            // Update known_paths before sending so the next poll cycle won't
-            // re-report the same files even if the channel is slow to drain.
+            // Update known_paths and the mtime rotation list before sending so
+            // the next poll cycle won't re-report the same files.  Appending to
+            // mtime_file_list enrols each new file in the mtime rotation so its
+            // last-modified time is tracked from the next mtime cycle onward.
             for p in &new_files {
                 known_paths.insert(p.clone());
+                mtime_file_list.push(p.clone());
             }
             if tx.send(DirWatchProgress::NewFiles(new_files)).is_err() {
                 // UI thread dropped the receiver — exit cleanly.
@@ -411,43 +443,70 @@ fn run_dir_watcher(
         }
 
         // ------------------------------------------------------------------
-        // mtime tracking: stat every known file and report any that have a
-        // newer modification timestamp than last seen.
+        // mtime tracking: check a rotating batch of known files for
+        // modification-time changes and report any updates.
         //
-        // `tracked_mtimes.entry().or_insert(mtime)` handles new files that
-        // were just added to `known_paths` above: their entry is seeded with
-        // the current mtime so the NEXT poll is the baseline, preventing a
-        // spurious "changed" event on the same cycle they were first detected.
+        // Performance design:
+        //   - Runs at most once per `mtime_poll_interval` (default 10 s).
+        //   - Each pass checks at most MAX_MTIME_TRACK_FILES_PER_CYCLE files
+        //     (default 200) starting from `mtime_cursor`.  The cursor advances
+        //     so different files are checked each cycle; the full set is covered
+        //     over multiple cycles.
+        //   - Peak stat() pressure: 200 files / 10 s = 20 stat/s from this
+        //     loop, regardless of how many files are in known_paths.  The
+        //     previous design issued O(known_paths) stats every 2 s, which at
+        //     5 000 files produced 2 500 stat/s — enough to saturate disk I/O
+        //     on spinning-disk or network-mounted paths and "grind the machine
+        //     to a halt" when Dir Walking + Tail + Activity are all active.
+        //
+        // `tracked_mtimes.entry().or_insert(mtime)` seeds new files with their
+        // current mtime so the NEXT pass is the baseline, preventing a spurious
+        // "changed" event on the cycle they were first enrolled.
         //
         // Per-file stat errors are silently skipped (Rule 11: non-fatal).
         // ------------------------------------------------------------------
-        let mut mtime_updates: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
-        for path in &known_paths {
-            match std::fs::metadata(path).and_then(|m| m.modified()) {
-                Ok(mtime) => {
-                    let entry = tracked_mtimes.entry(path.clone()).or_insert(mtime);
-                    if *entry != mtime {
-                        *entry = mtime;
-                        let dt = DateTime::<Utc>::from(mtime);
-                        mtime_updates.push((path.clone(), dt));
+        if last_mtime_check.elapsed() >= mtime_poll_duration {
+            last_mtime_check = std::time::Instant::now();
+            let total = mtime_file_list.len();
+            if total > 0 {
+                if mtime_cursor >= total {
+                    mtime_cursor = 0;
+                }
+                let batch_end = (mtime_cursor + MAX_MTIME_TRACK_FILES_PER_CYCLE).min(total);
+                let mut mtime_updates: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
+                for path in &mtime_file_list[mtime_cursor..batch_end] {
+                    match std::fs::metadata(path).and_then(|m| m.modified()) {
+                        Ok(mtime) => {
+                            let entry = tracked_mtimes.entry(path.clone()).or_insert(mtime);
+                            if *entry != mtime {
+                                *entry = mtime;
+                                let dt = DateTime::<Utc>::from(mtime);
+                                mtime_updates.push((path.clone(), dt));
+                            }
+                        }
+                        Err(_) => {
+                            // Cannot stat; skip quietly — will be retried next cycle.
+                        }
                     }
                 }
-                Err(_) => {
-                    // Cannot stat; skip quietly — will be retried next cycle.
+                // Advance the cursor; wrap to 0 when the batch reaches the end
+                // so the next cycle starts from the beginning of the list.
+                mtime_cursor = if batch_end >= total { 0 } else { batch_end };
+                if !mtime_updates.is_empty() {
+                    tracing::debug!(
+                        count = mtime_updates.len(),
+                        files_checked = batch_end - (mtime_cursor.saturating_sub(MAX_MTIME_TRACK_FILES_PER_CYCLE.min(batch_end))),
+                        total_known = total,
+                        "Directory watcher: file mtime changes detected"
+                    );
+                    if tx
+                        .send(DirWatchProgress::FileMtimeUpdates(mtime_updates))
+                        .is_err()
+                    {
+                        tracing::debug!("Directory watcher: receiver dropped, exiting");
+                        return;
+                    }
                 }
-            }
-        }
-        if !mtime_updates.is_empty() {
-            tracing::debug!(
-                count = mtime_updates.len(),
-                "Directory watcher: file mtime changes detected"
-            );
-            if tx
-                .send(DirWatchProgress::FileMtimeUpdates(mtime_updates))
-                .is_err()
-            {
-                tracing::debug!("Directory watcher: receiver dropped, exiting");
-                return;
             }
         }
     }

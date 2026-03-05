@@ -10,8 +10,9 @@ use crate::app::tail::TailManager;
 use crate::core::discovery::DiscoveryConfig;
 use crate::ui;
 use crate::util::constants::{
-    FILTER_DEBOUNCE_MS, MAX_DIR_WATCH_MESSAGES_PER_FRAME, MAX_QUEUED_DIR_WATCHER_FILES,
-    MAX_SCAN_MESSAGES_PER_FRAME, MAX_TAIL_MESSAGES_PER_FRAME, MAX_TAIL_WATCH_FILES, MAX_WARNINGS,
+    ACTIVITY_FILTER_MIN_INTERVAL_MS, FILTER_DEBOUNCE_MS, MAX_DIR_WATCH_MESSAGES_PER_FRAME,
+    MAX_QUEUED_DIR_WATCHER_FILES, MAX_SCAN_MESSAGES_PER_FRAME, MAX_TAIL_MESSAGES_PER_FRAME,
+    MAX_TAIL_WATCH_FILES, MAX_WARNINGS,
 };
 
 /// The LogSleuth application.
@@ -22,6 +23,12 @@ pub struct LogSleuthApp {
     /// Background thread that polls the scan directory for newly created log
     /// files and reports them so they can be appended to the live session.
     pub dir_watcher: DirWatcher,
+    /// Timestamp of the last `apply_filters()` call driven by the rolling
+    /// activity-window or relative-time timer.  Throttled to at most once per
+    /// `ACTIVITY_FILTER_MIN_INTERVAL_MS` (2 s) so the O(entries) pass does
+    /// not stall the UI thread at high entry counts when Tail + Activity are
+    /// both active and repaints arrive every 500 ms.
+    last_activity_filter_time: std::time::Instant,
 }
 
 impl LogSleuthApp {
@@ -32,6 +39,7 @@ impl LogSleuthApp {
             scan_manager: ScanManager::new(),
             tail_manager: TailManager::new(),
             dir_watcher: DirWatcher::new(),
+            last_activity_filter_time: std::time::Instant::now(),
         }
     }
 }
@@ -693,10 +701,18 @@ impl eframe::App for LogSleuthApp {
                             f.modified = Some(mtime);
                         }
                     }
-                    // Only iterate entries when at least one entry is missing a
-                    // parsed timestamp (Fix D).  For large sessions with structured
-                    // logs this skips an O(n) write loop that would run every 2s.
-                    if self.state.notimestamp_entry_count > 0 {
+                    // Only update entry.file_modified when a time-range filter
+                    // is active AND some entries lack parsed timestamps.
+                    // entry.file_modified is the time-range-filter fallback for
+                    // plain-text entries; it is NOT used by the activity window
+                    // (which reads discovered_files.modified directly).  Skipping
+                    // this O(entries) scan when no time-range filter is set avoids
+                    // stalling the UI thread on every mtime-update frame for large
+                    // sessions that do not use the date/time filter.
+                    let time_filter_active =
+                        self.state.filter_state.relative_time_secs.is_some()
+                            || self.state.filter_state.time_start.is_some();
+                    if self.state.notimestamp_entry_count > 0 && time_filter_active {
                         for entry in self.state.entries.iter_mut() {
                             if entry.timestamp.is_none() {
                                 if let Some(&mtime) = mtime_map.get(&entry.source_file) {
@@ -717,28 +733,34 @@ impl eframe::App for LogSleuthApp {
         }
 
         // If a relative time filter or activity window is active, refresh the
-        // time-dependent filter state each frame and schedule a 1-second repaint
-        // so the rolling boundary stays current as the clock advances.
-        // Consolidated into a single check to avoid calling apply_filters() twice
-        // per frame when both features are active simultaneously.
+        // time-dependent filter state and schedule a repaint so the rolling
+        // boundary stays current as the clock advances.
         //
-        // `entries_changed = true` means one of the following already ran in this
-        // frame and updated the filter state:
-        //   (a) sort_entries_chronologically() → apply_filters() (slow path), or
-        //   (b) extend_filtered_for_range() (fast path, new entries only).
+        // Performance throttle: `apply_filters()` is O(entries).  When Live
+        // Tail is active repaints arrive every 500 ms; calling apply_filters()
+        // on every quiet frame (no new tail entries) would fire it twice per
+        // second on the UI thread.  We throttle to at most once per
+        // ACTIVITY_FILTER_MIN_INTERVAL_MS (2 s) and skip frames where tail
+        // entries already updated the filter state (`entries_changed = true`).
         //
-        // For case (a): skip, a full rebuild already happened.
-        // For case (b): skip, old entries that aged out will be pruned on the
-        //   NEXT 1-second timer frame (acceptable ~1 s visual lag).
-        // For no-new-entries frames: call apply_filters() to age out entries
-        //   that have crossed the rolling boundary since the last repaint.
+        // For case where entries_changed is true:  the tail path already called
+        // extend_filtered_for_range (fast path) or sort_entries_chronologically
+        // (slow path), both of which keep the filter current for newly arrived
+        // entries.  Aged-out entries that crossed the rolling boundary will be
+        // pruned on the next throttled timer tick (≤2 s visual lag).
         if self.state.filter_state.relative_time_secs.is_some()
             || self.state.activity_window_secs.is_some()
         {
-            if !entries_changed {
+            let elapsed = self.last_activity_filter_time.elapsed();
+            if !entries_changed
+                && elapsed.as_millis() >= ACTIVITY_FILTER_MIN_INTERVAL_MS as u128
+            {
                 self.state.apply_filters();
+                self.last_activity_filter_time = std::time::Instant::now();
             }
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            ctx.request_repaint_after(std::time::Duration::from_millis(
+                ACTIVITY_FILTER_MIN_INTERVAL_MS,
+            ));
         }
 
         // ---- Handle flags set by discovery panel ----
