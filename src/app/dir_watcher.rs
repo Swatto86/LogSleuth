@@ -495,7 +495,9 @@ fn run_dir_watcher(
                 if !mtime_updates.is_empty() {
                     tracing::debug!(
                         count = mtime_updates.len(),
-                        files_checked = batch_end - (mtime_cursor.saturating_sub(MAX_MTIME_TRACK_FILES_PER_CYCLE.min(batch_end))),
+                        files_checked = batch_end
+                            - (mtime_cursor
+                                .saturating_sub(MAX_MTIME_TRACK_FILES_PER_CYCLE.min(batch_end))),
                         total_known = total,
                         "Directory watcher: file mtime changes detected"
                     );

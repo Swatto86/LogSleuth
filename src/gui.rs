@@ -709,9 +709,8 @@ impl eframe::App for LogSleuthApp {
                     // this O(entries) scan when no time-range filter is set avoids
                     // stalling the UI thread on every mtime-update frame for large
                     // sessions that do not use the date/time filter.
-                    let time_filter_active =
-                        self.state.filter_state.relative_time_secs.is_some()
-                            || self.state.filter_state.time_start.is_some();
+                    let time_filter_active = self.state.filter_state.relative_time_secs.is_some()
+                        || self.state.filter_state.time_start.is_some();
                     if self.state.notimestamp_entry_count > 0 && time_filter_active {
                         for entry in self.state.entries.iter_mut() {
                             if entry.timestamp.is_none() {
@@ -752,9 +751,7 @@ impl eframe::App for LogSleuthApp {
             || self.state.activity_window_secs.is_some()
         {
             let elapsed = self.last_activity_filter_time.elapsed();
-            if !entries_changed
-                && elapsed.as_millis() >= ACTIVITY_FILTER_MIN_INTERVAL_MS as u128
-            {
+            if !entries_changed && elapsed.as_millis() >= ACTIVITY_FILTER_MIN_INTERVAL_MS as u128 {
                 self.state.apply_filters();
                 self.last_activity_filter_time = std::time::Instant::now();
             }
