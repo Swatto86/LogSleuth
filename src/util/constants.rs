@@ -138,6 +138,28 @@ pub const MAX_DIR_WATCH_POLL_INTERVAL_MS: u64 = 60_000; // 60 s
 /// — 120 s gives the walk 2 full minutes before giving up.
 pub const DIR_WATCH_WALK_TIMEOUT_SECS: u64 = 120;
 
+/// How often the mtime-tracking pass runs within the directory watcher (ms).
+///
+/// Deliberately slower than `DIR_WATCH_POLL_INTERVAL_MS` (new-file detection)
+/// because mtime updates are only needed for the Activity window filter and
+/// the "last modified" column in the file list — both tolerate a few seconds
+/// of staleness.  A longer interval dramatically reduces stat() syscall
+/// pressure on large directories: at 2 s × 5 000 files = 2 500 stat/s, but
+/// at 10 s the same directory generates only 500 stat/s before the per-cycle
+/// cap applies.
+pub const DIR_WATCH_MTIME_INTERVAL_MS: u64 = 10_000; // 10 s
+
+/// Maximum number of files whose mtimes are checked in a single mtime-tracking
+/// cycle (Rule 11 — resource bounds on background I/O).
+///
+/// A rotating cursor ensures all files in `mtime_file_list` are covered over
+/// time; the cursor advances by this many positions per cycle.  At 200 files
+/// per 10 s cycle the full set of 10 000 files is covered roughly every 8 min,
+/// which is acceptable for activity-window and last-modified-display purposes.
+/// This caps worst-case peak stat() pressure at 200 / 10 s = 20 stat/s from
+/// the mtime loop regardless of directory size.
+pub const MAX_MTIME_TRACK_FILES_PER_CYCLE: usize = 200;
+
 /// Maximum bytes read from a single file in one poll tick.
 /// Prevents a large burst of new content from stalling the entire poll loop.
 pub const MAX_TAIL_READ_BYTES_PER_TICK: usize = 512 * 1_024; // 512 KiB
@@ -212,6 +234,17 @@ pub const MAX_TAIL_MESSAGES_PER_FRAME: usize = 200;
 /// Maximum number of directory-watch messages processed per UI frame.
 /// Directory events are rare; a small cap is sufficient.
 pub const MAX_DIR_WATCH_MESSAGES_PER_FRAME: usize = 20;
+
+/// Minimum interval (ms) between full `apply_filters()` rebuilds triggered by
+/// the rolling activity-window or relative-time timer.
+///
+/// `apply_filters()` is O(entries).  At 500 ms repaint cadence (driven by Live
+/// Tail) with 1 M entries it can consume > 100 ms per frame.  Throttling it to
+/// at most once per 2 s keeps per-frame work bounded while keeping the rolling
+/// window boundary accurate enough for interactive use.  When new tail entries
+/// arrive in a frame (`entries_changed = true`) the rebuild is already driven
+/// by the tail path and this guard is skipped.
+pub const ACTIVITY_FILTER_MIN_INTERVAL_MS: u64 = 2_000;
 
 /// Minimum age (ms) a text-filter change must reach before `apply_filters()` is
 /// triggered.  Debounces the text-search and regex input fields so that
