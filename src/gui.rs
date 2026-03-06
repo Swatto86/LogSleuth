@@ -432,7 +432,7 @@ impl eframe::App for LogSleuthApp {
                         let id_start = self.state.next_entry_id();
                         self.state.scan_in_progress = true;
                         self.state.status_message = format!(
-                            "Directory watcher: {count} new file(s) discovered — tick in Files tab to load entries."
+                            "Directory watcher: {count} new file(s) discovered -- tick in Files tab to load entries."
                         );
                         // Opt-in model: newly-discovered files are profiled but not
                         // parsed.  The user ticks their checkbox to load entries.
@@ -521,7 +521,7 @@ impl eframe::App for LogSleuthApp {
                             tracing::debug!(
                                 evicted,
                                 tail_cap,
-                                "Tail: ring-buffer eviction — oldest tail entries removed"
+                                "Tail: ring-buffer eviction -- oldest tail entries removed"
                             );
                             post_eviction_rebuild = true;
                         }
@@ -652,7 +652,7 @@ impl eframe::App for LogSleuthApp {
                             "Directory watcher: new file(s) discovered, profiling without parsing"
                         );
                         self.state.status_message = format!(
-                            "Directory watcher: {count} new file(s) discovered — tick in Files tab to load entries."
+                            "Directory watcher: {count} new file(s) discovered -- tick in Files tab to load entries."
                         );
                         self.state.scan_in_progress = true;
                         // Pass next_entry_id() so appended entries never reuse IDs
@@ -860,7 +860,7 @@ impl eframe::App for LogSleuthApp {
                 tracing::debug!(
                     hide_all = self.state.filter_state.hide_all_sources,
                     source_files_empty = self.state.filter_state.source_files.is_empty(),
-                    "Session restore: no explicit file selection — using opt-in model (parse nothing)"
+                    "Session restore: no explicit file selection -- using opt-in model (parse nothing)"
                 );
                 Some(std::collections::HashSet::new())
             };

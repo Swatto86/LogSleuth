@@ -232,7 +232,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 "Toggle fuzzy matching.\n\
                  When ON, your search term is treated as a sequence of characters \
                  that must all appear in order, but not necessarily adjacent \
-                 — e.g. \"cnerr\" matches \"Connection error\".\n\
+                 -- e.g. \"cnerr\" matches \"Connection error\".\n\
                  When OFF, only exact substring matches are shown.",
             )
             .clicked()
