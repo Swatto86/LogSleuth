@@ -8,5 +8,6 @@ pub mod discovery;
 pub mod export;
 pub mod filter;
 pub mod model;
+pub mod multi_search;
 pub mod parser;
 pub mod profile;

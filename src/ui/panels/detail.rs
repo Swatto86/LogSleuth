@@ -170,6 +170,89 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
         .id_salt("detail_message")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(&entry.message).monospace());
+            let highlight_ranges = state
+                .filter_state
+                .multi_search
+                .highlight_matches(&entry.message);
+            if highlight_ranges.is_empty() {
+                ui.label(egui::RichText::new(&entry.message).monospace());
+            } else {
+                let job = build_highlighted_layout(
+                    &entry.message,
+                    &highlight_ranges,
+                    ui,
+                    state.dark_mode,
+                );
+                ui.label(job);
+            }
         });
+}
+
+/// Build an `egui::text::LayoutJob` that renders `text` in monospace with
+/// the byte ranges in `ranges` highlighted using a distinct background colour.
+fn build_highlighted_layout(
+    text: &str,
+    ranges: &[(usize, usize)],
+    ui: &egui::Ui,
+    dark_mode: bool,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let mono = egui::FontId::monospace(ui.style().text_styles[&egui::TextStyle::Monospace].size);
+    let normal_colour = ui.style().visuals.text_color();
+    let highlight_bg = if dark_mode {
+        egui::Color32::from_rgba_premultiplied(250, 204, 21, 60) // semi-transparent amber
+    } else {
+        egui::Color32::from_rgba_premultiplied(250, 204, 21, 100)
+    };
+    let highlight_fg = if dark_mode {
+        egui::Color32::from_rgb(255, 255, 255)
+    } else {
+        egui::Color32::from_rgb(0, 0, 0)
+    };
+
+    let mut pos = 0;
+    for &(start, end) in ranges {
+        // Clamp to text length to prevent panics on stale ranges
+        let start = start.min(text.len());
+        let end = end.min(text.len());
+        if start > pos {
+            // Non-highlighted segment
+            job.append(
+                &text[pos..start],
+                0.0,
+                egui::text::TextFormat {
+                    font_id: mono.clone(),
+                    color: normal_colour,
+                    ..Default::default()
+                },
+            );
+        }
+        if end > start {
+            // Highlighted segment
+            job.append(
+                &text[start..end],
+                0.0,
+                egui::text::TextFormat {
+                    font_id: mono.clone(),
+                    color: highlight_fg,
+                    background: highlight_bg,
+                    ..Default::default()
+                },
+            );
+        }
+        pos = end;
+    }
+    // Trailing non-highlighted text
+    if pos < text.len() {
+        job.append(
+            &text[pos..],
+            0.0,
+            egui::text::TextFormat {
+                font_id: mono,
+                color: normal_colour,
+                ..Default::default()
+            },
+        );
+    }
+    job
 }
