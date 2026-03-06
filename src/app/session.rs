@@ -120,6 +120,11 @@ pub struct SessionData {
     /// field default to `DEFAULT_MAX_TAIL_BUFFER_ENTRIES` via serde.
     #[serde(default = "default_max_tail_buffer_entries")]
     pub max_tail_buffer_entries: usize,
+
+    /// Whether Troubleshoot Mode was active.  When `true`, only Critical and
+    /// Error entries are ingested on the next scan / tail session.
+    #[serde(default)]
+    pub troubleshoot_mode: bool,
 }
 
 fn default_correlation_window() -> i64 {
@@ -367,6 +372,7 @@ mod tests {
             tail_poll_interval_ms: 1_000,
             dir_watch_poll_interval_ms: 4_000,
             max_tail_buffer_entries: default_max_tail_buffer_entries(),
+            troubleshoot_mode: false,
         }
     }
 

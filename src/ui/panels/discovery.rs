@@ -802,6 +802,68 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
         });
 
         let has_session = state.scan_path.is_some() || !state.entries.is_empty();
+
+        // -----------------------------------------------------------------
+        // Troubleshoot Mode toggle
+        // -----------------------------------------------------------------
+        // Shown whenever a scan path is configured (active session or about
+        // to start one).  A toggle-style button with a prominent colour to
+        // make the current state obvious.
+        if state.scan_path.is_some() {
+            ui.add_space(6.0);
+            let mode_on = state.troubleshoot_mode;
+            let (btn_text, btn_colour, tooltip) = if mode_on {
+                (
+                    "\u{1f6e0} Troubleshoot Mode: ON",
+                    egui::Color32::from_rgb(248, 113, 113), // red
+                    "Troubleshoot Mode is ACTIVE.\n\n\
+                     Only Critical and Error entries are captured from scans \
+                     and Live Tail.  All other severities are discarded at \
+                     ingestion time to keep memory usage low.\n\n\
+                     Click to deactivate and rescan normally.",
+                )
+            } else {
+                (
+                    "\u{1f6e0} Troubleshoot Mode",
+                    egui::Color32::from_rgb(251, 191, 36), // amber
+                    "Activate Troubleshoot Mode.\n\n\
+                     Sets the date filter to now, rescans the directory, enables \
+                     the directory watcher for new files, and starts Live Tail \
+                     -- capturing only Critical and Error entries.\n\n\
+                     Keeps memory usage low even on high-volume log directories \
+                     so you can focus on errors while reproducing an issue.",
+                )
+            };
+            if ui
+                .add_enabled(
+                    !state.scan_in_progress,
+                    egui::Button::new(egui::RichText::new(btn_text).strong().color(btn_colour)),
+                )
+                .on_hover_text(tooltip)
+                .clicked()
+            {
+                if mode_on {
+                    // Deactivate: turn off troubleshoot mode and rescan.
+                    state.troubleshoot_mode = false;
+                    state.pending_scan = state.scan_path.clone();
+                } else {
+                    // Activate: set date filter to "now", enable mode, rescan.
+                    state.troubleshoot_mode = true;
+                    state.discovery_date_input =
+                        Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                    state.request_start_tail_after_scan = true;
+                    state.pending_scan = state.scan_path.clone();
+                }
+            }
+            if mode_on {
+                ui.label(
+                    egui::RichText::new("Only Critical + Error entries are being captured.")
+                        .small()
+                        .color(egui::Color32::from_rgb(248, 113, 113)),
+                );
+            }
+        }
+
         if has_session {
             ui.add_space(4.0);
             ui.horizontal(|ui| {

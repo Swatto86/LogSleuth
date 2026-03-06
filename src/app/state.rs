@@ -410,6 +410,24 @@ pub struct AppState {
     /// `filter_state.multi_search`.  Kept as a separate buffer because
     /// `MultiSearch` stores parsed term vectors, not the raw input.
     pub multi_search_input: String,
+
+    // -------------------------------------------------------------------------
+    // Troubleshoot mode
+    // -------------------------------------------------------------------------
+    /// When `true`, only Critical and Error entries are retained during
+    /// ingestion (scan batches + live tail).  All other severities are
+    /// discarded before they reach `self.entries`, drastically reducing
+    /// memory usage on high-volume log directories.
+    ///
+    /// Persists across `clear()` calls (user preference).  Reset by
+    /// `new_session()` so a fresh start always begins in normal mode.
+    pub troubleshoot_mode: bool,
+
+    /// When `true`, `gui.rs` will automatically start Live Tail after the
+    /// next `ParsingCompleted` arrives.  Set by the Troubleshoot Mode
+    /// activation flow; consumed and cleared by the `ParsingCompleted`
+    /// handler.
+    pub request_start_tail_after_scan: bool,
 }
 
 // =============================================================================
@@ -527,6 +545,8 @@ impl AppState {
             unique_component_values: Vec::new(),
             dedup_info: HashMap::new(),
             multi_search_input: String::new(),
+            troubleshoot_mode: false,
+            request_start_tail_after_scan: false,
         }
     }
 
@@ -830,6 +850,28 @@ impl AppState {
                 self.notimestamp_entry_count += 1;
             }
         }
+    }
+
+    /// Filter a mutable entry vector in-place, retaining only Critical and
+    /// Error entries when troubleshoot mode is active.
+    ///
+    /// Returns the number of entries dropped.  When troubleshoot mode is off
+    /// this is a no-op that returns 0.
+    pub fn filter_entries_for_ingest(
+        &self,
+        entries: &mut Vec<crate::core::model::LogEntry>,
+    ) -> usize {
+        if !self.troubleshoot_mode {
+            return 0;
+        }
+        let before = entries.len();
+        entries.retain(|e| {
+            matches!(
+                e.severity,
+                crate::core::model::Severity::Critical | crate::core::model::Severity::Error
+            )
+        });
+        before - entries.len()
     }
 
     /// Record the current entry count as the live-tail baseline.
@@ -1269,6 +1311,11 @@ impl AppState {
         self.dedup_info.clear();
         // Clear multi-search input buffer.
         self.multi_search_input.clear();
+        // troubleshoot_mode is intentionally NOT cleared here — it is a user
+        // preference that persists across rescans.  Reset only by new_session().
+        // request_start_tail_after_scan is consumed once; clear it to prevent
+        // stale requests from a cancelled scan leaking into the next one.
+        self.request_start_tail_after_scan = false;
     }
 
     /// Reset to the initial blank state: clears everything `clear()` clears
@@ -1277,6 +1324,7 @@ impl AppState {
     pub fn new_session(&mut self) {
         self.clear();
         self.scan_path = None;
+        self.troubleshoot_mode = false;
         self.status_message = "Ready. Open a directory to begin scanning.".to_string();
     }
 
@@ -1397,6 +1445,7 @@ impl AppState {
             tail_poll_interval_ms: self.tail_poll_interval_ms,
             dir_watch_poll_interval_ms: self.dir_watch_poll_interval_ms,
             max_tail_buffer_entries: self.max_tail_buffer_entries,
+            troubleshoot_mode: self.troubleshoot_mode,
         };
         if let Err(e) = crate::app::session::save(&data, session_path) {
             tracing::warn!(error = %e, "Failed to save session");
@@ -1470,6 +1519,7 @@ impl AppState {
         self.tail_poll_interval_ms = data.tail_poll_interval_ms;
         self.dir_watch_poll_interval_ms = data.dir_watch_poll_interval_ms;
         self.max_tail_buffer_entries = data.max_tail_buffer_entries;
+        self.troubleshoot_mode = data.troubleshoot_mode;
 
         // Restore multi-term search state.
         self.multi_search_input = f.multi_search_input.clone();
@@ -1933,6 +1983,7 @@ mod tests {
             tail_poll_interval_ms: crate::util::constants::TAIL_POLL_INTERVAL_MS,
             dir_watch_poll_interval_ms: crate::util::constants::DIR_WATCH_POLL_INTERVAL_MS,
             max_tail_buffer_entries: crate::util::constants::DEFAULT_MAX_TAIL_BUFFER_ENTRIES,
+            troubleshoot_mode: false,
         };
 
         state.restore_from_session(data);
