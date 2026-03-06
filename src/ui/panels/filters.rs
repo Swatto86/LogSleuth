@@ -16,7 +16,36 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         .on_hover_text("Narrow down which log entries are shown in the timeline. Filters are combined: an entry must match all active filters to appear.");
     ui.separator();
 
-    // Single row — severity presets + utility actions combined.
+    // Troubleshoot mode warning banner — shown above all filter controls so the
+    // user is aware that the dataset is pre-filtered at ingestion time and NOT
+    // all severity levels are present in memory.
+    if state.troubleshoot_mode {
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgba_premultiplied(80, 20, 20, 200))
+            .inner_margin(egui::Margin::same(6))
+            .corner_radius(4.0)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new("\u{26a0} Troubleshoot Mode")
+                            .strong()
+                            .color(egui::Color32::from_rgb(248, 113, 113)),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "Only Critical and Error entries have been captured. \
+                         Info, Warning, Debug, and Unknown entries were \
+                         discarded at load time to reduce memory usage.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(252, 165, 165)),
+                );
+            });
+        ui.add_space(4.0);
+    }
+
+    // Single row -- severity presets + utility actions combined.
     ui.horizontal_wrapped(|ui| {
         let fuzzy = state.filter_state.fuzzy;
         if ui

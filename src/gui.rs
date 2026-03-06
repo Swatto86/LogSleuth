@@ -165,7 +165,11 @@ impl eframe::App for LogSleuthApp {
                     self.state.status_message =
                         format!("Parsing files ({files_completed}/{total_files})...");
                 }
-                crate::core::model::ScanProgress::EntriesBatch { entries } => {
+                crate::core::model::ScanProgress::EntriesBatch { mut entries } => {
+                    // Troubleshoot mode: drop non-Critical/Error entries before
+                    // they consume memory or the entry cap.
+                    self.state.filter_entries_for_ingest(&mut entries);
+
                     // Cap total entries at the configured limit on the UI thread as
                     // well as on the background thread.  This matters for append
                     // scans where the UI already holds entries from a previous scan
@@ -263,15 +267,28 @@ impl eframe::App for LogSleuthApp {
                     // empty-state hint.
                     if self.state.fresh_scan_in_progress {
                         self.state.fresh_scan_in_progress = false;
-                        self.state.filter_state.hide_all_sources = true;
-                        self.state.filter_state.source_files.clear();
-                        if self.state.entries.is_empty() {
+                        // Troubleshoot mode: show all files (no opt-in gating)
+                        // so Live Tail can watch everything immediately.
+                        if self.state.troubleshoot_mode {
+                            self.state.filter_state.hide_all_sources = false;
+                            self.state.filter_state.source_files.clear();
                             let n = self.state.discovered_files.len();
                             let word = if n == 1 { "file" } else { "files" };
                             self.state.status_message = format!(
-                                "{n} {word} discovered \u{2014} tick files in the \
-                                 Files tab to load their entries."
+                                "Troubleshoot mode: {n} {word} discovered \
+                                 \u{2014} tailing for errors and criticals."
                             );
+                        } else {
+                            self.state.filter_state.hide_all_sources = true;
+                            self.state.filter_state.source_files.clear();
+                            if self.state.entries.is_empty() {
+                                let n = self.state.discovered_files.len();
+                                let word = if n == 1 { "file" } else { "files" };
+                                self.state.status_message = format!(
+                                    "{n} {word} discovered \u{2014} tick files in the \
+                                     Files tab to load their entries."
+                                );
+                            }
                         }
                     }
                     // Sort chronologically before applying filters.
@@ -325,6 +342,15 @@ impl eframe::App for LogSleuthApp {
                     if self.state.tail_active {
                         self.tail_manager.stop_tail();
                         self.state.request_start_tail = true;
+                    }
+
+                    // Troubleshoot mode: auto-start Live Tail after the initial
+                    // scan completes so new log lines are captured immediately.
+                    if self.state.request_start_tail_after_scan {
+                        self.state.request_start_tail_after_scan = false;
+                        if !self.state.tail_active {
+                            self.state.request_start_tail = true;
+                        }
                     }
 
                     // Session restore: re-add any "Add File(s)..." files that were
@@ -460,7 +486,11 @@ impl eframe::App for LogSleuthApp {
                 crate::core::model::TailProgress::Started { file_count } => {
                     tracing::info!(files = file_count, "Live tail active");
                 }
-                crate::core::model::TailProgress::NewEntries { entries } => {
+                crate::core::model::TailProgress::NewEntries { mut entries } => {
+                    // Troubleshoot mode: drop non-Critical/Error entries before
+                    // they consume memory or the ring-buffer cap.
+                    self.state.filter_entries_for_ingest(&mut entries);
+
                     if entries.is_empty() {
                         continue;
                     }
