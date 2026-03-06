@@ -5,6 +5,7 @@
 // Core layer: pure logic, no I/O or UI dependencies.
 
 use crate::core::model::{LogEntry, Severity};
+use crate::core::multi_search::MultiSearch;
 use crate::util::error::FilterError;
 use chrono::{DateTime, Utc};
 use regex::{Regex, RegexBuilder};
@@ -297,6 +298,12 @@ pub struct FilterState {
     /// for-character; `Normalized` replaces variable data (IPs, GUIDs, hex,
     /// numbers) with tokens before comparing.
     pub dedup_mode: DedupMode,
+
+    /// Multi-term search configuration.  When active (non-empty terms),
+    /// entries must also pass the multi-search filter in addition to all
+    /// other filters.  Supports ANY/ALL modes, NOT terms, minimum match
+    /// thresholds, and per-term highlighting.
+    pub multi_search: MultiSearch,
 }
 
 impl FilterState {
@@ -318,6 +325,7 @@ impl FilterState {
             && self.component_filter.is_empty()
             && !self.hide_no_timestamp
             && self.dedup_mode == DedupMode::Off
+            && self.multi_search.is_empty()
     }
 
     /// Set the regex search pattern, compiling it.
@@ -618,6 +626,18 @@ fn matches_all(entry: &LogEntry, filter: &FilterState, text_lower: &str, excl_lo
             Some(c) if filter.component_filter.contains(c) => {}
             _ => return false,
         }
+    }
+
+    // Multi-term search: delegates to the MultiSearch engine which uses
+    // RegexSet for efficient single-pass multi-pattern matching.
+    if filter.multi_search.is_active()
+        && !filter.multi_search.matches_entry(
+            &entry.message,
+            entry.thread.as_deref(),
+            entry.component.as_deref(),
+        )
+    {
+        return false;
     }
 
     true

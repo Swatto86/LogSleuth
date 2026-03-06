@@ -404,6 +404,12 @@ pub struct AppState {
     /// loop fires `apply_filters()` once this age exceeds `FILTER_DEBOUNCE_MS`,
     /// preventing an O(n) filter pass on every individual keystroke.
     pub filter_dirty_at: Option<std::time::Instant>,
+
+    /// Raw text typed by the user into the multi-term search input box.
+    /// Parsed into include/exclude terms on each edit and compiled into
+    /// `filter_state.multi_search`.  Kept as a separate buffer because
+    /// `MultiSearch` stores parsed term vectors, not the raw input.
+    pub multi_search_input: String,
 }
 
 // =============================================================================
@@ -520,6 +526,7 @@ impl AppState {
             fresh_scan_in_progress: false,
             unique_component_values: Vec::new(),
             dedup_info: HashMap::new(),
+            multi_search_input: String::new(),
         }
     }
 
@@ -1260,6 +1267,8 @@ impl AppState {
         self.unique_component_values.clear();
         // Clear dedup metadata.
         self.dedup_info.clear();
+        // Clear multi-search input buffer.
+        self.multi_search_input.clear();
     }
 
     /// Reset to the initial blank state: clears everything `clear()` clears
@@ -1352,6 +1361,12 @@ impl AppState {
             },
             hide_no_timestamp: self.filter_state.hide_no_timestamp,
             dedup_mode: self.filter_state.dedup_mode,
+            multi_search_input: self.multi_search_input.clone(),
+            multi_search_mode: self.filter_state.multi_search.mode,
+            multi_search_min_match: self.filter_state.multi_search.min_match,
+            multi_search_case_insensitive: self.filter_state.multi_search.case_insensitive,
+            multi_search_whole_word: self.filter_state.multi_search.whole_word,
+            multi_search_regex_mode: self.filter_state.multi_search.regex_mode,
         };
         let file_colours = self
             .file_colours
@@ -1455,6 +1470,29 @@ impl AppState {
         self.tail_poll_interval_ms = data.tail_poll_interval_ms;
         self.dir_watch_poll_interval_ms = data.dir_watch_poll_interval_ms;
         self.max_tail_buffer_entries = data.max_tail_buffer_entries;
+
+        // Restore multi-term search state.
+        self.multi_search_input = f.multi_search_input.clone();
+        if !self.multi_search_input.is_empty() {
+            let (include, exclude) =
+                crate::core::multi_search::MultiSearch::parse_terms(&self.multi_search_input);
+            self.filter_state.multi_search.include_terms = include;
+            self.filter_state.multi_search.exclude_terms = exclude;
+            self.filter_state.multi_search.mode = f.multi_search_mode;
+            self.filter_state.multi_search.min_match = f.multi_search_min_match;
+            self.filter_state.multi_search.case_insensitive = f.multi_search_case_insensitive;
+            self.filter_state.multi_search.whole_word = f.multi_search_whole_word;
+            self.filter_state.multi_search.regex_mode = f.multi_search_regex_mode;
+            self.filter_state.multi_search.compile();
+            if let Some(ref err) = self.filter_state.multi_search.compile_error {
+                tracing::warn!(
+                    error = %err,
+                    "Session restore: saved multi-search terms failed to compile, discarding"
+                );
+                self.multi_search_input.clear();
+                self.filter_state.multi_search = crate::core::multi_search::MultiSearch::default();
+            }
+        }
     }
 }
 

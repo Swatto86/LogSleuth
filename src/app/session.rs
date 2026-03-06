@@ -15,6 +15,7 @@
 
 use crate::core::filter::DedupMode;
 use crate::core::model::Severity;
+use crate::core::multi_search::MultiSearchMode;
 use crate::util::constants::SESSION_FILE_NAME;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -219,6 +220,34 @@ pub struct PersistedFilter {
     /// Defaults to Off for backward compatibility with older sessions.
     #[serde(default)]
     pub dedup_mode: DedupMode,
+
+    /// Multi-term search raw input text.  Re-parsed and compiled on restore.
+    #[serde(default)]
+    pub multi_search_input: String,
+
+    /// Multi-term search mode (Any / All).
+    #[serde(default)]
+    pub multi_search_mode: MultiSearchMode,
+
+    /// Multi-term search: minimum match threshold.
+    #[serde(default)]
+    pub multi_search_min_match: Option<usize>,
+
+    /// Multi-term search: case-insensitive flag.
+    #[serde(default = "default_true")]
+    pub multi_search_case_insensitive: bool,
+
+    /// Multi-term search: whole-word flag.
+    #[serde(default)]
+    pub multi_search_whole_word: bool,
+
+    /// Multi-term search: regex mode flag.
+    #[serde(default)]
+    pub multi_search_regex_mode: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // =============================================================================

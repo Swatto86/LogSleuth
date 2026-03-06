@@ -7,6 +7,7 @@
 use crate::app::state::AppState;
 use crate::core::filter::DedupMode;
 use crate::core::model::Severity;
+use crate::core::multi_search::{MultiSearch, MultiSearchMode};
 use crate::ui::theme;
 
 /// Render the filter controls sidebar section.
@@ -353,6 +354,14 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             "Number of unique message groups shown and how many duplicate entries are collapsed",
         );
     }
+
+    ui.add_space(6.0);
+    ui.separator();
+
+    // -------------------------------------------------------------------------
+    // Multi-term search
+    // -------------------------------------------------------------------------
+    render_multi_search(ui, state);
 
     ui.add_space(6.0);
     ui.separator();
@@ -828,4 +837,245 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             });
         });
     }
+}
+
+/// Render the multi-term search section inside the filter panel.
+///
+/// Provides a collapsible UI for entering multiple search terms (one per
+/// line or comma-separated), choosing match mode (ANY/ALL), and toggling
+/// per-term options (case, whole word, regex).  Feeds into
+/// `FilterState::multi_search` via debounced recompilation.
+fn render_multi_search(ui: &mut egui::Ui, state: &mut AppState) {
+    let ms = &state.filter_state.multi_search;
+    let active = ms.is_active();
+    let has_error = ms.compile_error.is_some();
+    let term_count = ms.include_terms.len() + ms.exclude_terms.len();
+
+    // Section heading with active indicator
+    let heading_text = if active {
+        format!("Multi-term Search ({term_count})")
+    } else {
+        "Multi-term Search".to_string()
+    };
+    let heading_colour = if active {
+        egui::Color32::from_rgb(96, 165, 250) // blue when active
+    } else if has_error {
+        egui::Color32::from_rgb(248, 113, 113) // red on error
+    } else {
+        ui.style().visuals.text_color()
+    };
+
+    let id = ui.make_persistent_id("multi_search_section");
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        .show_header(ui, |ui| {
+            ui.label(egui::RichText::new(heading_text).color(heading_colour))
+                .on_hover_text(
+                    "Search for multiple terms simultaneously.\n\n\
+                     Enter one term per line, or separate with commas.\n\
+                     Prefix a term with - or ! to exclude entries containing it.\n\n\
+                     Examples:\n  error\n  timeout\n  -heartbeat\n  !noise",
+                );
+        })
+        .body(|ui| {
+            // Multiline text input for terms
+            ui.label(egui::RichText::new("Terms (one per line or comma-separated):").small())
+                .on_hover_text(
+                    "Enter search terms, one per line or separated by commas.\n\
+                     Prefix with - or ! to make a NOT (exclusion) term.\n\n\
+                     Examples:\n  error, timeout, refused\n  -heartbeat\n  !healthcheck",
+                );
+
+            let text_resp = ui.add(
+                egui::TextEdit::multiline(&mut state.multi_search_input)
+                    .desired_rows(4)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("error, timeout\n-heartbeat")
+                    .font(egui::TextStyle::Monospace),
+            );
+            if text_resp
+                .on_hover_text(
+                    "Type search terms here. One per line, or comma-separated.\n\
+                     Prefix with - or ! to exclude matching entries.",
+                )
+                .changed()
+            {
+                recompile_multi_search(state);
+                state.filter_dirty_at = Some(std::time::Instant::now());
+            }
+
+            ui.add_space(2.0);
+
+            // Mode selector + min match on the same row
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Mode:").small())
+                    .on_hover_text(
+                        "ANY (OR): show entries matching at least one include term.\n\
+                         ALL (AND): show only entries matching every include term.",
+                    );
+                let prev_mode = state.filter_state.multi_search.mode;
+                egui::ComboBox::from_id_salt("ms_mode")
+                    .selected_text(state.filter_state.multi_search.mode.label())
+                    .width(90.0)
+                    .show_ui(ui, |ui| {
+                        for &mode in MultiSearchMode::all() {
+                            let tip = match mode {
+                                MultiSearchMode::Any => {
+                                    "OR logic: entries matching ANY one of the include terms are shown"
+                                }
+                                MultiSearchMode::All => {
+                                    "AND logic: only entries matching ALL include terms are shown"
+                                }
+                            };
+                            ui.selectable_value(
+                                &mut state.filter_state.multi_search.mode,
+                                mode,
+                                mode.label(),
+                            )
+                            .on_hover_text(tip);
+                        }
+                    });
+                if state.filter_state.multi_search.mode != prev_mode {
+                    // Mode changed but patterns haven't — no recompile needed,
+                    // just re-evaluate filters.
+                    state.filter_dirty_at = Some(std::time::Instant::now());
+                }
+            });
+
+            // Min-match threshold (only meaningful for ANY mode with 2+ terms)
+            let include_count = state.filter_state.multi_search.include_terms.len();
+            if include_count >= 2 {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Min match:").small())
+                        .on_hover_text(
+                            "Minimum number of include terms that must match for an entry to pass.\n\
+                             Default: 1 for ANY mode, all for ALL mode.\n\
+                             Set to 2+ for threshold matching (e.g. 'at least 3 of 5 terms').",
+                        );
+
+                    let max = include_count;
+                    let mut val = state
+                        .filter_state
+                        .multi_search
+                        .min_match
+                        .unwrap_or(match state.filter_state.multi_search.mode {
+                            MultiSearchMode::Any => 1,
+                            MultiSearchMode::All => max,
+                        });
+
+                    let slider = egui::Slider::new(&mut val, 1..=max)
+                        .clamping(egui::SliderClamping::Always)
+                        .integer();
+                    if ui
+                        .add(slider)
+                        .on_hover_text(format!(
+                            "Require at least this many of the {include_count} include terms to match.\n\
+                             Currently: {val} of {include_count}.",
+                        ))
+                        .changed()
+                    {
+                        state.filter_state.multi_search.min_match = Some(val);
+                        state.filter_dirty_at = Some(std::time::Instant::now());
+                    }
+                });
+            }
+
+            ui.add_space(2.0);
+
+            // Option toggles in a horizontal row
+            ui.horizontal_wrapped(|ui| {
+                // Case sensitivity toggle
+                let mut case_i = state.filter_state.multi_search.case_insensitive;
+                if ui
+                    .checkbox(&mut case_i, "Ignore case")
+                    .on_hover_text(
+                        "When checked, matching is case-insensitive (e.g. 'Error' matches 'error').\n\
+                         When unchecked, case must match exactly.",
+                    )
+                    .changed()
+                {
+                    state.filter_state.multi_search.case_insensitive = case_i;
+                    recompile_multi_search(state);
+                    state.filter_dirty_at = Some(std::time::Instant::now());
+                }
+
+                // Whole word toggle
+                let mut ww = state.filter_state.multi_search.whole_word;
+                if ui
+                    .checkbox(&mut ww, "Whole word")
+                    .on_hover_text(
+                        "When checked, terms only match at word boundaries.\n\
+                         'error' matches 'an error occurred' but NOT 'errors' or 'myerror'.\n\
+                         Uses \\b (word boundary) anchors around each term.",
+                    )
+                    .changed()
+                {
+                    state.filter_state.multi_search.whole_word = ww;
+                    recompile_multi_search(state);
+                    state.filter_dirty_at = Some(std::time::Instant::now());
+                }
+
+                // Regex mode toggle
+                let mut rx = state.filter_state.multi_search.regex_mode;
+                if ui
+                    .checkbox(&mut rx, "Regex")
+                    .on_hover_text(
+                        "When checked, terms are treated as regular expressions.\n\
+                         When unchecked, terms are treated as literal text (special regex characters are escaped).\n\n\
+                         Example regex terms:\n  \\d{3}\\.\\d{3}\n  timeout|refused\n  ^ERROR",
+                    )
+                    .changed()
+                {
+                    state.filter_state.multi_search.regex_mode = rx;
+                    recompile_multi_search(state);
+                    state.filter_dirty_at = Some(std::time::Instant::now());
+                }
+            });
+
+            // Clear button
+            if !state.multi_search_input.is_empty() {
+                ui.horizontal(|ui| {
+                    if ui
+                        .small_button("\u{d7} Clear terms")
+                        .on_hover_text("Remove all multi-search terms and reset to defaults")
+                        .clicked()
+                    {
+                        state.multi_search_input.clear();
+                        state.filter_state.multi_search = MultiSearch::default();
+                        state.apply_filters();
+                    }
+                });
+            }
+
+            // Compile error feedback
+            if let Some(ref err) = state.filter_state.multi_search.compile_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(248, 113, 113),
+                    format!("\u{2717} {err}"),
+                )
+                .on_hover_text(
+                    "One or more search terms failed to compile. Check for invalid regex syntax.",
+                );
+            } else if active {
+                let inc = state.filter_state.multi_search.include_terms.len();
+                let exc = state.filter_state.multi_search.exclude_terms.len();
+                let mode = state.filter_state.multi_search.mode.label();
+                let summary = if exc > 0 {
+                    format!("\u{2713} {inc} include, {exc} exclude ({mode})")
+                } else {
+                    format!("\u{2713} {inc} terms ({mode})")
+                };
+                ui.colored_label(egui::Color32::from_rgb(74, 222, 128), summary)
+                    .on_hover_text(
+                        "Multi-term search is active. Entries are filtered according to the terms and mode above.",
+                    );
+            }
+        });
+}
+
+/// Re-parse and recompile the multi-search terms from the raw input buffer.
+fn recompile_multi_search(state: &mut AppState) {
+    let (include, exclude) = MultiSearch::parse_terms(&state.multi_search_input);
+    state.filter_state.multi_search.include_terms = include;
+    state.filter_state.multi_search.exclude_terms = exclude;
+    state.filter_state.multi_search.compile();
 }
