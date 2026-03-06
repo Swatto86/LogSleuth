@@ -143,7 +143,7 @@ critical = ["Critical", "Fatal"]
 | FILT-04 | Filter by text search (substring match across message field, case-insensitive) |
 | FILT-05 | Filter by regex search (user-provided regex against message field) |
 | FILT-06 | Filters are composable: all active filters are AND-combined |
-| FILT-07 | Filter changes apply immediately (no "Apply" button). `[FUTURE]` Debounce on text input (300ms) is not yet implemented; text filters apply on every keystroke. |
+| FILT-07 | `[IMPL]` Filter changes apply immediately (no "Apply" button). Text-input fields (text search, regex, exclusion, multi-search) are debounced at `FILTER_DEBOUNCE_MS` (150 ms): keystrokes set a `filter_dirty_at` timestamp and the render loop fires `apply_filters()` only once the field has been unchanged for the debounce interval, preventing an O(n) filter pass on every keystroke. Button, checkbox, and dropdown changes bypass debounce and apply instantly. |
 | FILT-08 | Matched/total entry count displayed as a badge in the filter panel. `[PARTIAL]` Active filter count label (e.g. "3 filters active") is not yet shown. |
 | FILT-09 | "Errors only" quick-filter button for the most common troubleshooting workflow |
 | FILT-10 | `[IMPL]` Relative time window quick-buttons (15 min / 1 h / 6 h / 24 h) and a custom "Last ___ min" text input with Enter-to-commit and a clear (✕) button. A live feedback label shows the computed absolute "After HH:MM:SS" boundary. |
