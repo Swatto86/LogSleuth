@@ -5,6 +5,8 @@
 // Must NOT depend on: ui, platform, app, or any I/O crate directly.
 
 pub mod discovery;
+#[cfg(target_os = "windows")]
+pub mod evtx_parser;
 pub mod export;
 pub mod filter;
 pub mod model;

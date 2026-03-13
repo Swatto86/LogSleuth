@@ -58,6 +58,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 
+# Windows Event Log (.evtx) binary format parser (Windows-only)
+[target.'cfg(windows)'.dependencies]
+evtx = "0.8"
+
 [dev-dependencies]
 tempfile = "3"
 # Icon generation tool (examples/gen_icons.rs): render SVG -> PNG -> ICO

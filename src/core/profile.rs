@@ -500,6 +500,44 @@ pub fn load_builtin_profiles() -> Vec<FormatProfile> {
 }
 
 // =============================================================================
+// Windows Event Log (.evtx) profile (Windows-only)
+// =============================================================================
+
+/// Create the built-in profile for Windows Event Log (.evtx) binary files.
+///
+/// This profile is registered programmatically (not from a TOML file) because
+/// `.evtx` files are binary -- the regex-based text parser cannot handle them.
+/// The `content_match` and `line_pattern` fields are set to harmless dummy
+/// values that satisfy the `FormatProfile` struct but are never used; the scan
+/// pipeline detects `.evtx` files by extension and routes them to
+/// `core::evtx_parser::parse_evtx_file()` instead.
+#[cfg(target_os = "windows")]
+pub fn create_evtx_profile() -> FormatProfile {
+    FormatProfile {
+        id: crate::util::constants::EVTX_PROFILE_ID.to_string(),
+        name: "Windows Event Log (.evtx)".to_string(),
+        version: "1.0".to_string(),
+        description: "Windows Event Viewer binary log files (.evtx). \
+                      Parsed using native binary format support -- not regex-based."
+            .to_string(),
+        file_patterns: vec!["*.evtx".to_string()],
+        compiled_file_patterns: vec![glob::Pattern::new("*.evtx").expect("valid glob pattern")],
+        // Dummy regex: matches the EVTX file magic header when read as text.
+        // In practice, the scan pipeline intercepts .evtx files by extension
+        // before content-based detection ever runs.
+        content_match: Regex::new("^ElfFile").expect("valid regex"),
+        // Dummy line pattern: never used for binary parsing.
+        line_pattern: Regex::new("(?P<message>.+)").expect("valid regex"),
+        timestamp_format: String::new(),
+        multiline_mode: MultilineMode::default(),
+        severity_mapping: HashMap::new(),
+        severity_override: HashMap::new(),
+        is_builtin: true,
+        log_locations: vec!["Windows: C:\\Windows\\System32\\winevt\\Logs\\".to_string()],
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

@@ -22,6 +22,14 @@ pub fn load_all_profiles(
     let mut profiles = profile::load_builtin_profiles();
     let mut errors = Vec::new();
 
+    // On Windows, register the built-in EVTX profile for Event Viewer files.
+    #[cfg(target_os = "windows")]
+    {
+        let evtx_profile = profile::create_evtx_profile();
+        tracing::info!(profile_id = %evtx_profile.id, "Registered Windows Event Log (.evtx) profile");
+        profiles.push(evtx_profile);
+    }
+
     tracing::info!(builtin_count = profiles.len(), "Loaded built-in profiles");
 
     // Load user-defined profiles if the directory exists
