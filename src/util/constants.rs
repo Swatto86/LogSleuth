@@ -326,6 +326,11 @@ pub const DEFAULT_LARGE_EXPORT_THRESHOLD: usize = 100_000;
 // =============================================================================
 
 /// Default include glob patterns for log file discovery.
+#[cfg(target_os = "windows")]
+pub const DEFAULT_INCLUDE_PATTERNS: &[&str] = &["*.log", "*.log.[0-9]*", "*.txt", "*.evtx"];
+
+/// Default include glob patterns for log file discovery.
+#[cfg(not(target_os = "windows"))]
 pub const DEFAULT_INCLUDE_PATTERNS: &[&str] = &["*.log", "*.log.[0-9]*", "*.txt"];
 
 /// Default exclude glob patterns for log file discovery.
@@ -360,6 +365,20 @@ pub const MAX_EXPORT_ENTRIES: usize = 5_000_000;
 // =============================================================================
 // Configuration
 // =============================================================================
+
+// =============================================================================
+// Windows Event Log (.evtx) support
+// =============================================================================
+
+/// Profile ID for the built-in Windows Event Log (.evtx) format.
+/// Used by `core::evtx_parser` and `core::profile::create_evtx_profile()`.
+#[cfg(target_os = "windows")]
+pub const EVTX_PROFILE_ID: &str = "windows-evtx";
+
+/// Maximum EventData key=value pairs extracted from an .evtx event XML.
+/// Prevents extremely long messages from events with many data fields.
+#[cfg(target_os = "windows")]
+pub const EVTX_MAX_DATA_PAIRS: usize = 20;
 
 /// Configuration file name.
 pub const CONFIG_FILE_NAME: &str = "config.toml";

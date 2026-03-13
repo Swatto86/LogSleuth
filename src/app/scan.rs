@@ -649,6 +649,91 @@ fn run_parse_pipeline(
                 }
             }
 
+            // -----------------------------------------------------------------
+            // EVTX binary format: bypass text parser (Windows only)
+            // -----------------------------------------------------------------
+            // .evtx files are binary and cannot be parsed by the regex-based
+            // text parser.  Detect by extension and route to the dedicated
+            // evtx_parser module which uses the `evtx` crate.
+            #[cfg(target_os = "windows")]
+            {
+                if file
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("evtx"))
+                    == Some(true)
+                {
+                    let evtx_result = crate::core::evtx_parser::parse_evtx_file(
+                        &file.path,
+                        parse_config.max_entry_size,
+                        parse_config.max_parse_errors_per_file,
+                        0, // temporary IDs -- reassigned sequentially after collection
+                    );
+
+                    // Stamp file mtime on every entry (same as the text path).
+                    let file_mtime = file.modified;
+                    let mut evtx_entries = evtx_result.entries;
+                    for entry in &mut evtx_entries {
+                        entry.file_modified = file_mtime;
+                    }
+
+                    let entry_count = evtx_entries.len();
+                    let error_count = evtx_result.errors.len();
+
+                    // Build per-file summary.
+                    let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
+                    let mut latest: Option<chrono::DateTime<chrono::Utc>> = None;
+                    for entry in &evtx_entries {
+                        if let Some(ts) = entry.timestamp {
+                            earliest = Some(match earliest {
+                                Some(e) if e <= ts => e,
+                                _ => ts,
+                            });
+                            latest = Some(match latest {
+                                Some(l) if l >= ts => l,
+                                _ => ts,
+                            });
+                        }
+                    }
+
+                    for err in &evtx_result.errors {
+                        tracing::debug!(error = %err, "EVTX parse error");
+                    }
+
+                    let completed =
+                        files_completed_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = progress_tx.send(ScanProgress::FileParsed {
+                        path: file.path.clone(),
+                        entries: entry_count,
+                        errors: error_count,
+                        files_completed: completed,
+                        total_files,
+                    });
+
+                    return FileResult {
+                        idx,
+                        profile_id: Some(
+                            crate::util::constants::EVTX_PROFILE_ID.to_string(),
+                        ),
+                        detection_confidence: 1.0,
+                        entries: evtx_entries,
+                        summary: Some(FileSummary {
+                            path: file.path.clone(),
+                            profile_id: crate::util::constants::EVTX_PROFILE_ID
+                                .to_string(),
+                            entry_count,
+                            error_count,
+                            earliest,
+                            latest,
+                        }),
+                        warnings: Vec::new(),
+                        error_count,
+                        parsing_skipped: false,
+                    };
+                }
+            }
+
             let mut warnings: Vec<String> = Vec::new();
 
             // --- Single I/O pass: read full file content (timeout-guarded) ---
