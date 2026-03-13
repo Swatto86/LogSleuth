@@ -490,8 +490,27 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     if nb.iter().all(|b| b.is_ascii()) && hb.iter().all(|b| b.is_ascii()) {
         return hb.windows(nb.len()).any(|w| w.eq_ignore_ascii_case(nb));
     }
-    // Slow path: Unicode — fall back to allocating a lowercased haystack.
-    haystack.to_lowercase().contains(needle)
+    // Slow path: Unicode -- char-by-char lowercase matching avoids
+    // allocating a lowered copy of the entire haystack.  The needle is
+    // already lowercased by the caller.
+    let needle_chars: Vec<char> = needle.chars().collect();
+    for (start_byte, _) in haystack.char_indices() {
+        let mut hay_lower = haystack[start_byte..].chars().flat_map(char::to_lowercase);
+        let mut matched = true;
+        for &nc in &needle_chars {
+            match hay_lower.next() {
+                Some(lc) if lc == nc => {}
+                _ => {
+                    matched = false;
+                    break;
+                }
+            }
+        }
+        if matched {
+            return true;
+        }
+    }
+    false
 }
 
 /// Check if a single entry matches all active filters.

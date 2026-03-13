@@ -13,8 +13,11 @@ use std::path::Path;
 /// Export filtered entries to CSV format.
 ///
 /// Writes: timestamp, severity, source_file, line_number, thread, component, message
-pub fn export_csv<W: Write>(
-    entries: &[LogEntry],
+///
+/// Accepts an iterator of entry references so callers can stream entries
+/// without collecting them into a temporary `Vec`.
+pub fn export_csv<'a, W: Write>(
+    entries: impl Iterator<Item = &'a LogEntry>,
     writer: W,
     _export_path: &Path,
 ) -> Result<usize, ExportError> {
@@ -66,16 +69,38 @@ pub fn export_csv<W: Write>(
 }
 
 /// Export filtered entries to JSON format (array of objects).
-pub fn export_json<W: Write>(
-    entries: &[LogEntry],
-    writer: W,
+///
+/// Streams entries one at a time to avoid requiring all entries in memory
+/// simultaneously.  Produces the same pretty-printed JSON array output as
+/// the previous slice-based implementation.
+pub fn export_json<'a, W: Write>(
+    entries: impl Iterator<Item = &'a LogEntry>,
+    mut writer: W,
     export_path: &Path,
 ) -> Result<usize, ExportError> {
-    serde_json::to_writer_pretty(writer, entries).map_err(|e| ExportError::Json {
+    writer.write_all(b"[\n").map_err(|e| ExportError::Io {
         path: export_path.to_path_buf(),
         source: e,
     })?;
-    Ok(entries.len())
+    let mut count = 0;
+    for entry in entries {
+        if count > 0 {
+            writer.write_all(b",\n").map_err(|e| ExportError::Io {
+                path: export_path.to_path_buf(),
+                source: e,
+            })?;
+        }
+        serde_json::to_writer_pretty(&mut writer, entry).map_err(|e| ExportError::Json {
+            path: export_path.to_path_buf(),
+            source: e,
+        })?;
+        count += 1;
+    }
+    writer.write_all(b"\n]\n").map_err(|e| ExportError::Io {
+        path: export_path.to_path_buf(),
+        source: e,
+    })?;
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -104,7 +129,7 @@ mod tests {
     fn test_csv_export() {
         let entries = vec![make_entry(1, "Error one"), make_entry(2, "Error two")];
         let mut buf = Vec::new();
-        let count = export_csv(&entries, &mut buf, &PathBuf::from("out.csv")).unwrap();
+        let count = export_csv(entries.iter(), &mut buf, &PathBuf::from("out.csv")).unwrap();
         assert_eq!(count, 2);
 
         let output = String::from_utf8(buf).unwrap();
@@ -117,7 +142,7 @@ mod tests {
     fn test_json_export() {
         let entries = vec![make_entry(1, "Test message")];
         let mut buf = Vec::new();
-        let count = export_json(&entries, &mut buf, &PathBuf::from("out.json")).unwrap();
+        let count = export_json(entries.iter(), &mut buf, &PathBuf::from("out.json")).unwrap();
         assert_eq!(count, 1);
 
         let output = String::from_utf8(buf).unwrap();
