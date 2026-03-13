@@ -7,7 +7,7 @@
 use crate::core::filter::{DedupInfo, DedupMode, FilterState};
 use crate::core::model::{DiscoveredFile, FormatProfile, LogEntry, ScanSummary};
 use crate::util::constants::{DEFAULT_CORRELATION_WINDOW_SECS, MAX_CLIPBOARD_ENTRIES};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 /// Top-level application state.
@@ -43,6 +43,19 @@ pub struct AppState {
 
     /// Index of the currently selected entry in filtered_indices.
     pub selected_index: Option<usize>,
+
+    /// Set of selected indices into `filtered_indices` for multi-select.
+    ///
+    /// Populated by Ctrl+Click (toggle) and Shift+Click (range) in the
+    /// timeline panel.  When non-empty, the right-click context menu offers
+    /// "Copy Selected Lines" which copies the raw text of all selected entries.
+    ///
+    /// Uses `BTreeSet` so iteration is always in ascending order (matching
+    /// the chronological display for ascending sort).
+    ///
+    /// Cleared by `clear()` and rebuilt by ID across `apply_filters()` so
+    /// multi-select survives filter changes.
+    pub selected_indices: BTreeSet<usize>,
 
     /// Scan summary from the most recent completed scan.
     pub scan_summary: Option<ScanSummary>,
@@ -486,6 +499,7 @@ impl AppState {
             filtered_indices: Vec::new(),
             filter_state: FilterState::default(),
             selected_index: None,
+            selected_indices: BTreeSet::new(),
             scan_summary: None,
             status_message: "Ready. Open a directory to begin scanning.".to_string(),
             warnings: Vec::new(),
@@ -660,6 +674,19 @@ impl AppState {
         // panel and correlation overlay to show the wrong entry.
         let selected_id = self.selected_entry().map(|e| e.id);
 
+        // Capture the IDs of all multi-selected entries so multi-select survives
+        // filter changes (same ID-based preservation as the primary selection).
+        let multi_selected_ids: HashSet<u64> = self
+            .selected_indices
+            .iter()
+            .filter_map(|&idx| {
+                self.filtered_indices
+                    .get(idx)
+                    .and_then(|&ei| self.entries.get(ei))
+                    .map(|e| e.id)
+            })
+            .collect();
+
         self.filtered_indices =
             crate::core::filter::apply_filters(&self.entries, &self.filter_state);
 
@@ -716,6 +743,18 @@ impl AppState {
                 .iter()
                 .position(|&entry_idx| self.entries.get(entry_idx).is_some_and(|e| e.id == id))
         });
+
+        // Restore multi-select: rebuild selected_indices from the saved IDs.
+        self.selected_indices.clear();
+        if !multi_selected_ids.is_empty() {
+            for (pos, &entry_idx) in self.filtered_indices.iter().enumerate() {
+                if let Some(entry) = self.entries.get(entry_idx) {
+                    if multi_selected_ids.contains(&entry.id) {
+                        self.selected_indices.insert(pos);
+                    }
+                }
+            }
+        }
 
         // Recompute the correlation overlay whenever the filter changes.
         // Without this, if the selected entry is hidden by the new filter
@@ -1204,6 +1243,36 @@ impl AppState {
         out
     }
 
+    /// Generate a clipboard-ready text block from the multi-selected entries.
+    ///
+    /// Each selected entry's `raw_text` is emitted on its own line, preserving
+    /// the original log file content verbatim.  Entries are iterated in
+    /// `selected_indices` order (ascending, matching chronological display).
+    ///
+    /// Bounded to [`MAX_CLIPBOARD_ENTRIES`] to prevent clipboard overload.
+    pub fn selected_entries_report(&self) -> String {
+        let total = self.selected_indices.len();
+        let take = total.min(MAX_CLIPBOARD_ENTRIES);
+
+        let mut out = String::new();
+        for &idx in self.selected_indices.iter().take(take) {
+            if let Some(&entry_idx) = self.filtered_indices.get(idx) {
+                if let Some(entry) = self.entries.get(entry_idx) {
+                    out.push_str(&entry.raw_text);
+                    out.push('\n');
+                }
+            }
+        }
+
+        if take < total {
+            out.push_str(&format!(
+                "--- truncated: {take} of {total} entries shown (limit: {MAX_CLIPBOARD_ENTRIES}) ---\n"
+            ));
+        }
+
+        out
+    }
+
     /// Sort `entries` chronologically (entries with timestamps first, then
     /// timestampless entries in their original relative order at the end).
     ///
@@ -1250,6 +1319,7 @@ impl AppState {
         self.filtered_indices.clear();
         self.filter_state = FilterState::default();
         self.selected_index = None;
+        self.selected_indices.clear();
         self.scan_summary = None;
         self.warnings.clear();
         self.show_summary = false;

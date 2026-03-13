@@ -142,6 +142,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     let mut bookmark_toggle: Option<u64> = None;
     let mut correlation_update_needed = false;
 
+    // Deferred multi-select actions collected during show_rows and applied after.
+    let mut click_action: Option<(usize, bool, bool)> = None; // (actual_idx, ctrl, shift)
+    let mut context_menu_copy = false;
+
     // Build the scroll area; optionally snap to the top for descending mode.
     let snap_top = state.scroll_top_requested && state.sort_descending && state.tail_auto_scroll;
     // Bug fix: always clear the flag after reading it. Previously the flag
@@ -173,7 +177,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 continue;
             };
 
-            let is_selected = state.selected_index == Some(actual_idx);
+            let is_selected = state.selected_index == Some(actual_idx)
+                || state.selected_indices.contains(&actual_idx);
             let sev_colour = theme::severity_colour(&entry.severity, state.dark_mode);
             let file_colour = state.colour_for_file(&entry.source_file);
             let entry_id = entry.id;
@@ -279,6 +284,21 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 );
             }
 
+            // Subtle blue tint on multi-selected rows (distinct from the
+            // primary selection highlight managed by egui's selectable_label).
+            let is_multi_selected = state.selected_indices.contains(&actual_idx);
+            if is_multi_selected && state.selected_index != Some(actual_idx) {
+                let tint_rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), row_height),
+                );
+                ui.painter().rect_filled(
+                    tint_rect,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(59, 130, 246, 35),
+                );
+            }
+
             // Each row: 4 px coloured file stripe | star button | selectable label
             let response = ui
                 .horizontal(|ui| {
@@ -324,12 +344,33 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .inner;
 
             if response.clicked() {
-                state.selected_index = Some(actual_idx);
-                // Flag for correlation recompute; must happen outside show_rows
-                // because update_correlation() takes &mut self which conflicts
-                // with the immutable borrow of state.entries (via `entry`).
-                correlation_update_needed = true;
+                let modifiers = ui.input(|i| i.modifiers);
+                click_action = Some((
+                    actual_idx,
+                    modifiers.ctrl || modifiers.mac_cmd,
+                    modifiers.shift,
+                ));
             }
+
+            // Right-click context menu for copy operations.
+            response.context_menu(|ui| {
+                let has_multi = !state.selected_indices.is_empty();
+                let count = state.selected_indices.len();
+                let label = if has_multi {
+                    format!("Copy {count} Selected Lines")
+                } else {
+                    "Copy This Line".to_string()
+                };
+                if ui.button(label).clicked() {
+                    if has_multi {
+                        context_menu_copy = true;
+                    } else {
+                        // No multi-select: copy just this row's raw text.
+                        ui.ctx().copy_text(entry.raw_text.clone());
+                    }
+                    ui.close_menu();
+                }
+            });
 
             // Show full path + timestamp + severity as tooltip on hover.
             response.on_hover_ui(|ui| {
@@ -354,10 +395,12 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     );
                 }
                 ui.label(
-                    egui::RichText::new("Click to view full details below")
-                        .small()
-                        .weak()
-                        .italics(),
+                    egui::RichText::new(
+                        "Click to select | Ctrl+Click to multi-select | Shift+Click for range",
+                    )
+                    .small()
+                    .weak()
+                    .italics(),
                 );
             });
 
@@ -381,6 +424,54 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         if state.filter_state.bookmarks_only {
             state.apply_filters();
         }
+    }
+
+    // Apply deferred multi-select click action.
+    //
+    // Modifiers:
+    //   Plain click   -> single-select (clears multi-select)
+    //   Ctrl+Click    -> toggle individual entry in multi-select
+    //   Shift+Click   -> range-select from last selected_index to clicked row
+    if let Some((actual_idx, ctrl, shift)) = click_action {
+        if ctrl {
+            // Toggle the clicked entry in the multi-select set.
+            if state.selected_indices.contains(&actual_idx) {
+                state.selected_indices.remove(&actual_idx);
+            } else {
+                state.selected_indices.insert(actual_idx);
+            }
+            // Update primary selection to the clicked entry for detail pane.
+            state.selected_index = Some(actual_idx);
+            correlation_update_needed = true;
+        } else if shift {
+            // Range select: from the anchor (selected_index) to the clicked row.
+            if let Some(anchor) = state.selected_index {
+                let lo = anchor.min(actual_idx);
+                let hi = anchor.max(actual_idx);
+                for i in lo..=hi {
+                    state.selected_indices.insert(i);
+                }
+            } else {
+                // No anchor: treat as single select.
+                state.selected_indices.clear();
+                state.selected_indices.insert(actual_idx);
+                state.selected_index = Some(actual_idx);
+            }
+            correlation_update_needed = true;
+        } else {
+            // Plain click: single-select, clear multi-select.
+            state.selected_indices.clear();
+            state.selected_index = Some(actual_idx);
+            correlation_update_needed = true;
+        }
+    }
+
+    // Copy multi-selected entries to clipboard (deferred from context menu).
+    if context_menu_copy {
+        let report = state.selected_entries_report();
+        ui.ctx().copy_text(report);
+        let n = state.selected_indices.len();
+        state.status_message = format!("Copied {n} selected entries to clipboard.");
     }
 
     // Recompute the correlation window for the newly selected entry (if any).

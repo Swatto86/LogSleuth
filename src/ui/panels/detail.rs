@@ -8,6 +8,28 @@ use crate::ui::theme;
 
 /// Render the detail pane (bottom panel).
 pub fn render(ui: &mut egui::Ui, state: &AppState) {
+    // Multi-select banner: when multiple entries are selected, show a summary
+    // bar with a "Copy Selected" button instead of / above the detail view.
+    let multi_count = state.selected_indices.len();
+    if multi_count > 1 {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{multi_count} entries selected"))
+                    .strong()
+                    .color(egui::Color32::from_rgb(59, 130, 246)),
+            );
+            if ui
+                .small_button("\u{1f4cb} Copy Selected Lines")
+                .on_hover_text("Copy the raw text of all selected entries to the clipboard")
+                .clicked()
+            {
+                let report = state.selected_entries_report();
+                ui.ctx().copy_text(report);
+            }
+        });
+        ui.separator();
+    }
+
     let Some(entry) = state.selected_entry() else {
         ui.centered_and_justified(|ui| {
             ui.label(
