@@ -281,6 +281,7 @@ pub fn parse_content(
     // Timestamp sniff: any entry that still has timestamp: None after the
     // primary parse gets one more chance via pattern-based scanning.
     // -------------------------------------------------------------------------
+    let mut sniff_tier_hint: Option<usize> = None;
     for entry in &mut entries {
         // --- size cap ---
         if entry.message.len() > config.max_entry_size {
@@ -293,7 +294,7 @@ pub fn parse_content(
         }
         // --- timestamp sniff ---
         if entry.timestamp.is_none() {
-            entry.timestamp = sniff_timestamp(&entry.raw_text);
+            entry.timestamp = sniff_timestamp_hinted(&entry.raw_text, &mut sniff_tier_hint);
         }
     }
 
@@ -327,7 +328,24 @@ pub fn parse_content(
 /// Patterns are tried from most-precise (RFC 3339 with explicit timezone)
 /// to least-precise (year-less BSD syslog), so higher-confidence results
 /// take priority over looser matches on the same line.
+/// Convenience wrapper without tier-caching.  Production code in
+/// `parse_content` uses [`sniff_timestamp_hinted`] directly for the
+/// cached fast-path; this wrapper is kept for callers that parse a
+/// single line at a time.
+#[allow(dead_code)] // Public API used by tests; parse_content uses the hinted variant.
 pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
+    sniff_timestamp_hinted(raw_line, &mut None)
+}
+
+/// Inner implementation of [`sniff_timestamp`] that accepts a mutable tier
+/// hint.  When `last_successful_tier` contains a tier index from a previous
+/// successful match, that tier is tried first before falling back to the
+/// full sequential scan.  For homogeneous log files this reduces per-entry
+/// cost from 15 regex attempts to 1.
+fn sniff_timestamp_hinted(
+    raw_line: &str,
+    last_successful_tier: &mut Option<usize>,
+) -> Option<DateTime<Utc>> {
     /// A sniff candidate: a regex that finds a timestamp substring, plus a
     /// parsing closure that converts the matched text to `DateTime<Utc>`.
     struct Sniffer {
@@ -668,9 +686,23 @@ pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
         candidates.into_iter().flatten().collect()
     });
 
-    for sniffer in sniffers {
+    // If the caller provided a tier hint from a previous successful match,
+    // try that tier first. For files where every line uses the same format,
+    // this turns 15 sequential regex attempts into 1.
+    if let Some(hint) = *last_successful_tier {
+        if let Some(sniffer) = sniffers.get(hint) {
+            if let Some(m) = sniffer.re.find(raw_line) {
+                if let Some(dt) = (sniffer.parse)(m.as_str()) {
+                    return Some(dt);
+                }
+            }
+        }
+    }
+
+    for (idx, sniffer) in sniffers.iter().enumerate() {
         if let Some(m) = sniffer.re.find(raw_line) {
             if let Some(dt) = (sniffer.parse)(m.as_str()) {
+                *last_successful_tier = Some(idx);
                 return Some(dt);
             }
         }

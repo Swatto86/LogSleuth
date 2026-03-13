@@ -1281,17 +1281,15 @@ impl eframe::App for LogSleuthApp {
                                     .set_file_name("export.csv")
                                     .save_file()
                                 {
-                                    let filtered_entries: Vec<_> = self
+                                    let filtered_entries = self
                                         .state
                                         .filtered_indices
                                         .iter()
-                                        .filter_map(|&i| self.state.entries.get(i))
-                                        .cloned()
-                                        .collect();
+                                        .filter_map(|&i| self.state.entries.get(i));
                                     match std::fs::File::create(&dest) {
                                         Ok(f) => {
                                             match crate::core::export::export_csv(
-                                                &filtered_entries,
+                                                filtered_entries,
                                                 f,
                                                 &dest,
                                             ) {
@@ -1322,17 +1320,15 @@ impl eframe::App for LogSleuthApp {
                                     .set_file_name("export.json")
                                     .save_file()
                                 {
-                                    let filtered_entries: Vec<_> = self
+                                    let filtered_entries = self
                                         .state
                                         .filtered_indices
                                         .iter()
-                                        .filter_map(|&i| self.state.entries.get(i))
-                                        .cloned()
-                                        .collect();
+                                        .filter_map(|&i| self.state.entries.get(i));
                                     match std::fs::File::create(&dest) {
                                         Ok(f) => {
                                             match crate::core::export::export_json(
-                                                &filtered_entries,
+                                                filtered_entries,
                                                 f,
                                                 &dest,
                                             ) {
