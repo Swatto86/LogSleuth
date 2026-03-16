@@ -38,7 +38,7 @@ fn level_re() -> &'static Regex {
 /// Extract `<Provider Name='...'>` or `<Provider Name="...">`.
 fn provider_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"<Provider Name='([^']+)'"#).unwrap())
+    RE.get_or_init(|| Regex::new(r#"<Provider[^>]*\bName=(?:'([^']+)'|"([^"]+)")"#).unwrap())
 }
 
 /// Extract `<Channel>...</Channel>`.
@@ -56,19 +56,49 @@ fn computer_re() -> &'static Regex {
 /// Extract `ProcessID='NNN'` from the Execution element.
 fn process_id_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"ProcessID='(\d+)'"#).unwrap())
+    RE.get_or_init(|| Regex::new(r#"ProcessID=(?:'(\d+)'|"(\d+)")"#).unwrap())
 }
 
 /// Extract `ThreadID='NNN'` from the Execution element.
 fn thread_id_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"ThreadID='(\d+)'"#).unwrap())
+    RE.get_or_init(|| Regex::new(r#"ThreadID=(?:'(\d+)'|"(\d+)")"#).unwrap())
 }
 
 /// Extract `<Data Name='key'>value</Data>` pairs from EventData.
+/// Supports both single-quoted and double-quoted Name attributes and
+/// unnamed `<Data>value</Data>` elements.
 fn event_data_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"<Data Name='([^']+)'>([^<]*)</Data>").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r#"<Data(?:\s+Name=(?:'([^']*)'|"([^"]*)"))?[^>]*>([^<]*)</Data>"#).unwrap()
+    })
+}
+
+/// Extract rendered message text if available under `<RenderingInfo>`.
+fn rendered_message_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<RenderingInfo[^>]*>.*?<Message>(.*?)</Message>").unwrap())
+}
+
+/// Extract the `<UserData>...</UserData>` block when present.
+fn user_data_block_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<UserData[^>]*>(.*?)</UserData>").unwrap())
+}
+
+/// Extract simple `<Field>value</Field>` items from a UserData block.
+fn user_data_field_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?s)<([A-Za-z0-9_:\.-]+)[^>]*>([^<]+)</([A-Za-z0-9_:\.-]+)>"#).unwrap()
+    })
+}
+
+/// Remove XML tags for last-resort plain text fallback.
+fn xml_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<[^>]+>").unwrap())
 }
 
 // =============================================================================
@@ -225,9 +255,14 @@ pub fn parse_evtx_file(
 
 /// Extract the first capture group from a regex match against `xml`.
 fn extract_match(re: &Regex, xml: &str) -> Option<String> {
-    re.captures(xml)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string())
+    re.captures(xml).and_then(|caps| {
+        caps.iter()
+            .skip(1)
+            .flatten()
+            .map(|m| m.as_str().trim())
+            .find(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    })
 }
 
 /// Build a human-readable message from extracted event fields.
@@ -241,7 +276,14 @@ fn build_message(
     computer: Option<&str>,
     xml: &str,
 ) -> String {
-    let mut parts = Vec::with_capacity(5);
+    if let Some(rendered) = extract_match(rendered_message_re(), xml) {
+        let rendered = normalise_whitespace(&decode_xml_entities(&rendered));
+        if !rendered.is_empty() {
+            return rendered;
+        }
+    }
+
+    let mut parts = Vec::with_capacity(6);
 
     if let Some(id) = event_id {
         parts.push(format!("EventID {id}"));
@@ -256,10 +298,18 @@ fn build_message(
         parts.push(comp.to_string());
     }
 
-    // Extract EventData key=value pairs for a compact summary.
-    let data_summary = extract_event_data(xml);
-    if !data_summary.is_empty() {
-        parts.push(data_summary);
+    // Extract structured payload fields for a compact summary.
+    let event_data_summary = extract_event_data(xml);
+    let user_data_summary = extract_user_data(xml);
+    let mut payload_parts = Vec::with_capacity(2);
+    if !event_data_summary.is_empty() {
+        payload_parts.push(event_data_summary);
+    }
+    if !user_data_summary.is_empty() {
+        payload_parts.push(user_data_summary);
+    }
+    if !payload_parts.is_empty() {
+        parts.push(payload_parts.join(" | "));
     }
 
     if parts.is_empty() {
@@ -277,17 +327,78 @@ fn build_message(
 /// Returns a compact summary like "Key1=Value1, Key2=Value2".
 /// Limits to `EVTX_MAX_DATA_PAIRS` to prevent extremely long messages.
 fn extract_event_data(xml: &str) -> String {
+    let mut unnamed_counter = 1usize;
     let pairs: Vec<String> = event_data_re()
         .captures_iter(xml)
         .take(constants::EVTX_MAX_DATA_PAIRS)
         .map(|cap| {
-            let key = cap.get(1).map_or("", |m| m.as_str());
-            let val = cap.get(2).map_or("", |m| m.as_str());
+            let key = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map(|m| m.as_str().trim().to_string())
+                .filter(|k| !k.is_empty())
+                .unwrap_or_else(|| {
+                    let k = format!("Data{unnamed_counter}");
+                    unnamed_counter += 1;
+                    k
+                });
+            let val =
+                normalise_whitespace(&decode_xml_entities(cap.get(3).map_or("", |m| m.as_str())));
             format!("{key}={val}")
         })
+        .filter(|kv| !kv.ends_with('='))
         .collect();
 
     pairs.join(", ")
+}
+
+/// Extract key=value pairs from the `<UserData>` section.
+///
+/// Many Windows operational logs place their human-relevant fields under
+/// `UserData` instead of `EventData`, so this acts as an important fallback.
+fn extract_user_data(xml: &str) -> String {
+    let Some(block) = extract_match(user_data_block_re(), xml) else {
+        return String::new();
+    };
+
+    let mut pairs: Vec<String> = Vec::new();
+    for cap in user_data_field_re()
+        .captures_iter(block.as_str())
+        .take(constants::EVTX_MAX_DATA_PAIRS)
+    {
+        let key_open = cap.get(1).map_or("", |m| m.as_str());
+        let key_close = cap.get(3).map_or("", |m| m.as_str());
+        if key_open != key_close {
+            continue;
+        }
+        let key = key_open.rsplit(':').next().unwrap_or(key_open).trim();
+        let val = normalise_whitespace(&decode_xml_entities(cap.get(2).map_or("", |m| m.as_str())));
+        if !key.is_empty() && !val.is_empty() {
+            pairs.push(format!("{key}={val}"));
+        }
+    }
+
+    if !pairs.is_empty() {
+        return pairs.join(", ");
+    }
+
+    // Final fallback: strip tags and return any remaining text content.
+    let plain = normalise_whitespace(&decode_xml_entities(&xml_tag_re().replace_all(&block, " ")));
+    plain
+}
+
+/// Decode a small subset of XML entities commonly seen in rendered fields.
+fn decode_xml_entities(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Collapse runs of whitespace/newlines into a single space for timeline rows.
+fn normalise_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Find the largest byte index <= `max_bytes` that is a valid char boundary.
