@@ -3,15 +3,16 @@
 // Files tab for the left sidebar.
 //
 // Contains two logical sections:
-//   1. Collapsible scan controls (date filter, Open Directory / Open Logs,
-//      Clear Session).  Starts open so first-time users see everything;
+//   1. Collapsible scan controls (date filter, Open Directory append / Open
+//      Logs, Clear Session).  Starts open so first-time users see everything;
 //      collapses once a scan has been run to give the file list more space.
 //   2. Unified discovered-file list with inline source-file filter checkboxes.
 //      Replaces the duplicate file list that was previously shown in the
 //      filters panel.
 //
-// This panel writes `state.pending_scan`, `state.request_cancel`, and
-// `state.filter_state` flag fields; gui.rs consumes them each frame.
+// This panel writes `state.pending_scan`, `state.pending_append_scan`,
+// `state.request_cancel`, and `state.filter_state` flag fields; gui.rs
+// consumes them each frame.
 // No direct I/O or ScanManager access (Rule 1 boundary).
 
 use crate::app::state::AppState;
@@ -160,42 +161,18 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             {
                 state.filter_state.source_files.clear();
                 state.filter_state.hide_all_sources = false;
+                // Checked means "parse on": when switching to all-selected,
+                // queue parse for any files that are still marked unparsed.
+                let to_parse: Vec<std::path::PathBuf> = state
+                    .discovered_files
+                    .iter()
+                    .filter(|f| f.parsing_skipped)
+                    .map(|f| f.path.clone())
+                    .collect();
+                queue_parse_requests(state, to_parse);
                 state.apply_filters();
             }
         });
-
-        // "Parse skipped files" button — shown when the last scan excluded some
-        // files due to an active parse-path filter and there is no scan running.
-        let skipped_count = state
-            .discovered_files
-            .iter()
-            .filter(|f| f.parsing_skipped)
-            .count();
-        if skipped_count > 0 && !state.scan_in_progress {
-            ui.horizontal(|ui| {
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(format!(
-                                "\u{25b6} Parse skipped files ({skipped_count})"
-                            ))
-                            .small()
-                            .color(egui::Color32::from_rgb(251, 191, 36)),
-                        )
-                        .small(),
-                    )
-                    .on_hover_text(
-                        "These files have not been parsed yet - their entries are not in the timeline.\n\
-                         This happens when a file was excluded by the initial scan filter, or when you\n\
-                         unchecked a file (which removes its entries from memory).\n\
-                         Click to parse all of them now and add their entries to the timeline.",
-                    )
-                    .clicked()
-                {
-                    state.pending_parse_skipped = true;
-                }
-            });
-        }
 
         if !state.scan_in_progress && !state.entries.is_empty() {
             ui.horizontal(|ui| {
@@ -310,9 +287,16 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             });
         }
         let visible_count = visible.len();
+        let evtx_paths: std::collections::HashSet<std::path::PathBuf> = state
+            .discovered_files
+            .iter()
+            .filter(|f| is_evtx_path(&f.path))
+            .map(|f| f.path.clone())
+            .collect();
+        let evtx_count = evtx_paths.len();
 
-        // Select All / None for the visible subset.
-        if visible_count > 1 {
+        // Select All / None / No EVTX quick actions.
+        if visible_count > 1 || evtx_count > 0 {
             ui.horizontal(|ui| {
                 if ui
                     .small_button("Select all")
@@ -358,6 +342,16 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     // selected.  Keeping the set explicitly enumerated ensures
                     // files added later by the directory watcher remain unchecked
                     // until the user explicitly ticks them (opt-in model).
+                    let to_parse: Vec<std::path::PathBuf> = state
+                        .discovered_files
+                        .iter()
+                        .filter(|f| {
+                            f.parsing_skipped
+                                && state.filter_state.source_files.contains(&f.path)
+                        })
+                        .map(|f| f.path.clone())
+                        .collect();
+                    queue_parse_requests(state, to_parse);
                     state.apply_filters();
                 }
                 if ui
@@ -399,6 +393,52 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         state.filter_state.hide_all_sources = true;
                     }
                     state.apply_filters();
+                }
+                if evtx_count > 0
+                    && ui
+                        .small_button("No EVTX")
+                        .on_hover_text(
+                            "Deselect all Windows Event Viewer (.evtx) files and unload their entries. Re-check any EVTX file to parse it again.",
+                        )
+                        .clicked()
+                {
+                    let all_pass = !state.filter_state.hide_all_sources
+                        && state.filter_state.source_files.is_empty();
+                    if all_pass {
+                        // Preserve all non-EVTX files as selected.
+                        state.filter_state.source_files = state
+                            .discovered_files
+                            .iter()
+                            .filter(|f| !is_evtx_path(&f.path))
+                            .map(|f| f.path.clone())
+                            .collect();
+                        state.filter_state.hide_all_sources = state.filter_state.source_files.is_empty();
+                    } else if !state.filter_state.hide_all_sources {
+                        state.filter_state
+                            .source_files
+                            .retain(|p| !is_evtx_path(p.as_path()));
+                        if state.filter_state.source_files.is_empty() {
+                            state.filter_state.hide_all_sources = true;
+                        }
+                    }
+                    let removed = state.remove_entries_for_paths(&evtx_paths);
+                    state.apply_filters();
+                    state.status_message = if removed > 0 {
+                        format!(
+                            "Deselected {evtx_count} Event Viewer file(s); removed {removed} entry(s). Re-check any EVTX file to parse it again."
+                        )
+                    } else {
+                        format!(
+                            "Deselected {evtx_count} Event Viewer file(s). Re-check any EVTX file to parse it again."
+                        )
+                    };
+                }
+                if evtx_count > 0 {
+                    ui.label(
+                        egui::RichText::new("EVTX: checked = parse/show, unchecked = unload")
+                            .small()
+                            .weak(),
+                    );
                 }
                 if !state.file_list_search.trim().is_empty() {
                     ui.label(
@@ -450,7 +490,20 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 )
                             };
                             let hover_detail = if *parsing_skipped {
-                                format!("{hover_detail}\n\u{26a0} Not parsed \u{2014} tick the checkbox to load entries from this file,\nor use \u{201c}Parse skipped files\u{201d} to load all unparsed files at once.")
+                                format!("{hover_detail}\n\u{26a0} Not parsed \u{2014} tick the checkbox to load entries from this file.")
+                            } else {
+                                hover_detail
+                            };
+                            let hover_detail = if is_evtx_path(path) {
+                                if *parsing_skipped {
+                                    format!(
+                                        "{hover_detail}\nEvent Viewer (.evtx): OFF (unchecked). Check this file to parse and show its entries."
+                                    )
+                                } else {
+                                    format!(
+                                        "{hover_detail}\nEvent Viewer (.evtx): ON (checked). Uncheck this file to unload and hide its entries."
+                                    )
+                                }
                             } else {
                                 hover_detail
                             };
@@ -508,25 +561,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                     // comment claiming "re-parse will fire next frame"
                                     // was incorrect.
                                     if *parsing_skipped {
-                                        if state.scan_in_progress {
-                                            // A scan is already running — queue for
-                                            // parse once it completes.  Use the
-                                            // dedicated queued_parse_files list so
-                                            // the ParsingCompleted handler drains it
-                                            // with None (parse all), not the
-                                            // profile-only filter used for
-                                            // queued_dir_watcher_files.
-                                            state
-                                                .queued_parse_files
-                                                .push(path.clone());
-                                        } else if let Some(ref mut existing) =
-                                            state.pending_single_files
-                                        {
-                                            existing.push(path.clone());
-                                        } else {
-                                            state.pending_single_files =
-                                                Some(vec![path.clone()]);
-                                        }
+                                        queue_parse_requests(state, vec![path.clone()]);
                                     }
                                 }
                                 state.apply_filters();
@@ -604,6 +639,13 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 .weak(),
         );
     } else {
+        #[cfg(windows)]
+        ui.label(
+            egui::RichText::new("No filesystem directory selected.")
+                .small()
+                .weak(),
+        );
+        #[cfg(not(windows))]
         ui.label(egui::RichText::new("No directory selected.").small().weak());
     }
 
@@ -752,18 +794,21 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
         }
     } else {
         ui.add_space(4.0);
+        let has_session = state.scan_path.is_some()
+            || !state.entries.is_empty()
+            || !state.discovered_files.is_empty();
 
         // Open buttons — no free-text path input.  Local paths only; network
         // paths (UNC shares, mapped drives to remote servers) are blocked here
         // and also validated inside the pickers to prevent hangs on slow
         // network enumeration.
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     !state.scan_in_progress,
                     egui::Button::new("Open Directory\u{2026}"),
                 )
-                .on_hover_text("Browse for a local directory to scan")
+                .on_hover_text("Browse for a local directory and append it to this session (Windows Event Viewer logs remain available)")
                 .clicked()
             {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
@@ -773,7 +818,7 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                              servers) are not supported. Copy the logs to a local drive first."
                                 .to_string();
                     } else {
-                        state.pending_scan = Some(path);
+                        state.pending_append_scan = Some(path);
                     }
                 }
             }
@@ -782,7 +827,7 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                     !state.scan_in_progress,
                     egui::Button::new("Open Log(s)\u{2026}"),
                 )
-                .on_hover_text("Select individual local log files to open as a new session")
+                .on_hover_text("Select individual local log files to open as a new session. On Windows, Event Viewer logs are auto-added.")
                 .clicked()
             {
                 if let Some(files) = rfd::FileDialog::new()
@@ -800,67 +845,95 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 }
             }
         });
-
-        let has_session = state.scan_path.is_some() || !state.entries.is_empty();
+        #[cfg(windows)]
+        ui.label(
+            egui::RichText::new(
+                "Windows Event Viewer (.evtx) logs are auto-loaded. Check = parse/show; uncheck = unload. Some channels require Administrator/Event Log Readers access.",
+            )
+            .small()
+            .weak(),
+        );
 
         // -----------------------------------------------------------------
         // Troubleshoot Mode toggle
         // -----------------------------------------------------------------
-        // Shown whenever a scan path is configured (active session or about
-        // to start one).  A toggle-style button with a prominent colour to
-        // make the current state obvious.
-        if state.scan_path.is_some() {
+        // Shown whenever a scan path is configured, or when troubleshoot mode
+        // is currently on (so file-only sessions can still turn it off).
+        if state.scan_path.is_some() || state.troubleshoot_mode {
             ui.add_space(6.0);
             let mode_on = state.troubleshoot_mode;
-            let (btn_text, btn_colour, tooltip) = if mode_on {
-                (
-                    "\u{1f6e0} Troubleshoot Mode: ON",
-                    egui::Color32::from_rgb(248, 113, 113), // red
-                    "Troubleshoot Mode is ACTIVE.\n\n\
-                     Only Critical and Error entries are captured from scans \
-                     and Live Tail.  All other severities are discarded at \
-                     ingestion time to keep memory usage low.\n\n\
-                     Click to deactivate and rescan normally.",
-                )
-            } else {
-                (
-                    "\u{1f6e0} Troubleshoot Mode",
-                    egui::Color32::from_rgb(251, 191, 36), // amber
-                    "Activate Troubleshoot Mode.\n\n\
-                     Sets the date filter to now, rescans the directory, enables \
-                     the directory watcher for new files, and starts Live Tail \
-                     -- capturing only Critical and Error entries.\n\n\
-                     Keeps memory usage low even on high-volume log directories \
-                     so you can focus on errors while reproducing an issue.",
-                )
-            };
-            if ui
-                .add_enabled(
-                    !state.scan_in_progress,
-                    egui::Button::new(egui::RichText::new(btn_text).strong().color(btn_colour)),
-                )
-                .on_hover_text(tooltip)
-                .clicked()
-            {
-                if mode_on {
-                    // Deactivate: turn off troubleshoot mode and rescan.
-                    state.troubleshoot_mode = false;
-                    state.pending_scan = state.scan_path.clone();
+            let has_directory = state.scan_path.is_some();
+            if has_directory {
+                let (btn_text, btn_colour, tooltip) = if mode_on {
+                    (
+                        "\u{1f6e0} Troubleshoot Mode: ON",
+                        egui::Color32::from_rgb(248, 113, 113), // red
+                        "Troubleshoot Mode is ACTIVE.\n\n\
+                         Only Critical and Error entries are captured from scans \
+                         and Live Tail.  All other severities are discarded at \
+                         ingestion time to keep memory usage low.\n\n\
+                         Click to deactivate and rescan normally.",
+                    )
                 } else {
-                    // Activate: set date filter to "now", enable mode, rescan.
-                    state.troubleshoot_mode = true;
-                    state.discovery_date_input =
-                        Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                    state.request_start_tail_after_scan = true;
-                    state.pending_scan = state.scan_path.clone();
+                    (
+                        "\u{1f6e0} Troubleshoot Mode",
+                        egui::Color32::from_rgb(251, 191, 36), // amber
+                        "Activate Troubleshoot Mode.\n\n\
+                         Sets the date filter to now, rescans the directory, enables \
+                         the directory watcher for new files, and starts Live Tail \
+                         -- capturing only Critical and Error entries.\n\n\
+                         Keeps memory usage low even on high-volume log directories \
+                         so you can focus on errors while reproducing an issue.",
+                    )
+                };
+                if ui
+                    .add_enabled(
+                        !state.scan_in_progress,
+                        egui::Button::new(egui::RichText::new(btn_text).strong().color(btn_colour)),
+                    )
+                    .on_hover_text(tooltip)
+                    .clicked()
+                {
+                    if mode_on {
+                        // Deactivate: turn off troubleshoot mode and rescan.
+                        state.troubleshoot_mode = false;
+                        state.pending_scan = state.scan_path.clone();
+                    } else {
+                        // Activate: set date filter to "now", enable mode, rescan.
+                        state.troubleshoot_mode = true;
+                        state.discovery_date_input =
+                            Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                        state.request_start_tail_after_scan = true;
+                        state.pending_scan = state.scan_path.clone();
+                    }
                 }
-            }
-            if mode_on {
-                ui.label(
-                    egui::RichText::new("Only Critical + Error entries are being captured.")
-                        .small()
-                        .color(egui::Color32::from_rgb(248, 113, 113)),
-                );
+                if mode_on {
+                    ui.label(
+                        egui::RichText::new("Only Critical + Error entries are being captured.")
+                            .small()
+                            .color(egui::Color32::from_rgb(248, 113, 113)),
+                    );
+                }
+            } else if mode_on {
+                // File-only session: troubleshoot mode does not apply because
+                // there is no active scan directory or live tail/watch cycle.
+                if ui
+                    .add_enabled(
+                        !state.scan_in_progress,
+                        egui::Button::new(
+                            egui::RichText::new("\u{1f6e0} Troubleshoot Mode: ON (Disable)")
+                                .strong()
+                                .color(egui::Color32::from_rgb(248, 113, 113)),
+                        ),
+                    )
+                    .on_hover_text(
+                        "Troubleshoot Mode was left on from a prior directory scan.\n\
+                         It is ignored for file-only sessions. Click to turn it off.",
+                    )
+                    .clicked()
+                {
+                    state.troubleshoot_mode = false;
+                }
             }
         }
 
@@ -972,6 +1045,44 @@ fn is_network_path(path: &std::path::Path) -> bool {
     }
     let _ = path;
     false
+}
+
+fn is_evtx_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("evtx"))
+        .unwrap_or(false)
+}
+
+fn queue_parse_requests(state: &mut AppState, mut paths: Vec<std::path::PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    paths.sort();
+    paths.dedup();
+
+    if state.scan_in_progress {
+        let mut existing: std::collections::HashSet<std::path::PathBuf> =
+            state.queued_parse_files.iter().cloned().collect();
+        for p in paths {
+            if existing.insert(p.clone()) {
+                state.queued_parse_files.push(p);
+            }
+        }
+        return;
+    }
+
+    if let Some(ref mut pending) = state.pending_single_files {
+        let mut existing: std::collections::HashSet<std::path::PathBuf> =
+            pending.iter().cloned().collect();
+        for p in paths {
+            if existing.insert(p.clone()) {
+                pending.push(p);
+            }
+        }
+    } else {
+        state.pending_single_files = Some(paths);
+    }
 }
 
 /// Returns `true` if `name` matches any of the comma-separated patterns in

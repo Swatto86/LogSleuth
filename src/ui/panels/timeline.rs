@@ -14,6 +14,7 @@
 // applied to the row (red-on-red contrast is avoided).
 
 use crate::app::state::AppState;
+use crate::core::filter::FilterState;
 use crate::ui::theme;
 use egui::text::{LayoutJob, TextFormat};
 
@@ -90,14 +91,92 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                             .color(egui::Color32::from_rgb(156, 163, 175)),
                     );
                     ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Try adjusting severity, text, time range, or file filters\n\
-                             in the Filters tab on the left.",
-                        )
-                        .small()
-                        .color(egui::Color32::from_rgb(107, 114, 128)),
-                    );
+                    // Surface which filters are currently active so the user
+                    // understands why the timeline is empty.
+                    let mut active_filters: Vec<String> = Vec::new();
+                    let f = &state.filter_state;
+                    if !f.severity_levels.is_empty() {
+                        active_filters.push("Severity".to_string());
+                    }
+                    if !f.text_search.trim().is_empty() || !f.exclude_text.trim().is_empty() {
+                        active_filters.push("Text search".to_string());
+                    }
+                    if f.regex_search.is_some() {
+                        active_filters.push("Regex".to_string());
+                    }
+                    if f.relative_time_secs.is_some()
+                        || f.time_start.is_some()
+                        || f.time_end.is_some()
+                    {
+                        active_filters.push("Time range".to_string());
+                    }
+                    if !f.source_files.is_empty() {
+                        active_filters.push("File filter".to_string());
+                    }
+                    if f.bookmarks_only {
+                        active_filters.push("Bookmarks".to_string());
+                    }
+                    if f.hide_no_timestamp {
+                        active_filters.push("Timestamped only".to_string());
+                    }
+                    if f.dedup_mode != crate::core::filter::DedupMode::Off {
+                        active_filters.push("Dedup".to_string());
+                    }
+                    if let Some(secs) = state.activity_window_secs {
+                        let label = if secs < 60 {
+                            format!("Activity window: {}s", secs)
+                        } else if secs < 3_600 {
+                            format!("Activity window: {}m", secs / 60)
+                        } else {
+                            format!("Activity window: {}h", secs / 3_600)
+                        };
+                        active_filters.push(label);
+                    }
+
+                    if active_filters.is_empty() {
+                        ui.label(
+                            egui::RichText::new(
+                                "Try adjusting severity, text, time range, or file filters\n\
+                                 in the Filters tab on the left.",
+                            )
+                            .small()
+                            .color(egui::Color32::from_rgb(107, 114, 128)),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "All entries are hidden by: {}",
+                                active_filters.join(" • ")
+                            ))
+                            .small()
+                            .color(egui::Color32::from_rgb(107, 114, 128)),
+                        );
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("Clear filters")
+                                .on_hover_text(
+                                    "Reset severity, text, time, file, and regex filters",
+                                )
+                                .clicked()
+                            {
+                                state.filter_state = FilterState::default();
+                                state.apply_filters();
+                            }
+                            if state.activity_window_secs.is_some()
+                                && ui
+                                    .button("Turn off activity window")
+                                    .on_hover_text(
+                                        "Show entries from all files, not just recent ones",
+                                    )
+                                    .clicked()
+                            {
+                                state.activity_window_secs = None;
+                                state.activity_window_input.clear();
+                                state.apply_filters();
+                            }
+                        });
+                    }
                 });
             }
         });

@@ -29,6 +29,9 @@ pub struct LogSleuthApp {
     /// not stall the UI thread at high entry counts when Tail + Activity are
     /// both active and repaints arrive every 500 ms.
     last_activity_filter_time: std::time::Instant,
+    /// When true, queue missing Windows Event Viewer logs after the current
+    /// scan completes so EVTX data remains available across directory/file scans.
+    auto_queue_event_logs_after_scan: bool,
 }
 
 impl LogSleuthApp {
@@ -40,8 +43,64 @@ impl LogSleuthApp {
             tail_manager: TailManager::new(),
             dir_watcher: DirWatcher::new(),
             last_activity_filter_time: std::time::Instant::now(),
+            auto_queue_event_logs_after_scan: false,
         }
     }
+
+    #[cfg(windows)]
+    fn queue_missing_windows_event_logs(&mut self) {
+        let selection = match crate::app::windows_event_logs::collect_event_viewer_log_files() {
+            Ok(selection) => selection,
+            Err(e) => {
+                tracing::warn!(error = %e, "Automatic Event Viewer log append skipped");
+                return;
+            }
+        };
+        if selection.files.is_empty() {
+            return;
+        }
+
+        // Already-parsed files should not be queued again because that would
+        // duplicate entries in the timeline. Files marked parsing_skipped=true
+        // are intentionally re-queued to honor "parse on" behaviour.
+        let parsed_paths: std::collections::HashSet<std::path::PathBuf> = self
+            .state
+            .discovered_files
+            .iter()
+            .filter(|f| !f.parsing_skipped)
+            .map(|f| f.path.clone())
+            .collect();
+        let mut queued: std::collections::HashSet<std::path::PathBuf> =
+            self.state.queued_parse_files.iter().cloned().collect();
+        if let Some(ref pending) = self.state.pending_single_files {
+            queued.extend(pending.iter().cloned());
+        }
+
+        let mut to_queue: Vec<std::path::PathBuf> = Vec::new();
+        for path in selection.files {
+            if parsed_paths.contains(&path) {
+                continue;
+            }
+            if queued.insert(path.clone()) {
+                to_queue.push(path);
+            }
+        }
+        if to_queue.is_empty() {
+            return;
+        }
+
+        let count = to_queue.len();
+        self.state.queued_parse_files.extend(to_queue);
+        tracing::info!(
+            count,
+            denied = selection.access_denied,
+            unreadable = selection.unreadable,
+            "Queued Windows Event Viewer logs for automatic parse"
+        );
+    }
+
+    #[cfg(not(windows))]
+    fn queue_missing_windows_event_logs(&mut self) {}
 }
 
 impl eframe::App for LogSleuthApp {
@@ -248,7 +307,7 @@ impl eframe::App for LogSleuthApp {
                             summary.duration.as_secs_f64()
                         )
                     };
-                    self.state.scan_summary = Some(summary);
+                    self.state.scan_summary = Some(summary.clone());
                     self.state.scan_in_progress = false;
                     // Opt-in model: after an interactive fresh scan, default the
                     // file list to nothing-checked so the user explicitly selects
@@ -267,6 +326,7 @@ impl eframe::App for LogSleuthApp {
                     // empty-state hint.
                     if self.state.fresh_scan_in_progress {
                         self.state.fresh_scan_in_progress = false;
+                        let file_only_session = self.state.scan_path.is_none();
                         // Troubleshoot mode: show all files (no opt-in gating)
                         // so Live Tail can watch everything immediately.
                         if self.state.troubleshoot_mode {
@@ -278,7 +338,22 @@ impl eframe::App for LogSleuthApp {
                                 "Troubleshoot mode: {n} {word} discovered \
                                  \u{2014} tailing for errors and criticals."
                             );
+                        } else if file_only_session {
+                            // Explicit file-open session (e.g. Event Viewer logs):
+                            // entries are already parsed, so show them immediately
+                            // instead of hiding behind the opt-in gate used for
+                            // large directory scans.
+                            self.state.filter_state.hide_all_sources = false;
+                            self.state.filter_state.source_files.clear();
+                            if summary.total_entries == 0 {
+                                let n = self.state.discovered_files.len();
+                                let word = if n == 1 { "file" } else { "files" };
+                                self.state.status_message =
+                                    format!("Loaded {n} {word} (no entries found).");
+                            }
                         } else {
+                            // Directory scan: keep the opt-in model to avoid
+                            // loading thousands of files automatically.
                             self.state.filter_state.hide_all_sources = true;
                             self.state.filter_state.source_files.clear();
                             if self.state.entries.is_empty() {
@@ -382,6 +457,7 @@ impl eframe::App for LogSleuthApp {
                                 "Restoring {} extra file(s) from previous session...",
                                 extra.len()
                             );
+                            self.auto_queue_event_logs_after_scan = false;
                             self.scan_manager.start_scan_files(
                                 extra,
                                 self.state.profiles.clone(),
@@ -392,27 +468,31 @@ impl eframe::App for LogSleuthApp {
                         }
                     }
 
-                    // Drain any user-requested parse files queued while a scan
-                    // was in progress (checkbox ticked on a parsing_skipped file
-                    // while a scan was already running).  These must be drained
-                    // before the dir-watcher discover queue so user intent is
-                    // served first, and with None filter so entries are loaded.
+                    if self.auto_queue_event_logs_after_scan {
+                        self.auto_queue_event_logs_after_scan = false;
+                        self.queue_missing_windows_event_logs();
+                    }
+
+                    // Drain parse files queued while a scan was in progress.
+                    // This queue includes user checkbox requests and automatic
+                    // Windows Event Viewer (.evtx) appends. These must be
+                    // drained before the dir-watcher discover queue so explicit
+                    // parse requests are served first, and with None filter so
+                    // entries are loaded.
                     if !self.state.scan_in_progress && !self.state.queued_parse_files.is_empty() {
                         let queued = std::mem::take(&mut self.state.queued_parse_files);
                         let count = queued.len();
-                        tracing::info!(
-                            count,
-                            "Parsing queued user-checkbox files after scan completed"
-                        );
+                        tracing::info!(count, "Parsing queued files after scan completed");
                         let id_start = self.state.next_entry_id();
                         self.state.scan_in_progress = true;
                         self.state.status_message = format!("Parsing {count} queued file(s)...");
+                        self.auto_queue_event_logs_after_scan = false;
                         self.scan_manager.start_scan_files(
                             queued,
                             self.state.profiles.clone(),
                             self.state.max_total_entries,
                             id_start,
-                            None, // user explicitly checked — parse all entries
+                            None, // queued parse requests always fully parse entries
                         );
                     }
 
@@ -438,6 +518,7 @@ impl eframe::App for LogSleuthApp {
                         // parsed.  The user ticks their checkbox to load entries.
                         // This matches the initial pending_scan behaviour and prevents
                         // silent RAM growth from auto-parsed files the user never opens.
+                        self.auto_queue_event_logs_after_scan = false;
                         self.scan_manager.start_scan_files(
                             queued,
                             self.state.profiles.clone(),
@@ -459,10 +540,12 @@ impl eframe::App for LogSleuthApp {
                 crate::core::model::ScanProgress::Failed { error } => {
                     self.state.status_message = format!("Scan failed: {error}");
                     self.state.scan_in_progress = false;
+                    self.auto_queue_event_logs_after_scan = false;
                 }
                 crate::core::model::ScanProgress::Cancelled => {
                     self.state.status_message = "Scan cancelled.".to_string();
                     self.state.scan_in_progress = false;
+                    self.auto_queue_event_logs_after_scan = false;
                 }
             }
         }
@@ -667,6 +750,7 @@ impl eframe::App for LogSleuthApp {
                         // only when the user ticks the checkbox (pending_single_files).
                         // This matches the initial pending_scan behaviour and prevents
                         // unchecked files from consuming RAM.
+                        self.auto_queue_event_logs_after_scan = false;
                         self.scan_manager.start_scan_files(
                             paths,
                             self.state.profiles.clone(),
@@ -791,7 +875,7 @@ impl eframe::App for LogSleuthApp {
         }
 
         // ---- Handle flags set by discovery panel ----
-        // pending_scan: a panel requested a new scan via Open Directory button.
+        // pending_scan: a panel requested a full rescan of the active directory.
         if let Some(path) = self.state.pending_scan.take() {
             // Stop any current dir watcher before starting the new scan.
             // It will be restarted automatically when ParsingCompleted fires.
@@ -826,6 +910,38 @@ impl eframe::App for LogSleuthApp {
                 // Keeps startup fast and memory near-zero until explicit opt-in.
                 Some(std::collections::HashSet::new()),
             );
+            self.auto_queue_event_logs_after_scan = true;
+        }
+        // pending_append_scan: append a directory to the current session.
+        if let Some(path) = self.state.pending_append_scan.take() {
+            let modified_since = self.state.discovery_modified_since();
+            let id_start = self.state.next_entry_id();
+            let exclude_paths: std::collections::HashSet<std::path::PathBuf> = self
+                .state
+                .discovered_files
+                .iter()
+                .filter(|f| !f.parsing_skipped)
+                .map(|f| f.path.clone())
+                .collect();
+            self.state.scan_in_progress = true;
+            self.state.scan_path = Some(path.clone());
+            self.state.status_message =
+                format!("Opening directory {} (appending)...", path.display());
+            self.scan_manager.start_scan_append(
+                path,
+                self.state.profiles.clone(),
+                DiscoveryConfig {
+                    max_files: self.state.max_files_limit,
+                    max_depth: self.state.max_scan_depth,
+                    max_total_entries: self.state.max_total_entries,
+                    modified_since,
+                    ..DiscoveryConfig::default()
+                },
+                id_start,
+                None, // append directory parses discovered files immediately
+                exclude_paths,
+            );
+            self.auto_queue_event_logs_after_scan = true;
         }
         // initial_scan: set at startup when restoring a previous session.
         // Unlike pending_scan, does NOT call clear() so the restored
@@ -877,6 +993,7 @@ impl eframe::App for LogSleuthApp {
                 },
                 parse_path_filter,
             );
+            self.auto_queue_event_logs_after_scan = true;
         }
         // pending_replace_files: user chose "Open Log(s)..." — clear and load selected files.
         if let Some(files) = self.state.pending_replace_files.take() {
@@ -905,6 +1022,7 @@ impl eframe::App for LogSleuthApp {
                 0,
                 None, // user chose these files explicitly — parse all
             );
+            self.auto_queue_event_logs_after_scan = true;
         }
         // pending_single_files: user chose "Add File(s)" — append to session.
         if let Some(files) = self.state.pending_single_files.take() {
@@ -964,6 +1082,7 @@ impl eframe::App for LogSleuthApp {
                 // Append scan: entry IDs must continue after the highest existing ID
                 // so bookmarks and correlation are not confused by duplicate IDs.
                 let id_start = self.state.next_entry_id();
+                self.auto_queue_event_logs_after_scan = false;
                 self.scan_manager.start_scan_files(
                     files,
                     self.state.profiles.clone(),
@@ -1000,6 +1119,7 @@ impl eframe::App for LogSleuthApp {
                 self.state.status_message =
                     format!("Parsing {} previously skipped file(s)...", skipped.len());
                 let id_start = self.state.next_entry_id();
+                self.auto_queue_event_logs_after_scan = false;
                 self.scan_manager.start_scan_files(
                     skipped,
                     self.state.profiles.clone(),
@@ -1013,6 +1133,7 @@ impl eframe::App for LogSleuthApp {
         if self.state.request_cancel {
             self.state.request_cancel = false;
             self.scan_manager.cancel_scan();
+            self.auto_queue_event_logs_after_scan = false;
         }
 
         // request_start_tail: a panel wants to activate live tail.
@@ -1028,45 +1149,54 @@ impl eframe::App for LogSleuthApp {
             //   source_files non-empty   => only listed paths pass
             let hide_all = self.state.filter_state.hide_all_sources;
             let source_filter = self.state.filter_state.source_files.clone();
-            let mut files: Vec<crate::app::tail::TailFileInfo> = self
-                .state
-                .discovered_files
-                .iter()
-                .filter(|f| {
-                    if hide_all {
-                        return false;
-                    }
-                    if !source_filter.is_empty() && !source_filter.contains(&f.path) {
-                        return false;
-                    }
-                    true
-                })
-                .filter_map(|f| {
-                    let profile_id = f.profile_id.as_ref()?;
-                    let profile = self
-                        .state
-                        .profiles
-                        .iter()
-                        .find(|p| &p.id == profile_id)?
-                        .clone();
-                    Some(crate::app::tail::TailFileInfo {
-                        path: f.path.clone(),
-                        profile,
-                        // Use the scan-time file size as the starting offset.
-                        //
-                        // Using `f.size` (set by the most recent completed scan)
-                        // is safe because the background tail thread re-stats
-                        // each file on its very first poll tick and reads any
-                        // bytes that appeared after the scan completed.
-                        // DiscoveredFile::size is refreshed after every append
-                        // scan, so the "stale size on restart" window is at
-                        // most a single scan duration.  All live stat work is
-                        // confined to the background thread so it cannot freeze
-                        // the UI (Rule 16).
-                        initial_offset: Some(f.size),
-                    })
-                })
-                .collect();
+            let mut skipped_evtx = 0usize;
+            let mut files: Vec<crate::app::tail::TailFileInfo> = Vec::new();
+            for f in &self.state.discovered_files {
+                if hide_all {
+                    continue;
+                }
+                if !source_filter.is_empty() && !source_filter.contains(&f.path) {
+                    continue;
+                }
+                if f.path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("evtx"))
+                    == Some(true)
+                {
+                    skipped_evtx += 1;
+                    continue;
+                }
+
+                let Some(profile_id) = f.profile_id.as_ref() else {
+                    continue;
+                };
+                let Some(profile) = self
+                    .state
+                    .profiles
+                    .iter()
+                    .find(|p| &p.id == profile_id)
+                    .cloned()
+                else {
+                    continue;
+                };
+                files.push(crate::app::tail::TailFileInfo {
+                    path: f.path.clone(),
+                    profile,
+                    // Use the scan-time file size as the starting offset.
+                    //
+                    // Using `f.size` (set by the most recent completed scan)
+                    // is safe because the background tail thread re-stats
+                    // each file on its very first poll tick and reads any
+                    // bytes that appeared after the scan completed.
+                    // DiscoveredFile::size is refreshed after every append
+                    // scan, so the "stale size on restart" window is at
+                    // most a single scan duration.  All live stat work is
+                    // confined to the background thread so it cannot freeze
+                    // the UI (Rule 16).
+                    initial_offset: Some(f.size),
+                });
+            }
             // Safety cap: limit simultaneously-watched files to prevent
             // excessive file-handle and per-tick I/O overhead (Rule 11).
             // Sort by most-recently-modified so the most active logs always
@@ -1096,8 +1226,15 @@ impl eframe::App for LogSleuthApp {
                 );
             }
             if files.is_empty() {
-                self.state.status_message =
-                    "No watchable files \u{2014} tick files in the Files tab first.".to_string();
+                self.state.status_message = if skipped_evtx > 0 {
+                    format!(
+                        "Live Tail does not support .evtx files ({} selected). \
+                         Add text log files to tail.",
+                        skipped_evtx
+                    )
+                } else {
+                    "No watchable files \u{2014} tick files in the Files tab first.".to_string()
+                };
             } else {
                 let watching = files.len();
                 let start_id = self.state.next_entry_id();
@@ -1109,13 +1246,21 @@ impl eframe::App for LogSleuthApp {
                     .start_tail(files, start_id, self.state.tail_poll_interval_ms);
                 self.state.tail_active = true;
                 self.state.status_message = if files_total > MAX_TAIL_WATCH_FILES {
-                    format!(
+                    let mut msg = format!(
                         "Live tail active \u{2014} watching {watching} of {files_total} checked \
                          files (capped at {MAX_TAIL_WATCH_FILES}; uncheck some files to \
                          fit all within the cap)."
-                    )
+                    );
+                    if skipped_evtx > 0 {
+                        msg.push_str(&format!(" {skipped_evtx} .evtx file(s) skipped."));
+                    }
+                    msg
                 } else {
-                    format!("Live tail active \u{2014} watching {watching} file(s).")
+                    let mut msg = format!("Live tail active \u{2014} watching {watching} file(s).");
+                    if skipped_evtx > 0 {
+                        msg.push_str(&format!(" {skipped_evtx} .evtx file(s) skipped."));
+                    }
+                    msg
                 };
             }
         }
@@ -1150,6 +1295,7 @@ impl eframe::App for LogSleuthApp {
             // are discarded rather than applied to the freshly-cleared state on
             // the next frame (Bug fix: stale EntriesBatch after new_session).
             self.scan_manager.progress_rx = None;
+            self.auto_queue_event_logs_after_scan = false;
             self.state.new_session();
             // Persist the blank state so the next launch starts fresh and does
             // not try to restore the old session directory.
@@ -1185,41 +1331,19 @@ impl eframe::App for LogSleuthApp {
                         .on_hover_text(if scanning {
                             "Cannot open a directory while a scan is in progress"
                         } else {
-                            "Scan a directory for log files"
+                            "Append a local directory to the current session (Windows Event Viewer logs remain available)"
                         })
                         .clicked()
                     {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                            self.dir_watcher.stop_watch();
-                            self.state.dir_watcher_active = false;
-                            // Bug fix: stop any running live tail before clear()
-                            // so stale tail entries do not contaminate the new session.
-                            if self.state.tail_active {
-                                self.tail_manager.stop_tail();
+                            if is_network_path(&path) {
+                                self.state.status_message =
+                                    "\u{26a0} Network paths (UNC shares / mapped drives to remote \
+                                     servers) are not supported. Copy the logs to a local drive first."
+                                        .to_string();
+                            } else {
+                                self.state.pending_append_scan = Some(path);
                             }
-                            // Capture the date filter BEFORE clear() so the user's
-                            // setting is not lost.  clear() intentionally preserves
-                            // discovery_date_input, but modified_since must be read
-                            // before we wipe any other transient state.
-                            let modified_since = self.state.discovery_modified_since();
-                            self.state.clear();
-                            self.state.scan_in_progress = true;
-                            self.state.fresh_scan_in_progress = true;
-                            self.state.scan_path = Some(path.clone());
-                            self.scan_manager.start_scan(
-                                path,
-                                self.state.profiles.clone(),
-                                DiscoveryConfig {
-                                    max_files: self.state.max_files_limit,
-                                    max_depth: self.state.max_scan_depth,
-                                    max_total_entries: self.state.max_total_entries,
-                                    modified_since,
-                                    ..DiscoveryConfig::default()
-                                },
-                                // Opt-in model: profile files by filename only;
-                                // entries load only when the user ticks a checkbox.
-                                Some(std::collections::HashSet::new()),
-                            );
                         }
                         ui.close_menu();
                     }
@@ -1229,7 +1353,7 @@ impl eframe::App for LogSleuthApp {
                         .on_hover_text(if scanning {
                             "Cannot open files while a scan is in progress"
                         } else {
-                            "Select individual log files to open as a new session"
+                            "Open selected files as a new session. On Windows, Event Viewer logs are auto-added."
                         })
                         .clicked()
                     {
@@ -1778,4 +1902,19 @@ impl eframe::App for LogSleuthApp {
         self.tail_manager.stop_tail();
         self.state.save_session();
     }
+}
+
+fn is_network_path(path: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        if let Some(Component::Prefix(p)) = path.components().next() {
+            return matches!(
+                p.kind(),
+                Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _) | Prefix::DeviceNS(_)
+            );
+        }
+    }
+    let _ = path;
+    false
 }

@@ -290,7 +290,7 @@ fn main() {
                 .unwrap_or("previous session");
             state.status_message = format!(
                 "Session restored \u{2014} {dir}. \
-                 Click \u{201c}Open Directory\u{2026}\u{201d} to reload."
+                 Click \u{201c}Open Directory\u{2026}\u{201d} to append more files."
             );
         }
     }
@@ -326,6 +326,70 @@ fn main() {
                 "Unknown --filter-level value, ignoring. \
                  Valid values: critical, error, warning, info, debug"
             );
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        match app::windows_event_logs::collect_event_viewer_log_files() {
+            Ok(selection) => {
+                if !selection.files.is_empty() {
+                    let denied_note = if selection.access_denied > 0 {
+                        format!(
+                            " ({} inaccessible - run as Administrator or add the user to \
+                             Event Log Readers for full coverage)",
+                            selection.access_denied
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let unreadable_note = if selection.unreadable > 0 {
+                        format!(" ({} unreadable)", selection.unreadable)
+                    } else {
+                        String::new()
+                    };
+                    let note = format!("{denied_note}{unreadable_note}");
+                    let startup_scan_queued = state.initial_scan.is_some()
+                        || state.pending_scan.is_some()
+                        || state.pending_replace_files.is_some();
+                    if startup_scan_queued {
+                        let mut existing: std::collections::HashSet<std::path::PathBuf> =
+                            state.queued_parse_files.iter().cloned().collect();
+                        for p in selection.files {
+                            if existing.insert(p.clone()) {
+                                state.queued_parse_files.push(p);
+                            }
+                        }
+                        state.status_message = format!(
+                            "Queued Windows Event Viewer logs to append after startup scan{}.",
+                            note
+                        );
+                        tracing::info!(
+                            queued = state.queued_parse_files.len(),
+                            "Queued automatic Event Viewer log append at startup"
+                        );
+                    } else {
+                        state.status_message = format!(
+                            "Opening {} Windows Event Viewer log(s) from {}{}...",
+                            selection.files.len(),
+                            selection.dir.display(),
+                            note
+                        );
+                        state.pending_replace_files = Some(selection.files);
+                        tracing::info!("Queued automatic Event Viewer log load at startup");
+                    }
+                } else if selection.access_denied > 0 || selection.unreadable > 0 {
+                    state.status_message = format!(
+                        "\u{26a0} No readable .evtx files found under {} ({} inaccessible, {} unreadable).",
+                        selection.dir.display(),
+                        selection.access_denied,
+                        selection.unreadable
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Automatic Event Viewer log load skipped");
+            }
         }
     }
 

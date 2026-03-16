@@ -97,6 +97,11 @@ pub struct AppState {
     /// Consumed and cleared by `gui.rs` in the update loop each frame.
     pub pending_scan: Option<PathBuf>,
 
+    /// Set by a UI panel to request scanning an additional directory and
+    /// appending its files/entries to the current session.
+    /// Consumed and cleared by `gui.rs` in the update loop each frame.
+    pub pending_append_scan: Option<PathBuf>,
+
     /// Set by a UI panel to request cancellation of the running scan.
     /// Consumed and cleared by `gui.rs` in the update loop each frame.
     pub request_cancel: bool,
@@ -511,6 +516,7 @@ impl AppState {
             sort_descending: false, // default ascending (oldest first)
             debug_mode,
             pending_scan: None,
+            pending_append_scan: None,
             request_cancel: false,
             file_list_search: String::new(),
             file_colours: HashMap::new(),
@@ -632,6 +638,50 @@ impl AppState {
                 if removed == 1 { "y" } else { "ies" }
             );
         }
+    }
+
+    /// Remove all parsed entries for a set of source files from memory and
+    /// mark those files as `parsing_skipped`.
+    ///
+    /// Returns the number of entries removed.
+    pub fn remove_entries_for_paths(
+        &mut self,
+        paths: &std::collections::HashSet<std::path::PathBuf>,
+    ) -> usize {
+        if paths.is_empty() {
+            return 0;
+        }
+
+        let before = self.entries.len();
+        self.entries.retain(|e| !paths.contains(&e.source_file));
+        let removed = before.saturating_sub(self.entries.len());
+
+        if removed > 0 {
+            self.entries.shrink_to_fit();
+        }
+
+        // Keep the mtime-update fast path accurate after bulk removal.
+        self.notimestamp_entry_count = self
+            .entries
+            .iter()
+            .filter(|e| e.timestamp.is_none())
+            .count();
+
+        for f in &mut self.discovered_files {
+            if paths.contains(&f.path) {
+                f.parsing_skipped = true;
+            }
+        }
+
+        if removed > 0 {
+            tracing::info!(
+                files = paths.len(),
+                removed,
+                "Removed entries for multiple files"
+            );
+        }
+
+        removed
     }
 
     /// Recompute filtered indices from current entries and filter state.
@@ -892,15 +942,16 @@ impl AppState {
     }
 
     /// Filter a mutable entry vector in-place, retaining only Critical and
-    /// Error entries when troubleshoot mode is active.
+    /// Error entries when troubleshoot mode is active for a directory session.
     ///
-    /// Returns the number of entries dropped.  When troubleshoot mode is off
-    /// this is a no-op that returns 0.
+    /// Returns the number of entries dropped.  When troubleshoot mode is off,
+    /// or the current session is file-only (`scan_path == None`), this is a
+    /// no-op that returns 0.
     pub fn filter_entries_for_ingest(
         &self,
         entries: &mut Vec<crate::core::model::LogEntry>,
     ) -> usize {
-        if !self.troubleshoot_mode {
+        if !self.troubleshoot_mode || self.scan_path.is_none() {
             return 0;
         }
         let before = entries.len();
@@ -1327,6 +1378,7 @@ impl AppState {
         self.status_message = "Ready.".to_string();
         self.scan_in_progress = false;
         self.pending_scan = None;
+        self.pending_append_scan = None;
         self.request_cancel = false;
         self.file_list_search.clear();
         self.file_colours.clear();

@@ -107,7 +107,10 @@ impl ScanManager {
                     parse_config,
                     tx,
                     cancel,
+                    false,
+                    0,
                     parse_path_filter,
+                    None,
                 );
             }));
             if result.is_err() {
@@ -119,6 +122,56 @@ impl ScanManager {
         });
 
         tracing::info!("Scan started");
+    }
+
+    /// Start scanning an additional directory in append mode.
+    ///
+    /// Unlike `start_scan`, this keeps existing state and appends newly
+    /// discovered files/entries into the current session.
+    pub fn start_scan_append(
+        &mut self,
+        root: PathBuf,
+        profiles: Vec<FormatProfile>,
+        config: DiscoveryConfig,
+        entry_id_start: u64,
+        parse_path_filter: Option<std::collections::HashSet<PathBuf>>,
+        exclude_paths: std::collections::HashSet<PathBuf>,
+    ) {
+        self.cancel_scan();
+
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        self.progress_rx = Some(rx);
+        self.cancel_flag = Some(Arc::clone(&cancel));
+
+        let parse_config = ParseConfig::default();
+
+        std::thread::spawn(move || {
+            let tx_guard = tx.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_scan(
+                    root,
+                    profiles,
+                    config,
+                    parse_config,
+                    tx,
+                    cancel,
+                    true,
+                    entry_id_start,
+                    parse_path_filter,
+                    Some(exclude_paths),
+                );
+            }));
+            if result.is_err() {
+                tracing::error!("Append scan thread panicked; sending Failed message");
+                let _ = tx_guard.send(ScanProgress::Failed {
+                    error: "Internal error: append scan thread panicked unexpectedly".to_string(),
+                });
+            }
+        });
+
+        tracing::info!("Append directory scan started");
     }
 
     /// Start parsing a pre-selected list of individual files in *append* mode.
@@ -261,7 +314,10 @@ fn run_scan(
     parse_config: ParseConfig,
     tx: mpsc::Sender<ScanProgress>,
     cancel: Arc<AtomicBool>,
+    append: bool,
+    entry_id_start: u64,
     parse_path_filter: Option<std::collections::HashSet<PathBuf>>,
+    append_exclude_paths: Option<std::collections::HashSet<PathBuf>>,
 ) {
     macro_rules! send {
         ($msg:expr) => {
@@ -335,7 +391,7 @@ fn run_scan(
 
     // Poll the discovery channel with a 100 ms timeout so the cancel flag is
     // re-checked between each poll, even while walkdir blocks inside an SMB call.
-    let (discovered_files, warnings, total_found) = loop {
+    let (mut discovered_files, warnings, total_found) = loop {
         if cancel.load(Ordering::SeqCst) {
             send!(ScanProgress::Cancelled);
             return;
@@ -407,6 +463,23 @@ fn run_scan(
         send!(ScanProgress::Warning { message: warning });
     }
 
+    if append {
+        if let Some(exclude) = append_exclude_paths {
+            if !exclude.is_empty() {
+                let before = discovered_files.len();
+                discovered_files.retain(|f| !exclude.contains(&f.path));
+                let skipped = before.saturating_sub(discovered_files.len());
+                if skipped > 0 {
+                    send!(ScanProgress::Warning {
+                        message: format!(
+                            "Open Directory: skipped {skipped} file(s) already loaded in this session."
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     check_cancel!();
 
     run_parse_pipeline(
@@ -415,10 +488,10 @@ fn run_scan(
         parse_config,
         tx,
         cancel,
-        false,
+        append,
         total_found,
         config.max_total_entries,
-        0, // fresh scan — always start IDs from zero
+        entry_id_start,
         parse_path_filter.as_ref(),
     );
 }
@@ -609,13 +682,26 @@ fn run_parse_pipeline(
                 };
             }
 
+            #[cfg(target_os = "windows")]
+            let is_evtx = file
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("evtx"))
+                == Some(true);
+            #[cfg(not(target_os = "windows"))]
+            let is_evtx = false;
+
             // Parse-path filter: if a filter is active and this file is not in
             // it, skip full I/O and parsing.  The profile is still assigned via
             // filename-only detection (no file read) so the discovery panel shows
             // a sensible profile label.  The caller can trigger a follow-up
             // `start_scan_files` to parse skipped files on demand.
+            //
+            // Windows EVTX files bypass this gate so Event Viewer logs are
+            // always parsed when readable.
             if let Some(filter) = parse_path_filter {
-                if !filter.contains(&file.path) {
+                if !filter.contains(&file.path) && !is_evtx {
                     let file_name =
                         file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     let (profile_id, detection_confidence) = if let Some(detection) =
@@ -657,13 +743,7 @@ fn run_parse_pipeline(
             // evtx_parser module which uses the `evtx` crate.
             #[cfg(target_os = "windows")]
             {
-                if file
-                    .path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.eq_ignore_ascii_case("evtx"))
-                    == Some(true)
-                {
+                if is_evtx {
                     let evtx_result = crate::core::evtx_parser::parse_evtx_file(
                         &file.path,
                         parse_config.max_entry_size,

@@ -10,3 +10,4 @@ pub mod scan;
 pub mod session;
 pub mod state;
 pub mod tail;
+pub mod windows_event_logs;
