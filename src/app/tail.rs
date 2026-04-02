@@ -379,19 +379,9 @@ fn run_tail_watcher(
             //    Decode to UTF-8 only *after* splitting so that multi-byte
             //    sequences that straddle a read boundary are kept intact.
             // -----------------------------------------------------------------
-            let complete_text = match state.partial.iter().rposition(|&b| b == b'\n') {
-                Some(nl_pos) => {
-                    let complete_bytes = state.partial[..=nl_pos].to_vec();
-                    // Keep the tail after the last newline for the next tick.
-                    state.partial = state.partial[nl_pos + 1..].to_vec();
-                    // Decode the complete portion as lossy UTF-8 now that byte
-                    // boundaries are guaranteed to land on line boundaries.
-                    String::from_utf8_lossy(&complete_bytes).into_owned()
-                }
-                None => {
-                    // No newline yet -- the entire buffer is an in-progress line.
-                    continue;
-                }
+            let Some(complete_text) = take_complete_text(&mut state.partial) else {
+                // No newline yet -- the entire buffer is an in-progress line.
+                continue;
             };
 
             // -----------------------------------------------------------------
@@ -453,4 +443,128 @@ fn read_bytes_at(path: &std::path::Path, offset: u64, limit: usize) -> std::io::
     let n = file.read(&mut buf)?;
     buf.truncate(n);
     Ok(buf)
+}
+
+/// Extract and decode all complete lines currently buffered in `partial`.
+///
+/// Returns `Some(decoded_text)` when at least one newline is present.
+/// `partial` is mutated to keep only the bytes after the final newline.
+/// Returns `None` when no complete line is available yet.
+fn take_complete_text(partial: &mut Vec<u8>) -> Option<String> {
+    let nl_pos = partial.iter().rposition(|&b| b == b'\n')?;
+    let complete_bytes = partial[..=nl_pos].to_vec();
+    *partial = partial[nl_pos + 1..].to_vec();
+    Some(String::from_utf8_lossy(&complete_bytes).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::profile;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    fn make_tail_test_profile() -> FormatProfile {
+        let toml = r#"
+[profile]
+id = "tail-bench"
+name = "Tail Bench"
+
+[detection]
+content_match = '^\['
+
+[parsing]
+line_pattern = '^\[(?P<timestamp>[^\]]+)\]\s(?P<level>\w+)\s+(?P<message>.+)$'
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+multiline_mode = "continuation"
+
+[severity_mapping]
+error = ["Error"]
+warning = ["Warning"]
+info = ["Info"]
+"#;
+        let path = PathBuf::from("tail_bench.toml");
+        let def = profile::parse_profile_toml(toml, &path).expect("profile parse should succeed");
+        profile::validate_and_compile(def, &path, false).expect("profile compile should succeed")
+    }
+
+    fn run_tail_pipeline_benchmark(
+        path: &std::path::Path,
+        profile: &FormatProfile,
+        chunk_size: usize,
+    ) -> (Duration, usize) {
+        let mut offset = 0u64;
+        let parse_config = ParseConfig::default();
+        let mut partial = Vec::new();
+        let mut next_id = 0u64;
+        let mut total_entries = 0usize;
+
+        let start = Instant::now();
+        loop {
+            let new_bytes =
+                read_bytes_at(path, offset, chunk_size).expect("chunk read should succeed");
+            if new_bytes.is_empty() {
+                break;
+            }
+            offset += new_bytes.len() as u64;
+
+            partial.extend_from_slice(&new_bytes);
+            if let Some(complete_text) = take_complete_text(&mut partial) {
+                let result =
+                    parser::parse_content(&complete_text, path, profile, &parse_config, next_id);
+                next_id += result.entries.len() as u64;
+                total_entries += result.entries.len();
+            }
+        }
+
+        (start.elapsed(), total_entries)
+    }
+
+    #[test]
+    #[ignore = "performance benchmark"]
+    fn bench_tail_chunk_pipeline_throughput() {
+        const LINES: usize = 120_000;
+        const RUNS: usize = 3;
+        let chunk_size = MAX_TAIL_READ_BYTES_PER_TICK;
+        let profile = make_tail_test_profile();
+
+        let temp = tempfile::NamedTempFile::new().expect("temp file should be created");
+        {
+            let mut writer = std::io::BufWriter::new(
+                temp.reopen()
+                    .expect("temp file reopen for writing should succeed"),
+            );
+            for i in 0..LINES {
+                let sec = i % 60;
+                writeln!(
+                    writer,
+                    "[2024-01-15 14:30:{sec:02}] Info tail throughput line {i}"
+                )
+                .expect("write line should succeed");
+            }
+            writer.flush().expect("flush should succeed");
+        }
+
+        // Warm-up
+        let (_, warm_entries) = run_tail_pipeline_benchmark(temp.path(), &profile, chunk_size);
+        assert_eq!(warm_entries, LINES);
+
+        let mut best = Duration::MAX;
+        for _ in 0..RUNS {
+            let (elapsed, parsed_entries) =
+                run_tail_pipeline_benchmark(temp.path(), &profile, chunk_size);
+            assert_eq!(parsed_entries, LINES);
+            best = best.min(elapsed);
+        }
+
+        let lines_per_sec = (LINES as f64 / best.as_secs_f64()).round();
+        println!(
+            "TAIL_BENCH lines={} chunk_bytes={} best_ms={} lines_per_sec={}",
+            LINES,
+            chunk_size,
+            best.as_millis(),
+            lines_per_sec
+        );
+    }
 }

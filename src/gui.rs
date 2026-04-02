@@ -185,33 +185,10 @@ impl eframe::App for LogSleuthApp {
                     // and the user triggered "Parse skipped files"), update its profile
                     // info and propagate the skipped flag rather than creating a duplicate row.
                     // Truly new files are appended as before.
-                    for f in files {
+                    for f in &files {
                         self.state.assign_file_colour(&f.path);
-                        if let Some(existing) = self
-                            .state
-                            .discovered_files
-                            .iter_mut()
-                            .find(|e| e.path == f.path)
-                        {
-                            // Update profile with whatever was detected (filename-only
-                            // detection is fine for skipped files; full detection for
-                            // actually-parsed files).
-                            if f.profile_id.is_some() {
-                                existing.profile_id = f.profile_id;
-                                existing.detection_confidence = f.detection_confidence;
-                            }
-                            // Propagate the actual parsed status from the pipeline:
-                            //   false = file was fully parsed (entries in memory)
-                            //   true  = file was profiled only (entries NOT in memory)
-                            //
-                            // Previously this was unconditionally `= false`, which
-                            // cleared the □ indicator and broke the re-parse trigger
-                            // for dir-watcher / session-restore discover-only scans.
-                            existing.parsing_skipped = f.parsing_skipped;
-                        } else {
-                            self.state.discovered_files.push(f);
-                        }
                     }
+                    merge_additional_discovered_files(&mut self.state.discovered_files, files);
                 }
                 crate::core::model::ScanProgress::ParsingStarted { total_files } => {
                     self.state.status_message = format!("Parsing {total_files} files...");
@@ -1917,4 +1894,102 @@ fn is_network_path(path: &std::path::Path) -> bool {
     }
     let _ = path;
     false
+}
+
+fn merge_additional_discovered_files(
+    discovered_files: &mut Vec<crate::core::model::DiscoveredFile>,
+    files: Vec<crate::core::model::DiscoveredFile>,
+) {
+    // Build an index once so each incoming file is matched in O(1) average
+    // time rather than repeatedly scanning discovered_files.
+    let mut existing_by_path: std::collections::HashMap<std::path::PathBuf, usize> =
+        discovered_files
+            .iter()
+            .enumerate()
+            .map(|(idx, f)| (f.path.clone(), idx))
+            .collect();
+
+    for f in files {
+        if let Some(&idx) = existing_by_path.get(&f.path) {
+            let existing = &mut discovered_files[idx];
+            // Update profile with whatever was detected (filename-only
+            // detection is fine for skipped files; full detection for
+            // actually-parsed files).
+            if f.profile_id.is_some() {
+                existing.profile_id = f.profile_id;
+                existing.detection_confidence = f.detection_confidence;
+            }
+            // Propagate the actual parsed status from the pipeline:
+            //   false = file was fully parsed (entries in memory)
+            //   true  = file was profiled only (entries NOT in memory)
+            //
+            // Previously this was unconditionally `= false`, which
+            // cleared the □ indicator and broke the re-parse trigger
+            // for dir-watcher / session-restore discover-only scans.
+            existing.parsing_skipped = f.parsing_skipped;
+        } else {
+            let idx = discovered_files.len();
+            existing_by_path.insert(f.path.clone(), idx);
+            discovered_files.push(f);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_additional_discovered_files;
+    use crate::core::model::DiscoveredFile;
+
+    fn discovered(
+        path: &str,
+        profile_id: Option<&str>,
+        detection_confidence: f64,
+        parsing_skipped: bool,
+    ) -> DiscoveredFile {
+        DiscoveredFile {
+            path: std::path::PathBuf::from(path),
+            size: 1,
+            modified: None,
+            profile_id: profile_id.map(str::to_string),
+            detection_confidence,
+            is_large: false,
+            parsing_skipped,
+        }
+    }
+
+    #[test]
+    fn merge_additional_files_updates_existing_without_duplication() {
+        let mut discovered_files = vec![discovered("a.log", Some("plain-text"), 0.1, true)];
+
+        merge_additional_discovered_files(
+            &mut discovered_files,
+            vec![discovered("a.log", Some("syslog"), 0.9, false)],
+        );
+
+        assert_eq!(discovered_files.len(), 1);
+        assert_eq!(discovered_files[0].profile_id.as_deref(), Some("syslog"));
+        assert_eq!(discovered_files[0].detection_confidence, 0.9);
+        assert!(!discovered_files[0].parsing_skipped);
+    }
+
+    #[test]
+    fn merge_additional_files_handles_duplicate_incoming_paths() {
+        let mut discovered_files = vec![discovered("a.log", Some("plain-text"), 0.1, false)];
+
+        merge_additional_discovered_files(
+            &mut discovered_files,
+            vec![
+                discovered("b.log", None, 0.0, true),
+                discovered("b.log", Some("json-lines"), 1.0, false),
+            ],
+        );
+
+        assert_eq!(discovered_files.len(), 2);
+        let b_file = discovered_files
+            .iter()
+            .find(|f| f.path == std::path::PathBuf::from("b.log"))
+            .expect("b.log should exist after merge");
+        assert_eq!(b_file.profile_id.as_deref(), Some("json-lines"));
+        assert!(!b_file.parsing_skipped);
+    }
 }
