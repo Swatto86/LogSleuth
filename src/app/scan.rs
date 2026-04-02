@@ -107,10 +107,12 @@ impl ScanManager {
                     parse_config,
                     tx,
                     cancel,
-                    false,
-                    0,
-                    parse_path_filter,
-                    None,
+                    RunScanOptions {
+                        append: false,
+                        entry_id_start: 0,
+                        parse_path_filter,
+                        append_exclude_paths: None,
+                    },
                 );
             }));
             if result.is_err() {
@@ -157,10 +159,12 @@ impl ScanManager {
                     parse_config,
                     tx,
                     cancel,
-                    true,
-                    entry_id_start,
-                    parse_path_filter,
-                    Some(exclude_paths),
+                    RunScanOptions {
+                        append: true,
+                        entry_id_start,
+                        parse_path_filter,
+                        append_exclude_paths: Some(exclude_paths),
+                    },
                 );
             }));
             if result.is_err() {
@@ -307,6 +311,13 @@ enum DiscoveryUpdate {
 /// `parse_path_filter` — when `Some`, files not in the set are profile-detected
 /// (filename-only, no file read) but not parsed; their `parsing_skipped` flag is
 /// set on the `DiscoveredFile` sent to the UI.
+struct RunScanOptions {
+    append: bool,
+    entry_id_start: u64,
+    parse_path_filter: Option<std::collections::HashSet<PathBuf>>,
+    append_exclude_paths: Option<std::collections::HashSet<PathBuf>>,
+}
+
 fn run_scan(
     root: PathBuf,
     profiles: Vec<FormatProfile>,
@@ -314,11 +325,15 @@ fn run_scan(
     parse_config: ParseConfig,
     tx: mpsc::Sender<ScanProgress>,
     cancel: Arc<AtomicBool>,
-    append: bool,
-    entry_id_start: u64,
-    parse_path_filter: Option<std::collections::HashSet<PathBuf>>,
-    append_exclude_paths: Option<std::collections::HashSet<PathBuf>>,
+    options: RunScanOptions,
 ) {
+    let RunScanOptions {
+        append,
+        entry_id_start,
+        parse_path_filter,
+        append_exclude_paths,
+    } = options;
+
     macro_rules! send {
         ($msg:expr) => {
             if tx.send($msg).is_err() {

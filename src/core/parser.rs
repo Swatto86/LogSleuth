@@ -1516,4 +1516,55 @@ multiline_mode = "raw"
             "truncated raw_text must have the truncation suffix"
         );
     }
+
+    #[test]
+    #[ignore = "performance benchmark"]
+    fn bench_parse_content_large_dataset_throughput() {
+        use std::time::Instant;
+
+        let profile = make_test_profile();
+        const LINES: usize = 120_000;
+        const RUNS: usize = 3;
+
+        let mut content = String::with_capacity(LINES * 80);
+        for i in 0..LINES {
+            let sec = i % 60;
+            content.push_str(&format!(
+                "[2024-01-15 14:30:{sec:02}] Info parser throughput line {i}\n"
+            ));
+        }
+
+        // Warm-up run to reduce one-time effects in timing output.
+        let warm = parse_content(
+            &content,
+            &PathBuf::from("bench_parser.log"),
+            &profile,
+            &ParseConfig::default(),
+            0,
+        );
+        assert_eq!(warm.entries.len(), LINES);
+
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..RUNS {
+            let start = Instant::now();
+            let result = parse_content(
+                &content,
+                &PathBuf::from("bench_parser.log"),
+                &profile,
+                &ParseConfig::default(),
+                0,
+            );
+            let elapsed = start.elapsed();
+            assert_eq!(result.entries.len(), LINES);
+            best = best.min(elapsed);
+        }
+
+        let lines_per_sec = (LINES as f64 / best.as_secs_f64()).round();
+        println!(
+            "PARSER_BENCH lines={} best_ms={} lines_per_sec={}",
+            LINES,
+            best.as_millis(),
+            lines_per_sec
+        );
+    }
 }
