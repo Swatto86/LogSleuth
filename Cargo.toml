@@ -40,9 +40,6 @@ regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-# Memory-mapped I/O for large files
-memmap2 = "0.9"
-
 # Parallel processing
 rayon = "1"
 

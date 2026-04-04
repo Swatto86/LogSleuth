@@ -2367,7 +2367,6 @@ dependencies = [
  "glob",
  "ico",
  "image",
- "memmap2",
  "rayon",
  "regex",
  "resvg",

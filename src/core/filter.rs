@@ -307,19 +307,31 @@ pub struct FilterState {
 }
 
 impl FilterState {
+    /// Returns true when the severity set meaningfully restricts results.
+    ///
+    /// An empty set means "all severities pass". A set containing every
+    /// severity variant also means "all pass" and should not be treated as an
+    /// active filter for fast paths or UI indicators.
+    pub fn has_active_severity_filter(&self) -> bool {
+        !self.severity_levels.is_empty() && self.severity_levels.len() < Severity::all().len()
+    }
+
+    /// Returns true when any time-bound filter is active.
+    pub fn has_time_filter(&self) -> bool {
+        self.relative_time_secs.is_some() || self.time_start.is_some() || self.time_end.is_some()
+    }
+
     /// Returns true if no filters are active.
     /// Note: `fuzzy` is a mode toggle, not a filter value, so it is not counted here.
     /// `abs_time_start_input` / `abs_time_end_input` are UI display buffers; the
     /// semantic truth is in `time_start` / `time_end` which are already checked.
     pub fn is_empty(&self) -> bool {
-        self.severity_levels.is_empty()
+        !self.has_active_severity_filter()
             && self.source_files.is_empty()
             && !self.hide_all_sources
-            && self.time_start.is_none()
-            && self.time_end.is_none()
+            && !self.has_time_filter()
             && self.text_search.is_empty()
             && self.regex_search.is_none()
-            && self.relative_time_secs.is_none()
             && !self.bookmarks_only
             && self.exclude_text.is_empty()
             && self.component_filter.is_empty()
@@ -890,7 +902,32 @@ mod tests {
         assert!(filter.is_empty());
         filter.relative_time_secs = Some(900);
         assert!(!filter.is_empty());
+        assert!(filter.has_time_filter());
         filter.relative_time_secs = None;
+        assert!(filter.is_empty());
+        assert!(!filter.has_time_filter());
+    }
+
+    #[test]
+    fn test_time_end_only_tracked_as_time_filter() {
+        let mut filter = FilterState::default();
+        assert!(!filter.has_time_filter());
+        assert!(filter.is_empty());
+
+        filter.time_end = Some(chrono::Utc::now());
+
+        assert!(filter.has_time_filter());
+        assert!(!filter.is_empty());
+    }
+
+    #[test]
+    fn test_all_severities_selected_are_not_treated_as_active_filter() {
+        let mut filter = FilterState::default();
+        for &severity in Severity::all() {
+            filter.severity_levels.insert(severity);
+        }
+
+        assert!(!filter.has_active_severity_filter());
         assert!(filter.is_empty());
     }
 

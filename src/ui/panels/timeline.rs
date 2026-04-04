@@ -95,7 +95,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     // understands why the timeline is empty.
                     let mut active_filters: Vec<String> = Vec::new();
                     let f = &state.filter_state;
-                    if !f.severity_levels.is_empty() {
+                    if f.has_active_severity_filter() {
                         active_filters.push("Severity".to_string());
                     }
                     if !f.text_search.trim().is_empty() || !f.exclude_text.trim().is_empty() {
@@ -104,23 +104,26 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     if f.regex_search.is_some() {
                         active_filters.push("Regex".to_string());
                     }
-                    if f.relative_time_secs.is_some()
-                        || f.time_start.is_some()
-                        || f.time_end.is_some()
-                    {
+                    if f.has_time_filter() {
                         active_filters.push("Time range".to_string());
                     }
-                    if !f.source_files.is_empty() {
+                    if f.hide_all_sources || !f.source_files.is_empty() {
                         active_filters.push("File filter".to_string());
                     }
                     if f.bookmarks_only {
                         active_filters.push("Bookmarks".to_string());
+                    }
+                    if !f.component_filter.is_empty() {
+                        active_filters.push("Component".to_string());
                     }
                     if f.hide_no_timestamp {
                         active_filters.push("Timestamped only".to_string());
                     }
                     if f.dedup_mode != crate::core::filter::DedupMode::Off {
                         active_filters.push("Dedup".to_string());
+                    }
+                    if !f.multi_search.is_empty() {
+                        active_filters.push("Multi-search".to_string());
                     }
                     if let Some(secs) = state.activity_window_secs {
                         let label = if secs < 60 {
