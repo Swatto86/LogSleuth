@@ -1205,7 +1205,7 @@ impl AppState {
         // Build a concise human-readable description of the active filter so the
         // clipboard recipient understands what criteria were applied.
         let mut filter_parts: Vec<String> = Vec::new();
-        if !self.filter_state.severity_levels.is_empty() {
+        if self.filter_state.has_active_severity_filter() {
             let mut sevs: Vec<&str> = self
                 .filter_state
                 .severity_levels
@@ -1223,7 +1223,7 @@ impl AppState {
             } else {
                 filter_parts.push(format!("Last {}h", secs / 3_600));
             }
-        } else if self.filter_state.time_start.is_some() || self.filter_state.time_end.is_some() {
+        } else if self.filter_state.has_time_filter() {
             filter_parts.push("Time range active".to_string());
         }
         if !self.filter_state.text_search.is_empty() {

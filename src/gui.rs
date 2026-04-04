@@ -800,8 +800,7 @@ impl eframe::App for LogSleuthApp {
                     // this O(entries) scan when no time-range filter is set avoids
                     // stalling the UI thread on every mtime-update frame for large
                     // sessions that do not use the date/time filter.
-                    let time_filter_active = self.state.filter_state.relative_time_secs.is_some()
-                        || self.state.filter_state.time_start.is_some();
+                    let time_filter_active = self.state.filter_state.has_time_filter();
                     if self.state.notimestamp_entry_count > 0 && time_filter_active {
                         for entry in self.state.entries.iter_mut() {
                             if entry.timestamp.is_none() {
@@ -1809,21 +1808,8 @@ impl eframe::App for LogSleuthApp {
                         self.state.sidebar_tab = 0;
                     }
                     // Show filter-active indicator on Filters tab label.
-                    let filter_active = !self.state.filter_state.source_files.is_empty()
-                        || self.state.filter_state.hide_all_sources
-                        || self.state.filter_state.relative_time_secs.is_some()
-                        || !self.state.filter_state.text_search.is_empty()
-                        // Bug fix: check the compiled regex (regex_search), not the
-                        // raw pattern string.  An invalid pattern is non-empty but
-                        // regex_search is None, so the filter is not actually applied.
-                        || self.state.filter_state.regex_search.is_some()
-                        || self.state.filter_state.bookmarks_only
-                        // A severity filter is active only when the set is non-empty
-                        // AND does not contain every variant (all-checked is equivalent
-                        // to no filter).  An empty set also means no filter (all pass).
-                        || (!self.state.filter_state.severity_levels.is_empty()
-                            && self.state.filter_state.severity_levels.len()
-                                < crate::core::model::Severity::all().len());
+                    let filter_active = !self.state.filter_state.is_empty()
+                        || self.state.activity_window_secs.is_some();
                     let filters_label = if filter_active {
                         "\u{25cf} Filters".to_string() // bullet dot = filter active
                     } else {

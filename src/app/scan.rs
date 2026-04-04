@@ -1374,8 +1374,8 @@ fn read_file_content_timed(path: &Path, is_large: bool) -> io::Result<String> {
 
 /// Read the full content of a file as a UTF-8 string.
 ///
-/// Uses `memmap2` for large files to avoid copying the entire file into
-/// heap memory.  Small files use `fs::read_to_string` with retry.
+/// Large files use retrying byte reads followed by conservative decoding.
+/// Small UTF-8 files use `fs::read_to_string` with retry.
 ///
 /// Transient I/O errors (WouldBlock, Interrupted, TimedOut) are retried with
 /// capped exponential backoff (Rule 11). Permanent errors are returned immediately.
@@ -1387,22 +1387,14 @@ fn read_file_content(path: &Path, is_large: bool) -> io::Result<String> {
     }
 }
 
-/// Read using `memmap2` for large files (avoids allocating the full buffer).
+/// Read a large file via retrying byte reads.
+///
+/// This deliberately avoids a live memory map. Log files may still be growing
+/// while LogSleuth scans them, and mapping a file that can be modified by
+/// another process is not a sound assumption for a production log viewer.
 fn read_large_file(path: &Path) -> io::Result<String> {
-    let file = std::fs::File::open(path)?;
-    // SAFETY: the file is read-only and we do not mutate the map.
-    // We accept the documented risk that external modification of the file
-    // during the map's lifetime could produce undefined behaviour, which is
-    // acceptable for a log viewer reading already-written files.
-    let mmap = unsafe { memmap2::Mmap::map(&file)? };
-
-    // Fast path: valid UTF-8 (most log files).
-    if let Ok(s) = std::str::from_utf8(&mmap) {
-        return Ok(s.to_string());
-    }
-
-    // Encoding fallback: handles UTF-16 LE/BE (Windows system logs) and ANSI.
-    decode_bytes(&mmap, path)
+    let bytes = read_bytes_with_retry(path)?;
+    decode_owned_bytes(bytes, path)
 }
 
 /// Read a small file with transient-error retries.
@@ -1440,17 +1432,44 @@ fn read_small_file_with_retry(path: &Path) -> io::Result<String> {
 /// both are used by Windows system logs such as CBS.log and WindowsUpdate.log.
 /// Falls back to lossy UTF-8 for ANSI / Windows-1252 encoded files.
 fn decode_non_utf8_file(path: &Path) -> io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    decode_bytes(&bytes, path)
+    let bytes = read_bytes_with_retry(path)?;
+    decode_owned_bytes(bytes, path)
 }
 
-/// Detect encoding from `bytes` and return the decoded string.
+/// Read the file as raw bytes with transient-error retries.
+///
+/// Used by the large-file path and the non-UTF-8 fallback so both benefit
+/// from the same retry policy.
+fn read_bytes_with_retry(path: &Path) -> io::Result<Vec<u8>> {
+    let mut last_err: Option<io::Error> = None;
+
+    for (attempt, &delay_ms) in RETRY_DELAYS_MS.iter().enumerate() {
+        match std::fs::read(path) {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) if is_transient_error(&e) => {
+                tracing::debug!(
+                    file = %path.display(),
+                    attempt = attempt + 1,
+                    error = %e,
+                    "Transient byte-read I/O error, retrying"
+                );
+                std::thread::sleep(Duration::from_millis(delay_ms));
+                last_err = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| io::Error::other("Unknown read error")))
+}
+
+/// Detect encoding from owned `bytes` and return the decoded string.
 ///
 /// Checks BOM markers only; does not do statistical charset detection.
 /// This is intentionally conservative: it correctly handles the most common
 /// non-UTF-8 encodings found in Windows system log directories while avoiding
 /// the complexity and potential false-positives of full charset detection.
-fn decode_bytes(bytes: &[u8], path: &Path) -> io::Result<String> {
+fn decode_owned_bytes(bytes: Vec<u8>, path: &Path) -> io::Result<String> {
     // UTF-16 LE BOM: 0xFF 0xFE — used by CBS.log, WindowsUpdate.log, etc.
     if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
         let utf16: Vec<u16> = bytes[2..]
@@ -1475,7 +1494,7 @@ fn decode_bytes(bytes: &[u8], path: &Path) -> io::Result<String> {
     // valid UTF-8), falling back to lossy conversion only for genuinely
     // invalid bytes.  The owned Vec→String path avoids a full buffer copy
     // that from_utf8_lossy().into_owned() would always perform.
-    match String::from_utf8(bytes.to_vec()) {
+    match String::from_utf8(bytes) {
         Ok(s) => {
             tracing::debug!(file = %path.display(), "Decoded file as UTF-8 (zero-copy)");
             Ok(s)
@@ -1493,4 +1512,39 @@ fn is_transient_error(e: &io::Error) -> bool {
         e.kind(),
         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted | io::ErrorKind::TimedOut
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_file_content;
+    use std::fs;
+
+    #[test]
+    fn test_read_file_content_large_utf8_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("large.log");
+        let expected = "2026-04-04 12:00:00 hello\nsecond line\n";
+        fs::write(&path, expected).expect("write utf8 log");
+
+        let actual = read_file_content(&path, true).expect("read large utf8 file");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_read_file_content_large_utf16le_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("large-utf16.log");
+        let expected = "2026-04-04 12:00:00 hello\n";
+
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in expected.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(&path, bytes).expect("write utf16 log");
+
+        let actual = read_file_content(&path, true).expect("read large utf16 file");
+
+        assert_eq!(actual, expected);
+    }
 }

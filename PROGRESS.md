@@ -1,5 +1,22 @@
 # LogSleuth - Implementation Progress
 
+## Increment 51: Scan I/O Hardening & Filter-State Fixes
+**Status: COMPLETE**
+
+- [x] `src/app/scan.rs` - Removed the live `memmap2` large-file read path. Large files now use retrying byte reads plus the existing BOM-aware decode path, eliminating the safety risk of scanning actively-written logs through a memory map while keeping UTF-8 / UTF-16LE / UTF-16BE support intact.
+- [x] `src/app/scan.rs` - Added 2 regression tests covering large UTF-8 and UTF-16LE files.
+- [x] `src/core/filter.rs` - Added `has_active_severity_filter()` and `has_time_filter()` helpers. `is_empty()` now treats "all severities selected" as equivalent to no severity filter, matching the actual filter engine and avoiding false-positive filter-active state.
+- [x] `src/gui.rs` - `FileMtimeUpdates` now refreshes `file_modified` fallbacks for any active time filter, including upper-bound-only absolute ranges (`time_end` with no `time_start` / relative window).
+- [x] `src/gui.rs`, `src/app/state.rs`, `src/ui/panels/timeline.rs` - Filter-state reporting now uses the shared helpers so the Filters badge, empty-state explanations, and clipboard report stay aligned with the real filter semantics.
+- [x] `Cargo.toml` - Removed the now-unused `memmap2` dependency.
+
+**Validation**
+
+- [x] `cargo fmt`
+- [x] `cargo clippy -- -D warnings`
+- [x] `cargo test`
+- [x] `cargo build --release`
+
 ## Increment 1: Project Scaffolding & Core Foundation
 **Status: COMPLETE**
 
