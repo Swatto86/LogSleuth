@@ -211,7 +211,19 @@ impl MultiSearch {
             regex::escape(term)
         };
         if self.whole_word {
-            format!(r"\b{base}\b")
+            if self.regex_mode {
+                format!(r"\b{base}\b")
+            } else {
+                let left = match term.chars().next() {
+                    Some(c) if c.is_alphanumeric() || c == '_' => r"\b",
+                    _ => r"\B",
+                };
+                let right = match term.chars().last() {
+                    Some(c) if c.is_alphanumeric() || c == '_' => r"\b",
+                    _ => r"\B",
+                };
+                format!("{left}{base}{right}")
+            }
         } else {
             base
         }
@@ -758,6 +770,13 @@ mod tests {
         assert!(ms.matches_text("an error occurred"));
         assert!(!ms.matches_text("errorhandler started")); // not a whole word
         assert!(!ms.matches_text("myerror")); // not a whole word
+    }
+
+    #[test]
+    fn test_whole_word_with_punctuation() {
+        let ms = make_search("error[0]", MultiSearchMode::Any, true, true, false, None);
+        assert!(ms.matches_text("found error[0] in log"));
+        assert!(!ms.matches_text("found error[0]0 in log"));
     }
 
     // -------------------------------------------------------------------------
