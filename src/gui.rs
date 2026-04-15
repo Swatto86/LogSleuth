@@ -1296,6 +1296,107 @@ impl eframe::App for LogSleuthApp {
             tracing::info!(total, external, "Profiles reloaded via Options panel");
         }
 
+        // -----------------------------------------------------------------
+        // Global keyboard shortcuts (Section 7 of the specification)
+        // -----------------------------------------------------------------
+        {
+            let scanning = self.state.scan_in_progress;
+            ctx.input(|i| {
+                let ctrl = i.modifiers.ctrl || i.modifiers.mac_cmd;
+                let shift = i.modifiers.shift;
+
+                // Ctrl+O — Open directory
+                if ctrl && !shift && i.key_pressed(egui::Key::O) && !scanning {
+                    self.state.shortcut_open_directory = true;
+                }
+                // Ctrl+F — Focus text search
+                if ctrl && !shift && i.key_pressed(egui::Key::F) {
+                    self.state.sidebar_tab = 1;
+                    self.state.request_focus_text_search = true;
+                }
+                // Ctrl+Shift+F — Focus regex search
+                if ctrl && shift && i.key_pressed(egui::Key::F) {
+                    self.state.sidebar_tab = 1;
+                    self.state.request_focus_regex_search = true;
+                }
+                // Ctrl+R or F5 — Rescan current directory
+                if !scanning
+                    && ((ctrl && !shift && i.key_pressed(egui::Key::R))
+                        || i.key_pressed(egui::Key::F5))
+                {
+                    if let Some(path) = self.state.scan_path.clone() {
+                        self.state.pending_scan = Some(path);
+                    }
+                }
+                // Ctrl+1 — Quick filter: Errors only
+                if ctrl && i.key_pressed(egui::Key::Num1) {
+                    let fs = &mut self.state.filter_state;
+                    let source_files = fs.source_files.clone();
+                    let hide_all = fs.hide_all_sources;
+                    *fs = crate::core::filter::FilterState::errors_only_from(fs.fuzzy);
+                    fs.source_files = source_files;
+                    fs.hide_all_sources = hide_all;
+                    self.state.apply_filters();
+                }
+                // Ctrl+2 — Quick filter: Errors + Warnings
+                if ctrl && i.key_pressed(egui::Key::Num2) {
+                    let fs = &mut self.state.filter_state;
+                    let source_files = fs.source_files.clone();
+                    let hide_all = fs.hide_all_sources;
+                    *fs = crate::core::filter::FilterState::errors_and_warnings_from(fs.fuzzy);
+                    fs.source_files = source_files;
+                    fs.hide_all_sources = hide_all;
+                    self.state.apply_filters();
+                }
+                // Escape — Clear all filters
+                if i.key_pressed(egui::Key::Escape) {
+                    self.state.filter_state = crate::core::filter::FilterState::default();
+                    self.state.activity_window_secs = None;
+                    self.state.activity_window_input.clear();
+                    self.state.apply_filters();
+                }
+                // Ctrl+S — Open scan summary
+                if ctrl
+                    && !shift
+                    && i.key_pressed(egui::Key::S)
+                    && self.state.scan_summary.is_some()
+                {
+                    self.state.show_summary = true;
+                }
+                // Up/Down — Navigate entries in the timeline
+                if i.key_pressed(egui::Key::ArrowUp) {
+                    let n = self.state.filtered_indices.len();
+                    if n > 0 {
+                        let current = self.state.selected_index.unwrap_or(0);
+                        if current > 0 {
+                            self.state.selected_index = Some(current - 1);
+                        }
+                    }
+                }
+                if i.key_pressed(egui::Key::ArrowDown) {
+                    let n = self.state.filtered_indices.len();
+                    if n > 0 {
+                        let current = self.state.selected_index.unwrap_or(0);
+                        if current + 1 < n {
+                            self.state.selected_index = Some(current + 1);
+                        }
+                    }
+                }
+            });
+
+            // Handle shortcut_open_directory outside the input closure (needs &mut self)
+            if self.state.shortcut_open_directory {
+                self.state.shortcut_open_directory = false;
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    let date_input = self.state.discovery_date_input.clone();
+                    self.state.clear();
+                    self.state.discovery_date_input = date_input;
+                    self.state.scan_path = Some(dir.clone());
+                    self.state.pending_scan = Some(dir);
+                }
+            }
+        }
+
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -1370,10 +1471,22 @@ impl eframe::App for LogSleuthApp {
                     ui.separator();
                     // Export sub-menu -- enabled only when there are filtered entries
                     let has_entries = !self.state.filtered_indices.is_empty();
+                    let entry_count = self.state.filtered_indices.len();
                     ui.add_enabled_ui(has_entries, |ui| {
                         ui.menu_button("Export", |ui| {
-                            if ui.button("Export CSV...")
-                                .on_hover_text("Save the filtered entries as a comma-separated values file")
+                            // EXP-05: warn user before large exports
+                            let large = entry_count >= crate::util::constants::DEFAULT_LARGE_EXPORT_THRESHOLD;
+                            let csv_label = if large {
+                                format!("Export CSV... ({entry_count} entries \u{2014} large)")
+                            } else {
+                                "Export CSV...".to_string()
+                            };
+                            if ui.button(csv_label)
+                                .on_hover_text(if large {
+                                    "Large export: this may take a moment. Save the filtered entries as CSV."
+                                } else {
+                                    "Save the filtered entries as a comma-separated values file"
+                                })
                                 .clicked()
                             {
                                 if let Some(dest) = rfd::FileDialog::new()
@@ -1381,23 +1494,39 @@ impl eframe::App for LogSleuthApp {
                                     .set_file_name("export.csv")
                                     .save_file()
                                 {
-                                    let filtered_entries = self
-                                        .state
-                                        .filtered_indices
-                                        .iter()
-                                        .filter_map(|&i| self.state.entries.get(i));
-                                    match std::fs::File::create(&dest) {
+                                    let filter_desc = self.state.filter_description();
+                                    let metadata = crate::core::export::ExportMetadata {
+                                        scan_path: self.state.scan_path.as_deref(),
+                                        filter_description: &filter_desc,
+                                        entry_count,
+                                    };
+                                    // SEC-04: atomic write via temp file + rename
+                                    let tmp = dest.with_extension("csv.tmp");
+                                    match std::fs::File::create(&tmp) {
                                         Ok(f) => {
+                                            let filtered_entries = self
+                                                .state
+                                                .filtered_indices
+                                                .iter()
+                                                .filter_map(|&i| self.state.entries.get(i));
                                             match crate::core::export::export_csv(
                                                 filtered_entries,
                                                 f,
                                                 &dest,
+                                                &metadata,
                                             ) {
                                                 Ok(n) => {
-                                                    self.state.status_message =
-                                                        format!("Exported {n} entries to CSV.");
+                                                    if let Err(e) = std::fs::rename(&tmp, &dest) {
+                                                        let _ = std::fs::remove_file(&tmp);
+                                                        self.state.status_message =
+                                                            format!("CSV export failed (rename): {e}");
+                                                    } else {
+                                                        self.state.status_message =
+                                                            format!("Exported {n} entries to CSV.");
+                                                    }
                                                 }
                                                 Err(e) => {
+                                                    let _ = std::fs::remove_file(&tmp);
                                                     self.state.status_message =
                                                         format!("CSV export failed: {e}");
                                                 }
@@ -1411,8 +1540,17 @@ impl eframe::App for LogSleuthApp {
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("Export JSON...")
-                                .on_hover_text("Save the filtered entries as a JSON array")
+                            let json_label = if large {
+                                format!("Export JSON... ({entry_count} entries \u{2014} large)")
+                            } else {
+                                "Export JSON...".to_string()
+                            };
+                            if ui.button(json_label)
+                                .on_hover_text(if large {
+                                    "Large export: this may take a moment. Save the filtered entries as JSON."
+                                } else {
+                                    "Save the filtered entries as a JSON array"
+                                })
                                 .clicked()
                             {
                                 if let Some(dest) = rfd::FileDialog::new()
@@ -1420,23 +1558,39 @@ impl eframe::App for LogSleuthApp {
                                     .set_file_name("export.json")
                                     .save_file()
                                 {
-                                    let filtered_entries = self
-                                        .state
-                                        .filtered_indices
-                                        .iter()
-                                        .filter_map(|&i| self.state.entries.get(i));
-                                    match std::fs::File::create(&dest) {
+                                    let filter_desc = self.state.filter_description();
+                                    let metadata = crate::core::export::ExportMetadata {
+                                        scan_path: self.state.scan_path.as_deref(),
+                                        filter_description: &filter_desc,
+                                        entry_count,
+                                    };
+                                    // SEC-04: atomic write via temp file + rename
+                                    let tmp = dest.with_extension("json.tmp");
+                                    match std::fs::File::create(&tmp) {
                                         Ok(f) => {
+                                            let filtered_entries = self
+                                                .state
+                                                .filtered_indices
+                                                .iter()
+                                                .filter_map(|&i| self.state.entries.get(i));
                                             match crate::core::export::export_json(
                                                 filtered_entries,
                                                 f,
                                                 &dest,
+                                                &metadata,
                                             ) {
                                                 Ok(n) => {
-                                                    self.state.status_message =
-                                                        format!("Exported {n} entries to JSON.");
+                                                    if let Err(e) = std::fs::rename(&tmp, &dest) {
+                                                        let _ = std::fs::remove_file(&tmp);
+                                                        self.state.status_message =
+                                                            format!("JSON export failed (rename): {e}");
+                                                    } else {
+                                                        self.state.status_message =
+                                                            format!("Exported {n} entries to JSON.");
+                                                    }
                                                 }
                                                 Err(e) => {
+                                                    let _ = std::fs::remove_file(&tmp);
                                                     self.state.status_message =
                                                         format!("JSON export failed: {e}");
                                                 }
