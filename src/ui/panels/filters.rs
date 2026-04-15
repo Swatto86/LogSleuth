@@ -560,11 +560,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 );
             // Commit when focus leaves the field (Tab / click-away / Enter).
             if from_resp.lost_focus() {
-                let s = state.filter_state.abs_time_start_input.clone();
-                if s.trim().is_empty() {
+                let input = state.filter_state.abs_time_start_input.clone();
+                if input.trim().is_empty() {
                     state.filter_state.time_start = None;
                     state.apply_filters();
-                } else if let Some(dt) = crate::app::state::parse_filter_datetime(&s) {
+                } else if let Some(dt) = crate::app::state::parse_filter_datetime(&input) {
                     state.filter_state.relative_time_secs = None;
                     state.filter_state.relative_time_input.clear();
                     state.filter_state.time_start = Some(dt);
@@ -614,11 +614,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                      Clears the rolling time window when set.",
                 );
             if to_resp.lost_focus() {
-                let s = state.filter_state.abs_time_end_input.clone();
-                if s.trim().is_empty() {
+                let input = state.filter_state.abs_time_end_input.clone();
+                if input.trim().is_empty() {
                     state.filter_state.time_end = None;
                     state.apply_filters();
-                } else if let Some(dt) = crate::app::state::parse_filter_datetime(&s) {
+                } else if let Some(dt) = crate::app::state::parse_filter_datetime(&input) {
                     state.filter_state.relative_time_secs = None;
                     state.filter_state.relative_time_input.clear();
                     state.filter_state.time_end = Some(dt);

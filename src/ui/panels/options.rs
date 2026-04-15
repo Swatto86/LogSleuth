@@ -464,40 +464,11 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                     .clicked()
                 {
                     if let Some(ref dir) = state.user_profiles_dir {
-                        // Ensure the directory exists before opening it.
-                        if let Err(e) = std::fs::create_dir_all(dir) {
-                            tracing::warn!(
-                                dir = %dir.display(),
-                                error = %e,
-                                "Failed to create profiles directory"
-                            );
+                        if let Err(e) = crate::platform::fs::ensure_dir_exists(dir) {
                             state.status_message =
                                 format!("Cannot create profiles folder: {e}");
                         } else {
-                            // Open the directory itself (not /select), so the
-                            // user lands inside the folder ready to drop .toml files.
-                            #[cfg(target_os = "windows")]
-                            if let Err(e) = std::process::Command::new("explorer.exe").arg(dir).spawn() {
-                                tracing::warn!(dir = %dir.display(), error = %e, "Failed to open profiles folder");
-                                state.status_message = format!("Cannot open folder: {e}");
-                            }
-                            #[cfg(target_os = "macos")]
-                            if let Err(e) = std::process::Command::new("open").arg(dir).spawn() {
-                                tracing::warn!(dir = %dir.display(), error = %e, "Failed to open profiles folder");
-                                state.status_message = format!("Cannot open folder: {e}");
-                            }
-                            #[cfg(target_os = "linux")]
-                            if let Err(e) = std::process::Command::new("xdg-open").arg(dir).spawn() {
-                                tracing::warn!(dir = %dir.display(), error = %e, "Failed to open profiles folder");
-                                state.status_message = format!("Cannot open folder: {e}");
-                            }
-                            #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-                            {
-                                state.status_message = format!(
-                                    "Profile folder: {}  (auto-open not supported on this platform)",
-                                    dir.display()
-                                );
-                            }
+                            crate::platform::fs::open_directory(dir);
                         }
                     }
                 }

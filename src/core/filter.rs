@@ -114,12 +114,12 @@ fn norm_regexes() -> &'static NormRegexes {
 /// only in variable data will produce the same normalised string.
 pub fn normalize_message(msg: &str) -> String {
     let re = norm_regexes();
-    let s = re.guid.replace_all(msg, "<GUID>");
-    let s = re.ipv6.replace_all(&s, "<IP>");
-    let s = re.ipv4.replace_all(&s, "<IP>");
-    let s = re.hex_prefixed.replace_all(&s, "<HEX>");
-    let s = re.number.replace_all(&s, "<NUM>");
-    s.into_owned()
+    let normalized = re.guid.replace_all(msg, "<GUID>");
+    let normalized = re.ipv6.replace_all(&normalized, "<IP>");
+    let normalized = re.ipv4.replace_all(&normalized, "<IP>");
+    let normalized = re.hex_prefixed.replace_all(&normalized, "<HEX>");
+    let normalized = re.number.replace_all(&normalized, "<NUM>");
+    normalized.into_owned()
 }
 
 /// Apply deduplication to an already-filtered index set.
