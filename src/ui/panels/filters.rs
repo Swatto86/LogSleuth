@@ -203,13 +203,16 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.label("Text search:")
         .on_hover_text("Filter entries whose message contains this text. Toggle the ~ button for fuzzy (non-contiguous) matching.");
     ui.horizontal(|ui| {
-        if ui
+        let re = ui
             .text_edit_singleline(&mut state.filter_state.text_search)
             .on_hover_text(
                 "Type to search. Matches anywhere in the log message (case-insensitive).",
-            )
-            .changed()
-        {
+            );
+        if state.request_focus_text_search {
+            state.request_focus_text_search = false;
+            re.request_focus();
+        }
+        if re.changed() {
             // Debounce: mark filter dirty rather than calling apply_filters()
             // immediately.  The render loop fires apply_filters() once the text
             // has been unchanged for FILTER_DEBOUNCE_MS ms, preventing an O(n)
@@ -259,10 +262,14 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Regex search with compile-error feedback
     ui.label("Regex:")
         .on_hover_text(r"Filter entries using a regular expression. Examples: ^ERROR, timeout|refused, \d{3}\.\d{3}");
-    let re_changed = ui
+    let re_resp = ui
         .text_edit_singleline(&mut state.filter_state.regex_pattern)
-        .on_hover_text("Regex applied to the full message text (case-insensitive). Invalid patterns are highlighted in red.")
-        .changed();
+        .on_hover_text("Regex applied to the full message text (case-insensitive). Invalid patterns are highlighted in red.");
+    if state.request_focus_regex_search {
+        state.request_focus_regex_search = false;
+        re_resp.request_focus();
+    }
+    let re_changed = re_resp.changed();
     if re_changed {
         // Compile the regex immediately so the valid/invalid indicator updates
         // on every keystroke without waiting for the debounce to fire.

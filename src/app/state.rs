@@ -106,6 +106,18 @@ pub struct AppState {
     /// Consumed and cleared by `gui.rs` in the update loop each frame.
     pub request_cancel: bool,
 
+    /// One-shot flag: keyboard shortcut wants the text search input focused.
+    /// Consumed by the filters panel on the next frame.
+    pub request_focus_text_search: bool,
+
+    /// One-shot flag: keyboard shortcut wants the regex search input focused.
+    /// Consumed by the filters panel on the next frame.
+    pub request_focus_regex_search: bool,
+
+    /// One-shot flag: Ctrl+O keyboard shortcut wants to open a directory.
+    /// Consumed by gui.rs after the input closure (file dialog needs &mut self).
+    pub shortcut_open_directory: bool,
+
     /// Text typed into the file-list search box in the filters panel.
     /// Filters which filenames are shown in the source-file checklist.
     /// Pure UI state: does not affect the filter logic itself.
@@ -518,6 +530,9 @@ impl AppState {
             pending_scan: None,
             pending_append_scan: None,
             request_cancel: false,
+            request_focus_text_search: false,
+            request_focus_regex_search: false,
+            shortcut_open_directory: false,
             file_list_search: String::new(),
             file_colours: HashMap::new(),
             pending_single_files: None,
@@ -1191,19 +1206,10 @@ impl AppState {
 
     /// Generate a plain-text report of all currently-filtered entries for clipboard export.
     ///
-    /// Each entry is rendered as a single-line row: `[timestamp] severity  source  message`.
-    /// The report begins with a header that summarises the active filters so the recipient
-    /// understands the scope of what they are looking at.
+    /// Build a concise human-readable description of the active filter state.
     ///
-    /// Bounded to [`MAX_CLIPBOARD_ENTRIES`] to prevent clipboard overload on very large
-    /// filtered sets. A truncation notice is appended when the limit is hit.
-    pub fn filtered_results_report(&self) -> String {
-        let total_filtered = self.filtered_indices.len();
-        let take = total_filtered.min(MAX_CLIPBOARD_ENTRIES);
-        let generated = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-
-        // Build a concise human-readable description of the active filter so the
-        // clipboard recipient understands what criteria were applied.
+    /// Used by both the clipboard report and the file export metadata header.
+    pub fn filter_description(&self) -> String {
         let mut filter_parts: Vec<String> = Vec::new();
         if self.filter_state.has_active_severity_filter() {
             let mut sevs: Vec<&str> = self
@@ -1232,9 +1238,6 @@ impl AppState {
         if self.filter_state.regex_search.is_some() {
             filter_parts.push(format!("Regex: /{}/", self.filter_state.regex_pattern));
         }
-        // Bug fix: include source-file, bookmark, and activity-window filters
-        // in the report header so the recipient knows the full scope of the
-        // filtered result set.
         if self.filter_state.hide_all_sources {
             filter_parts.push("Files: none (all hidden)".to_string());
         } else if !self.filter_state.source_files.is_empty() {
@@ -1253,11 +1256,24 @@ impl AppState {
                 filter_parts.push(format!("Activity window: {}h", secs / 3_600));
             }
         }
-        let filter_desc = if filter_parts.is_empty() {
+        if filter_parts.is_empty() {
             "No filter (all entries)".to_string()
         } else {
             filter_parts.join(" | ")
-        };
+        }
+    }
+
+    /// Each entry is rendered as a single-line row: `[timestamp] severity  source  message`.
+    /// The report begins with a header that summarises the active filters so the recipient
+    /// understands the scope of what they are looking at.
+    ///
+    /// Bounded to [`MAX_CLIPBOARD_ENTRIES`] to prevent clipboard overload on very large
+    /// filtered sets. A truncation notice is appended when the limit is hit.
+    pub fn filtered_results_report(&self) -> String {
+        let total_filtered = self.filtered_indices.len();
+        let take = total_filtered.min(MAX_CLIPBOARD_ENTRIES);
+        let generated = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+        let filter_desc = self.filter_description();
 
         let mut out = format!(
             "LogSleuth Filtered Results\nGenerated: {generated}\nFilter:    {filter_desc}\nEntries:   {total_filtered}\n{}\n\n",
