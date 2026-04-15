@@ -1270,7 +1270,7 @@ impl eframe::App for LogSleuthApp {
             // observed are still buffered.  Dropping the receiver ensures they
             // are discarded rather than applied to the freshly-cleared state on
             // the next frame (Bug fix: stale EntriesBatch after new_session).
-            self.scan_manager.progress_rx = None;
+            self.scan_manager.clear_progress();
             self.auto_queue_event_logs_after_scan = false;
             self.state.new_session();
             // Persist the blank state so the next launch starts fresh and does

@@ -338,13 +338,13 @@ fn extract_event_data(xml: &str) -> String {
                 .map(|m| m.as_str().trim().to_string())
                 .filter(|k| !k.is_empty())
                 .unwrap_or_else(|| {
-                    let k = format!("Data{unnamed_counter}");
+                    let generated_key = format!("Data{unnamed_counter}");
                     unnamed_counter += 1;
-                    k
+                    generated_key
                 });
-            let val =
+            let field_value =
                 normalise_whitespace(&decode_xml_entities(cap.get(3).map_or("", |m| m.as_str())));
-            format!("{key}={val}")
+            format!("{key}={field_value}")
         })
         .filter(|kv| !kv.ends_with('='))
         .collect();
@@ -372,9 +372,10 @@ fn extract_user_data(xml: &str) -> String {
             continue;
         }
         let key = key_open.rsplit(':').next().unwrap_or(key_open).trim();
-        let val = normalise_whitespace(&decode_xml_entities(cap.get(2).map_or("", |m| m.as_str())));
-        if !key.is_empty() && !val.is_empty() {
-            pairs.push(format!("{key}={val}"));
+        let field_value =
+            normalise_whitespace(&decode_xml_entities(cap.get(2).map_or("", |m| m.as_str())));
+        if !key.is_empty() && !field_value.is_empty() {
+            pairs.push(format!("{key}={field_value}"));
         }
     }
 

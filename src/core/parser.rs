@@ -423,8 +423,8 @@ fn sniff_timestamp_hinted(
                 re: r,
                 parse: |s| {
                     // Replace comma with dot so chrono's %.f specifier accepts it.
-                    let s = s.replace(',', ".").replace('T', " ");
-                    NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+                    let canonical = s.replace(',', ".").replace('T', " ");
+                    NaiveDateTime::parse_from_str(&canonical, "%Y-%m-%d %H:%M:%S%.f")
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
@@ -440,10 +440,10 @@ fn sniff_timestamp_hinted(
             try_re(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?").map(|r| Sniffer {
                 re: r,
                 parse: |s| {
-                    let s = s.replace('T', " ");
+                    let canonical = s.replace('T', " ");
                     // Try with fractional seconds first, then without.
-                    NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
-                        .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S"))
+                    NaiveDateTime::parse_from_str(&canonical, "%Y-%m-%d %H:%M:%S%.f")
+                        .or_else(|_| NaiveDateTime::parse_from_str(&canonical, "%Y-%m-%d %H:%M:%S"))
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
@@ -455,9 +455,9 @@ fn sniff_timestamp_hinted(
             try_re(r"\d{4}/\d{2}/\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?").map(|r| Sniffer {
                 re: r,
                 parse: |s| {
-                    let s = s.replace('/', "-").replace('T', " ");
-                    NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
-                        .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S"))
+                    let canonical = s.replace('/', "-").replace('T', " ");
+                    NaiveDateTime::parse_from_str(&canonical, "%Y-%m-%d %H:%M:%S%.f")
+                        .or_else(|_| NaiveDateTime::parse_from_str(&canonical, "%Y-%m-%d %H:%M:%S"))
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
@@ -581,9 +581,9 @@ fn sniff_timestamp_hinted(
                 re: r,
                 parse: |s| {
                     // Normalise: remove optional comma, collapse multiple spaces.
-                    let s = s.replace(',', " ");
-                    let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-                    NaiveDateTime::parse_from_str(&s, "%b %d %Y %H:%M:%S")
+                    let cleaned = s.replace(',', " ");
+                    let cleaned: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+                    NaiveDateTime::parse_from_str(&cleaned, "%b %d %Y %H:%M:%S")
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
@@ -610,8 +610,8 @@ fn sniff_timestamp_hinted(
             try_re(r"\d{8}[T ]\d{6}").map(|r| Sniffer {
                 re: r,
                 parse: |s| {
-                    let s = s.replace(' ', "T");
-                    NaiveDateTime::parse_from_str(&s, "%Y%m%dT%H%M%S")
+                    let compact = s.replace(' ', "T");
+                    NaiveDateTime::parse_from_str(&compact, "%Y%m%dT%H%M%S")
                         .ok()
                         .map(|ndt| ndt.and_utc())
                 },
@@ -675,9 +675,9 @@ fn sniff_timestamp_hinted(
                 parse: |s| {
                     let today = Utc::now().date_naive();
                     // Normalise comma-millis to dot-millis.
-                    let s = s.replace(',', ".");
-                    chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")
-                        .or_else(|_| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S"))
+                    let canonical = s.replace(',', ".");
+                    chrono::NaiveTime::parse_from_str(&canonical, "%H:%M:%S%.f")
+                        .or_else(|_| chrono::NaiveTime::parse_from_str(&canonical, "%H:%M:%S"))
                         .ok()
                         .map(|t| today.and_time(t).and_utc())
                 },

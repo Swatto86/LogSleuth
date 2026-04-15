@@ -44,6 +44,51 @@ pub fn read_first_lines(path: &Path, max_lines: usize) -> io::Result<Vec<String>
     Ok(lines)
 }
 
+/// Ensure a directory exists, creating it if necessary.
+///
+/// Returns `Ok(())` if the directory already exists or was successfully
+/// created, or an `io::Error` if creation fails.
+pub fn ensure_dir_exists(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+/// Open a directory in the platform file manager.
+///
+/// Unlike [`reveal_in_file_manager`] (which highlights a specific file),
+/// this opens the directory itself so the user lands inside the folder.
+pub fn open_directory(dir: &Path) {
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(e) = std::process::Command::new("explorer.exe").arg(dir).spawn() {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "Failed to open directory in Explorer"
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = std::process::Command::new("open").arg(dir).spawn() {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "Failed to open directory in Finder"
+            );
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(e) = std::process::Command::new("xdg-open").arg(dir).spawn() {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "Failed to open directory in file manager"
+            );
+        }
+    }
+}
+
 /// Open the system file manager and highlight `path` within it.
 ///
 /// Platform behaviour:

@@ -54,7 +54,7 @@ const FILE_READ_TIMEOUT_SECS: u64 = 30;
 /// Manages a scan operation on a background thread.
 pub struct ScanManager {
     /// Channel receiver for the UI to poll progress messages.
-    pub progress_rx: Option<mpsc::Receiver<ScanProgress>>,
+    pub(crate) progress_rx: Option<mpsc::Receiver<ScanProgress>>,
 
     /// Cancel flag shared with the background thread.
     cancel_flag: Option<Arc<AtomicBool>>,
@@ -265,6 +265,14 @@ impl ScanManager {
             }
         }
         messages
+    }
+
+    /// Discard any stale progress messages by dropping the receiver.
+    ///
+    /// Called after cancellation to prevent queued messages from being applied
+    /// to a freshly-cleared state.
+    pub fn clear_progress(&mut self) {
+        self.progress_rx = None;
     }
 }
 
