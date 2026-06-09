@@ -783,6 +783,53 @@ timestamp_format = "%Y"
         assert!(profiles.iter().all(|p| p.is_builtin));
     }
 
+    /// Regression: the CMTrace profiles (intune-ime, sccm-cmtrace) previously
+    /// escaped `<` and `>` as `\<` / `\>`.  Since regex 1.10 those escapes are
+    /// word-boundary assertions (\b{start} / \b{end}), NOT literal characters,
+    /// so both `content_match` and `line_pattern` silently matched nothing and
+    /// every CMTrace log fell through to the plain-text fallback.
+    #[test]
+    fn test_cmtrace_profiles_match_real_lines() {
+        let sample = r#"<![LOG[Service started successfully]LOG]!><time="13:55:36.123+420" date="1-15-2024" component="IntuneManagementExtension" context="" type="2" thread="12" file="main.cpp">"#;
+
+        let profiles = load_builtin_profiles();
+        for id in ["intune-ime", "sccm-cmtrace"] {
+            let p = profiles
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap_or_else(|| panic!("{id} profile not found"));
+
+            assert!(
+                p.content_match.is_match(sample),
+                "{id}: content_match must match a real CMTrace line"
+            );
+            let caps = p
+                .line_pattern
+                .captures(sample)
+                .unwrap_or_else(|| panic!("{id}: line_pattern must match a real CMTrace line"));
+            assert_eq!(
+                caps.name("message").map(|m| m.as_str()),
+                Some("Service started successfully"),
+                "{id}: message capture"
+            );
+            assert_eq!(
+                caps.name("timestamp").map(|m| m.as_str()),
+                Some("1-15-2024"),
+                "{id}: timestamp capture"
+            );
+            assert_eq!(
+                caps.name("component").map(|m| m.as_str()),
+                Some("IntuneManagementExtension"),
+                "{id}: component capture"
+            );
+            assert_eq!(
+                p.map_severity(caps.name("level").map(|m| m.as_str()).unwrap_or("")),
+                Severity::Warning,
+                "{id}: type=2 must map to Warning"
+            );
+        }
+    }
+
     const OVERRIDE_PROFILE_TOML: &str = r#"
 [profile]
 id = "override-test"

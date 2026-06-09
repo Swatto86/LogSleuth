@@ -92,7 +92,10 @@ file_patterns = [
     "PatchDownloader.log",
 ]
 # The <![LOG[ prefix is unique to CMTrace-format logs
-content_match = '^\<!\[LOG\['
+# NOTE: `<` and `>` must NOT be written as `\<` / `\>`: since regex 1.10 those
+# escapes are word-boundary assertions (\b{start} / \b{end}), not literals, so
+# an escaped pattern silently never matches any line.
+content_match = '^<!\[LOG\['
 
 [parsing]
 # Named groups (identical to intune-ime -- same wire format):
@@ -106,7 +109,7 @@ content_match = '^\<!\[LOG\['
 #   component -- component name from the component= attribute
 #   level     -- numeric severity from the type= attribute (1/2/3)
 #   thread    -- thread ID from the thread= attribute
-line_pattern = '^\<!\[LOG\[(?P<message>.*?)\]LOG\]!\>\<time="[^"]+"\s+date="(?P<timestamp>\d{1,2}-\d{1,2}-\d{4})"\s+component="(?P<component>[^"]*)"\s+context="[^"]*"\s+type="(?P<level>\d)"\s+thread="(?P<thread>[^"]*)"\s+file="[^"]*"\>$'
+line_pattern = '^<!\[LOG\[(?P<message>.*?)\]LOG\]!><time="[^"]+"\s+date="(?P<timestamp>\d{1,2}-\d{1,2}-\d{4})"\s+component="(?P<component>[^"]*)"\s+context="[^"]*"\s+type="(?P<level>\d)"\s+thread="(?P<thread>[^"]*)"\s+file="[^"]*">$'
 timestamp_format = "%m-%d-%Y"
 multiline_mode = "skip"
 

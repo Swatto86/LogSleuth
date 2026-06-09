@@ -164,6 +164,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 .clicked()
                             {
                                 state.filter_state = FilterState::default();
+                                // Keep the multi-search input buffer in sync
+                                // with the reset multi_search filter.
+                                state.multi_search_input.clear();
                                 state.apply_filters();
                             }
                             if state.activity_window_secs.is_some()

@@ -613,7 +613,18 @@ impl AppState {
             .unwrap_or("?")
             .to_string();
         let before = self.entries.len();
+        // Keep the live-tail ring-buffer boundary consistent: removing entries
+        // positioned below `tail_base_count` shifts all later entries down, so
+        // the boundary must shift by the same amount.  Without this, eviction
+        // miscounts the tail section (and stops entirely once the stale
+        // boundary exceeds entries.len()), letting tail RAM grow unbounded.
+        let base = self.tail_base_count.min(before);
+        let removed_below_base = self.entries[..base]
+            .iter()
+            .filter(|e| &e.source_file == path)
+            .count();
         self.entries.retain(|e| &e.source_file != path);
+        self.tail_base_count = self.tail_base_count.saturating_sub(removed_below_base);
         let removed = before - self.entries.len();
 
         // Release the backing allocation for removed entries so RSS drops
@@ -668,7 +679,14 @@ impl AppState {
         }
 
         let before = self.entries.len();
+        // Same boundary adjustment as remove_entries_for_file: see comment there.
+        let base = self.tail_base_count.min(before);
+        let removed_below_base = self.entries[..base]
+            .iter()
+            .filter(|e| paths.contains(&e.source_file))
+            .count();
         self.entries.retain(|e| !paths.contains(&e.source_file));
+        self.tail_base_count = self.tail_base_count.saturating_sub(removed_below_base);
         let removed = before.saturating_sub(self.entries.len());
 
         if removed > 0 {
@@ -924,11 +942,15 @@ impl AppState {
     /// lifecycle transitions (not per-entry), so the O(n) fallback is
     /// negligible.
     pub fn next_entry_id(&self) -> u64 {
-        if self.entries.is_empty() {
-            0
-        } else {
-            let from_entries = self.entries.iter().map(|e| e.id).max().unwrap_or(0);
-            self.max_entry_id.max(from_entries) + 1
+        let from_entries = self.entries.iter().map(|e| e.id).max();
+        match (from_entries, self.max_entry_id) {
+            // Fresh session (no entries ever ingested): start from 0.
+            (None, 0) => 0,
+            // Entries were ingested but later removed (e.g. every file was
+            // unchecked): keep allocating after the tracked high-water mark so
+            // new entries never reuse IDs that bookmarks may still reference.
+            (None, tracked) => tracked + 1,
+            (Some(max_present), tracked) => max_present.max(tracked) + 1,
         }
     }
 
@@ -2136,6 +2158,80 @@ mod tests {
                 .extra_files_to_restore
                 .contains(&std::path::PathBuf::from("/tmp/a.log")),
             "/tmp/a.log must be queued for restore"
+        );
+    }
+
+    /// Regression: `next_entry_id()` must not restart from 0 after every entry
+    /// has been removed (e.g. all files unchecked).  Restarting would reuse IDs
+    /// that bookmarks may still reference, silently mis-attaching them.
+    #[test]
+    fn test_next_entry_id_does_not_reuse_ids_after_full_removal() {
+        let mut state = AppState::new(vec![], false);
+        assert_eq!(state.next_entry_id(), 0, "fresh session starts at 0");
+
+        let entries = vec![make_entry(0, 0), make_entry(1, 1), make_entry(2, 2)];
+        state.track_max_entry_id(&entries);
+        state.entries = entries;
+        assert_eq!(state.next_entry_id(), 3);
+
+        // Remove every entry (simulates unchecking all files).
+        let mut paths = std::collections::HashSet::new();
+        paths.insert(std::path::PathBuf::from("test.log"));
+        let removed = state.remove_entries_for_paths(&paths);
+        assert_eq!(removed, 3);
+        assert!(state.entries.is_empty());
+
+        assert_eq!(
+            state.next_entry_id(),
+            3,
+            "IDs must continue after the tracked high-water mark, not restart at 0"
+        );
+
+        // clear() resets the counter so a brand-new session starts at 0 again.
+        state.clear();
+        assert_eq!(state.next_entry_id(), 0);
+    }
+
+    /// Regression: removing entries below the live-tail baseline must shift
+    /// `tail_base_count` down by the number of removed scan entries.  A stale
+    /// (too-high) boundary makes ring-buffer eviction miscount the tail
+    /// section — or stop evicting entirely once the boundary exceeds
+    /// `entries.len()`.
+    #[test]
+    fn test_remove_entries_adjusts_tail_base_count() {
+        let mut state = AppState::new(vec![], false);
+
+        // 4 scan entries from a.log / b.log, then the tail baseline, then
+        // 2 tail entries from b.log.
+        let e = |id: u64, file: &str| {
+            let mut entry = make_entry(id, id as i64);
+            entry.source_file = std::path::PathBuf::from(file);
+            entry
+        };
+        state.entries = vec![e(0, "a.log"), e(1, "b.log"), e(2, "a.log"), e(3, "b.log")];
+        state.set_tail_base(); // tail_base_count = 4
+        state.entries.push(e(4, "b.log"));
+        state.entries.push(e(5, "b.log"));
+        assert_eq!(state.tail_base_count, 4);
+
+        // Removing a.log entries (2 of them, both below the baseline) must
+        // shift the baseline down to 2.
+        state.remove_entries_for_file(&std::path::PathBuf::from("a.log"));
+        assert_eq!(state.entries.len(), 4);
+        assert_eq!(
+            state.tail_base_count, 2,
+            "baseline must shift down by the number of removed scan entries"
+        );
+
+        // The tail section is still the 2 tail entries: evicting 1 must
+        // remove the OLDEST tail entry (id=4), not a scan entry.
+        let evicted = state.evict_tail_entries(1);
+        assert_eq!(evicted, 1);
+        let ids: Vec<u64> = state.entries.iter().map(|en| en.id).collect();
+        assert_eq!(
+            ids,
+            vec![1, 3, 5],
+            "id=4 (oldest tail entry) must be evicted"
         );
     }
 
