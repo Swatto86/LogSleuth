@@ -58,6 +58,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.filter_state = crate::core::filter::FilterState::errors_only_from(fuzzy);
             state.filter_state.source_files = current_files;
             state.filter_state.hide_all_sources = hide_all;
+            // Keep the multi-search input buffer in sync with the reset
+            // multi_search filter (the preset replaces the whole FilterState).
+            state.multi_search_input.clear();
             state.apply_filters();
         }
         if ui
@@ -70,6 +73,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.filter_state = crate::core::filter::FilterState::errors_and_warnings_from(fuzzy);
             state.filter_state.source_files = current_files;
             state.filter_state.hide_all_sources = hide_all;
+            state.multi_search_input.clear();
             state.apply_filters();
         }
         // Combined troubleshooting preset: severity Error+Warning + last 15-minute rolling window.
@@ -90,6 +94,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.filter_state.hide_all_sources = hide_all;
             state.filter_state.relative_time_secs = Some(15 * 60);
             state.filter_state.relative_time_input.clear();
+            state.multi_search_input.clear();
             state.apply_filters();
         }
         if ui
@@ -101,6 +106,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 fuzzy,
                 ..Default::default()
             };
+            state.multi_search_input.clear();
             state.apply_filters();
         }
 
