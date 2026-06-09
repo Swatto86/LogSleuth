@@ -736,6 +736,17 @@ fn sniff_timestamp_hinted(
 fn parse_timestamp(raw: &str, format: &str) -> Result<DateTime<Utc>, String> {
     let trimmed = raw.trim();
 
+    // Offset-aware formats: when the format string contains a UTC-offset
+    // specifier (%z and friends), parse as a timezone-aware DateTime FIRST.
+    // `NaiveDateTime::parse_from_str` accepts %z but silently DISCARDS the
+    // parsed offset, which would shift every non-UTC timestamp by its offset
+    // (e.g. "14:30:22 +0530" stored as 14:30:22 UTC instead of 09:00:22 UTC).
+    if format_has_offset_specifier(format) {
+        if let Ok(dt) = DateTime::parse_from_str(trimmed, format) {
+            return Ok(dt.into());
+        }
+    }
+
     // First try: parse as a full NaiveDateTime with the format string.
     if let Ok(ndt) = NaiveDateTime::parse_from_str(trimmed, format) {
         return Ok(ndt.and_utc());
@@ -785,6 +796,47 @@ fn parse_timestamp(raw: &str, format: &str) -> Result<DateTime<Utc>, String> {
     }
 
     Err(format!("cannot parse '{trimmed}' with format '{format}'"))
+}
+
+/// Returns `true` when a chrono format string contains a UTC-offset specifier
+/// (`%z`, `%:z`, `%::z`, `%:::z`, or `%#z`).
+///
+/// Used by [`parse_timestamp`] to decide whether the raw text must be parsed
+/// as an offset-aware `DateTime` rather than a `NaiveDateTime` (which accepts
+/// these specifiers but ignores the parsed offset).
+fn format_has_offset_specifier(format: &str) -> bool {
+    let mut chars = format.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            continue;
+        }
+        // Collect the (possibly multi-char) specifier following '%'.
+        match chars.peek() {
+            Some('%') => {
+                chars.next(); // literal '%%' — skip the second '%'
+            }
+            Some('#') => {
+                chars.next();
+                if chars.peek() == Some(&'z') {
+                    return true;
+                }
+            }
+            Some(':') => {
+                // %:z, %::z, %:::z
+                let mut colons = 0;
+                while chars.peek() == Some(&':') {
+                    chars.next();
+                    colons += 1;
+                }
+                if colons <= 3 && chars.peek() == Some(&'z') {
+                    return true;
+                }
+            }
+            Some('z') => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -999,6 +1051,45 @@ info = ["Info"]
     fn test_parse_timestamp_invalid_returns_error() {
         let result = parse_timestamp("not-a-date", "%Y-%m-%d %H:%M:%S");
         assert!(result.is_err(), "invalid timestamp should return Err");
+    }
+
+    /// Regression: formats containing %z must apply the parsed offset.
+    /// `NaiveDateTime::parse_from_str` accepts %z but silently ignores the
+    /// offset, which previously stored "14:30:22 +0530" as 14:30:22 UTC
+    /// instead of the correct 09:00:22 UTC.
+    #[test]
+    fn test_parse_timestamp_applies_utc_offset_with_z_specifier() {
+        let ts = parse_timestamp("15/Jan/2024:14:30:22 +0530", "%d/%b/%Y:%H:%M:%S %z").unwrap();
+        assert_eq!(
+            ts.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-01-15 09:00:22",
+            "+05:30 offset must be applied when converting to UTC"
+        );
+
+        let ts2 = parse_timestamp("2024-01-15 14:30:22 -0800", "%Y-%m-%d %H:%M:%S %z").unwrap();
+        assert_eq!(
+            ts2.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-01-15 22:30:22",
+            "-08:00 offset must be applied when converting to UTC"
+        );
+
+        // Colon variant %:z.
+        let ts3 = parse_timestamp("2024-01-15T14:30:22+05:30", "%Y-%m-%dT%H:%M:%S%:z").unwrap();
+        assert_eq!(ts3.format("%H:%M:%S").to_string(), "09:00:22");
+    }
+
+    #[test]
+    fn test_format_has_offset_specifier() {
+        assert!(format_has_offset_specifier("%Y-%m-%dT%H:%M:%S%z"));
+        assert!(format_has_offset_specifier("%d/%b/%Y:%H:%M:%S %z"));
+        assert!(format_has_offset_specifier("%Y-%m-%dT%H:%M:%S%:z"));
+        assert!(format_has_offset_specifier("%Y-%m-%dT%H:%M:%S%::z"));
+        assert!(format_has_offset_specifier("%Y-%m-%dT%H:%M:%S%#z"));
+        assert!(!format_has_offset_specifier("%Y-%m-%d %H:%M:%S"));
+        // %%z is a literal "%z" text, not an offset specifier.
+        assert!(!format_has_offset_specifier("%H:%M:%S%%z"));
+        // Plain 'z' without '%' is literal text.
+        assert!(!format_has_offset_specifier("%H:%M:%S z"));
     }
 
     // -------------------------------------------------------------------------

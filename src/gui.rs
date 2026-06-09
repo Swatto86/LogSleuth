@@ -1336,6 +1336,10 @@ impl eframe::App for LogSleuthApp {
                     *fs = crate::core::filter::FilterState::errors_only_from(fs.fuzzy);
                     fs.source_files = source_files;
                     fs.hide_all_sources = hide_all;
+                    // Keep the multi-search input buffer in sync with the
+                    // reset multi_search filter so the UI does not show
+                    // terms that are no longer applied.
+                    self.state.multi_search_input.clear();
                     self.state.apply_filters();
                 }
                 // Ctrl+2 — Quick filter: Errors + Warnings
@@ -1346,6 +1350,7 @@ impl eframe::App for LogSleuthApp {
                     *fs = crate::core::filter::FilterState::errors_and_warnings_from(fs.fuzzy);
                     fs.source_files = source_files;
                     fs.hide_all_sources = hide_all;
+                    self.state.multi_search_input.clear();
                     self.state.apply_filters();
                 }
                 // Escape — Clear all filters
@@ -1353,6 +1358,7 @@ impl eframe::App for LogSleuthApp {
                     self.state.filter_state = crate::core::filter::FilterState::default();
                     self.state.activity_window_secs = None;
                     self.state.activity_window_input.clear();
+                    self.state.multi_search_input.clear();
                     self.state.apply_filters();
                 }
                 // Ctrl+S — Open scan summary
@@ -2059,6 +2065,15 @@ fn merge_additional_discovered_files(
                 existing.profile_id = f.profile_id;
                 existing.detection_confidence = f.detection_confidence;
             }
+            // Refresh size / mtime / large flag from the fresh stat taken by
+            // the append scan.  Live Tail seeds its starting offset from
+            // `DiscoveredFile::size`; keeping the original discovery-time size
+            // here meant a re-parsed file that had grown since discovery was
+            // tailed from the stale (smaller) offset, re-reading and
+            // duplicating entries that the re-parse had already loaded.
+            existing.size = f.size;
+            existing.modified = f.modified;
+            existing.is_large = f.is_large;
             // Propagate the actual parsed status from the pipeline:
             //   false = file was fully parsed (entries in memory)
             //   true  = file was profiled only (entries NOT in memory)
@@ -2110,6 +2125,40 @@ mod tests {
         assert_eq!(discovered_files[0].profile_id.as_deref(), Some("syslog"));
         assert_eq!(discovered_files[0].detection_confidence, 0.9);
         assert!(!discovered_files[0].parsing_skipped);
+    }
+
+    /// Regression: merging must refresh size / modified / is_large from the
+    /// fresh stat.  Live Tail seeds its starting offset from
+    /// `DiscoveredFile::size`; a stale size caused re-read (duplicate) entries
+    /// when tailing a file that grew between discovery and re-parse.
+    #[test]
+    fn merge_additional_files_refreshes_size_and_mtime() {
+        let mut old = discovered("a.log", Some("plain-text"), 0.1, true);
+        old.size = 100;
+        old.modified = None;
+        old.is_large = false;
+        let mut discovered_files = vec![old];
+
+        let mut fresh = discovered("a.log", Some("syslog"), 0.9, false);
+        fresh.size = 4_096;
+        fresh.modified = Some(chrono::Utc::now());
+        fresh.is_large = true;
+
+        merge_additional_discovered_files(&mut discovered_files, vec![fresh]);
+
+        assert_eq!(discovered_files.len(), 1);
+        assert_eq!(
+            discovered_files[0].size, 4_096,
+            "size must be refreshed from the append-scan stat"
+        );
+        assert!(
+            discovered_files[0].modified.is_some(),
+            "modified must be refreshed from the append-scan stat"
+        );
+        assert!(
+            discovered_files[0].is_large,
+            "is_large must be refreshed from the append-scan stat"
+        );
     }
 
     #[test]
