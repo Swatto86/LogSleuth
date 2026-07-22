@@ -63,6 +63,24 @@ jobs:
         shell: pwsh
         run: Copy-Item target\release\logsleuth.exe LogSleuth.exe
 
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $ver = ("${{ inputs.tag || github.ref_name }}") -replace '^v',''
+          $exe = Get-ChildItem 'LogSleuth.exe','target/release/logsleuth.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'LogSleuth exe not found' }
+          $out = Join-Path (Get-Location).Path "LogSleuth_${ver}_x64-setup.exe"
+          choco install nsis -y --no-progress | Out-Null
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVER=$ver" "/DSRC=$($exe.FullName)" "/DOUT=$out" ".github\installer.nsi"
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+
+      - name: Upload Windows installer artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: LogSleuth_*_x64-setup.exe
+          if-no-files-found: error
+
       - name: Upload Windows portable artefact
         uses: actions/upload-artifact@v4
         with:
@@ -173,5 +191,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             LogSleuth.exe
+            LogSleuth_*-setup.exe
             LogSleuth-macos
             LogSleuth-linux
