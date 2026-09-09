@@ -193,6 +193,44 @@ struct Cli {
     debug: bool,
 }
 
+/// How the Windows Event Viewer logs collected at startup should be attached
+/// to the session.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventLogAttach {
+    /// A startup scan is already queued: append the EVTX paths to
+    /// `queued_parse_files` so they are parsed once that scan completes.
+    QueueAfterScan,
+    /// A previous session was restored: append via `pending_single_files`,
+    /// whose handler does not call `AppState::clear()`.
+    Append,
+    /// Nothing to preserve: replace the (empty) session outright.
+    Replace,
+}
+
+/// Decide how to attach the startup Event Viewer logs.
+///
+/// `Replace` sets `pending_replace_files`, whose gui.rs handler calls
+/// `AppState::clear()` and nulls `scan_path`.  That destroys restored
+/// bookmarks, annotations, filters and file colours -- and the next
+/// `save_session()` writes the emptied state back over the session file.  So a
+/// restored session must never take that path.
+///
+/// `QueueAfterScan` is not usable for a restored session either: session
+/// restore deliberately triggers no scan, and `queued_parse_files` is only
+/// drained by the `ParsingCompleted` handler, so the EVTX files would never be
+/// parsed at all.
+#[cfg(windows)]
+fn event_log_attach_mode(startup_scan_queued: bool, session_restored: bool) -> EventLogAttach {
+    if startup_scan_queued {
+        EventLogAttach::QueueAfterScan
+    } else if session_restored {
+        EventLogAttach::Append
+    } else {
+        EventLogAttach::Replace
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -271,8 +309,12 @@ fn main() {
 
     // Try restoring the previous session.  All errors are silently ignored:
     // a missing or corrupt file simply starts the app in a clean state.
+    // Only read by the Windows Event Viewer auto-load below.
+    #[cfg_attr(not(windows), allow(unused_variables, unused_mut, unused_assignments))]
+    let mut session_restored = false;
     if let Some(session) = app::session::load(&session_file) {
         tracing::info!(path = %session_file.display(), "Restoring previous session");
+        session_restored = true;
         let has_scan = session.scan_path.is_some();
         state.restore_from_session(session);
         // Queue the re-scan via initial_scan (not pending_scan) so the
@@ -352,7 +394,8 @@ fn main() {
                     let startup_scan_queued = state.initial_scan.is_some()
                         || state.pending_scan.is_some()
                         || state.pending_replace_files.is_some();
-                    if startup_scan_queued {
+                    match event_log_attach_mode(startup_scan_queued, session_restored) {
+                    EventLogAttach::QueueAfterScan => {
                         let mut existing: std::collections::HashSet<std::path::PathBuf> =
                             state.queued_parse_files.iter().cloned().collect();
                         for p in selection.files {
@@ -368,7 +411,25 @@ fn main() {
                             queued = state.queued_parse_files.len(),
                             "Queued automatic Event Viewer log append at startup"
                         );
-                    } else {
+                    }
+                    EventLogAttach::Append => {
+                        // A previous session was restored: APPEND instead of
+                        // replacing.  pending_replace_files makes gui.rs call
+                        // AppState::clear() and null scan_path, destroying the
+                        // just-restored bookmarks, filters and colours -- which
+                        // save_session() would then persist.
+                        state.status_message = format!(
+                            "Session restored. Adding {} Windows Event Viewer log(s) from {}{}...",
+                            selection.files.len(),
+                            selection.dir.display(),
+                            note
+                        );
+                        state.pending_single_files = Some(selection.files);
+                        tracing::info!(
+                            "Queued automatic Event Viewer log append after session restore"
+                        );
+                    }
+                    EventLogAttach::Replace => {
                         state.status_message = format!(
                             "Opening {} Windows Event Viewer log(s) from {}{}...",
                             selection.files.len(),
@@ -377,6 +438,7 @@ fn main() {
                         );
                         state.pending_replace_files = Some(selection.files);
                         tracing::info!("Queued automatic Event Viewer log load at startup");
+                    }
                     }
                 } else if selection.access_denied > 0 || selection.unreadable > 0 {
                     state.status_message = format!(
@@ -435,5 +497,42 @@ fn main() {
         tracing::error!(error = %e, "Failed to launch GUI");
         eprintln!("Error: Failed to launch LogSleuth GUI: {e}");
         std::process::exit(1);
+    }
+}
+
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::{event_log_attach_mode, EventLogAttach};
+
+    /// A restored session must not take the `pending_replace_files` path:
+    /// its gui.rs handler calls AppState::clear(), discarding the restored
+    /// bookmarks, annotations, filters, colours and scan_path -- which the
+    /// next save_session() then writes over the session file.
+    #[test]
+    fn restored_session_is_never_replaced_by_startup_event_logs() {
+        assert_eq!(
+            event_log_attach_mode(false, true),
+            EventLogAttach::Append,
+            "a restored session with no queued scan must APPEND the Event Viewer logs"
+        );
+    }
+
+    #[test]
+    fn startup_scan_and_first_run_paths_are_unchanged() {
+        // --path on the CLI (or any queued startup scan) still wins.
+        assert_eq!(
+            event_log_attach_mode(true, false),
+            EventLogAttach::QueueAfterScan
+        );
+        assert_eq!(
+            event_log_attach_mode(true, true),
+            EventLogAttach::QueueAfterScan
+        );
+        // First run: no session file, nothing to lose.
+        assert_eq!(
+            event_log_attach_mode(false, false),
+            EventLogAttach::Replace
+        );
     }
 }

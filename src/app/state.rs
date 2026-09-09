@@ -2192,6 +2192,33 @@ mod tests {
         assert_eq!(state.next_entry_id(), 0);
     }
 
+    /// `AppState::clear()` is a full session reset: it discards bookmarks (and
+    /// their annotation labels), the filter state, file colours and the file
+    /// selection.  Any startup path that runs it over a just-restored session
+    /// destroys that session -- and `save_session()` then persists the empty
+    /// state.  Pinned here so the destructiveness is explicit.
+    #[test]
+    fn test_clear_discards_restored_bookmarks_and_scan_path() {
+        let mut state = AppState::new(vec![], false);
+        state.toggle_bookmark(1);
+        state.toggle_bookmark(2);
+        state.scan_path = Some(std::path::PathBuf::from("D:/Logs"));
+        state.filter_state.text_search = "timeout".to_string();
+        assert_eq!(state.bookmark_count(), 2);
+
+        state.clear();
+
+        assert_eq!(
+            state.bookmark_count(),
+            0,
+            "clear() destroys bookmarks and their annotation labels"
+        );
+        assert!(
+            state.filter_state.text_search.is_empty(),
+            "clear() resets the filter state"
+        );
+    }
+
     /// `clear()` wipes the live-tail bookkeeping (`tail_active` and
     /// `tail_base_count`) but does NOT stop the background tail thread.  Any
     /// caller of `clear()` must therefore call `TailManager::stop_tail()`
