@@ -823,9 +823,18 @@ timestamp_format = "%Y"
 
     #[test]
     fn test_load_builtin_profiles() {
+        let sources = builtin_profile_sources();
         let profiles = load_builtin_profiles();
-        // All built-in profiles should load successfully
-        assert!(!profiles.is_empty(), "No built-in profiles loaded");
+        // Every embedded profile must parse and compile. load_builtin_profiles()
+        // drops failures silently at runtime, so this count check is the only
+        // place a broken built-in TOML can surface.
+        assert_eq!(
+            profiles.len(),
+            sources.len(),
+            "only {} of {} built-in profiles loaded; a built-in TOML failed to parse or compile",
+            profiles.len(),
+            sources.len()
+        );
         // Check that the Veeam VBR profile loaded
         assert!(
             profiles.iter().any(|p| p.id == "veeam-vbr"),
