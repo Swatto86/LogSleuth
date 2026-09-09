@@ -331,6 +331,10 @@ pub struct AppState {
     /// Consumed and cleared by `gui.rs` (calls `clear()` then `start_scan_files`).
     pub pending_replace_files: Option<Vec<PathBuf>>,
 
+    /// True once the user has clicked "clear bookmarks" and the button is
+    /// armed, waiting for a second confirming click.
+    pub confirm_clear_bookmarks: bool,
+
     /// True when a date-filter change wants to rescan but the session holds
     /// entries or bookmarks that the rescan would discard, so the Files panel
     /// is showing an inline confirmation.
@@ -597,6 +601,7 @@ impl AppState {
             total_files_found: 0,
             discovery_truncated: false,
             pending_replace_files: None,
+            confirm_clear_bookmarks: false,
             confirm_date_rescan: false,
             pending_export: None,
             request_new_session: false,
@@ -1204,6 +1209,27 @@ impl AppState {
     /// Returns the total number of bookmarked entries.
     pub fn bookmark_count(&self) -> usize {
         self.bookmarks.len()
+    }
+
+    /// Two-step "clear all bookmarks": the first call arms the button, the
+    /// second performs the delete.  Returns the number of bookmarks removed
+    /// (0 when only arming).
+    ///
+    /// Bookmarks are user-authored investigation state, persisted to the
+    /// session file, with no undo -- and the control sits next to the
+    /// "Bookmarks (N)" filter toggle that users click routinely, so a single
+    /// mis-click used to destroy the work silently.
+    pub fn request_clear_bookmarks(&mut self) -> usize {
+        if self.confirm_clear_bookmarks {
+            let removed = self.bookmark_count();
+            self.confirm_clear_bookmarks = false;
+            self.clear_bookmarks();
+            self.status_message = format!("Removed {removed} bookmark(s).");
+            removed
+        } else {
+            self.confirm_clear_bookmarks = true;
+            0
+        }
     }
 
     /// Request the rescan that a date-filter change implies.
@@ -2284,6 +2310,30 @@ mod tests {
         // clear() resets the counter so a brand-new session starts at 0 again.
         state.clear();
         assert_eq!(state.next_entry_id(), 0);
+    }
+
+    /// "clear bm" sits next to the Bookmarks filter toggle and used to delete
+    /// every bookmark on one click, with no undo and no confirmation.
+    #[test]
+    fn clear_bookmarks_requires_a_second_click() {
+        let mut state = AppState::new(vec![], false);
+        state.toggle_bookmark(1);
+        state.toggle_bookmark(2);
+
+        // First click arms only.
+        assert_eq!(state.request_clear_bookmarks(), 0);
+        assert!(state.confirm_clear_bookmarks, "the button must be armed");
+        assert_eq!(
+            state.bookmark_count(),
+            2,
+            "one click must not delete anything"
+        );
+
+        // Second click performs the delete and reports it.
+        assert_eq!(state.request_clear_bookmarks(), 2);
+        assert_eq!(state.bookmark_count(), 0);
+        assert!(!state.confirm_clear_bookmarks, "the arm must be consumed");
+        assert!(state.status_message.contains("Removed 2 bookmark(s)"));
     }
 
     /// The date quick-fill buttons trigger a rescan, and a rescan calls

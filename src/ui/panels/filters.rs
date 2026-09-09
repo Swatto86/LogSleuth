@@ -142,21 +142,35 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.filter_state.bookmarks_only = !bm_active;
             state.apply_filters();
         }
-        // Clear-all bookmarks button (only when bookmarks exist)
-        if bm_count > 0
-            && ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new("\u{d7} clear bm")
-                            .small()
-                            .color(egui::Color32::from_rgb(156, 163, 175)),
-                    )
-                    .frame(false),
+        // Clear-all bookmarks button (only when bookmarks exist).
+        // Two-step confirm: the first click arms it, the second clears.
+        if bm_count > 0 {
+            let armed = state.confirm_clear_bookmarks;
+            let (label, tip, colour) = if armed {
+                (
+                    "\u{d7} confirm?",
+                    "Click again to permanently remove all bookmarks. This cannot be undone.",
+                    egui::Color32::from_rgb(248, 113, 113),
                 )
-                .on_hover_text("Remove all bookmarks")
+            } else {
+                (
+                    "\u{d7} clear bm",
+                    "Remove all bookmarks (you will be asked to confirm)",
+                    egui::Color32::from_rgb(156, 163, 175),
+                )
+            };
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new(label).small().color(colour))
+                        .frame(false),
+                )
+                .on_hover_text(tip)
                 .clicked()
-        {
-            state.clear_bookmarks();
+            {
+                state.request_clear_bookmarks();
+            }
+        } else {
+            state.confirm_clear_bookmarks = false;
         }
     });
 
