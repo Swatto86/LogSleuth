@@ -1408,22 +1408,16 @@ impl eframe::App for LogSleuthApp {
                     self.state.show_summary = true;
                 }
                 // Up/Down — Navigate entries in the timeline
-                if i.key_pressed(egui::Key::ArrowUp) {
-                    let n = self.state.filtered_indices.len();
-                    if n > 0 {
-                        let current = self.state.selected_index.unwrap_or(0);
-                        if current > 0 {
-                            self.state.selected_index = Some(current - 1);
-                        }
-                    }
-                }
-                if i.key_pressed(egui::Key::ArrowDown) {
-                    let n = self.state.filtered_indices.len();
-                    if n > 0 {
-                        let current = self.state.selected_index.unwrap_or(0);
-                        if current + 1 < n {
-                            self.state.selected_index = Some(current + 1);
-                        }
+                // In newest-first order the display is reversed, so moving one
+                // row down the screen means decreasing selected_index -- see
+                // AppState::next_selection_index.  The scroll request is what
+                // brings the new selection into the virtualised viewport.
+                {
+                    let up = i.key_pressed(egui::Key::ArrowUp);
+                    let down = i.key_pressed(egui::Key::ArrowDown);
+                    if let Some(idx) = self.state.next_selection_index(up, down) {
+                        self.state.selected_index = Some(idx);
+                        self.state.scroll_to_selected = true;
                     }
                 }
             });

@@ -301,6 +301,13 @@ pub struct AppState {
     /// by `timeline.rs` so it fires exactly once per batch of new entries.
     pub scroll_top_requested: bool,
 
+    /// When true the timeline should scroll so that `selected_index` is visible
+    /// on the next rendered frame.  Set by the keyboard navigation handler in
+    /// `gui.rs`, consumed and cleared by `timeline.rs`.  Without it the
+    /// selection walks outside the virtualised viewport and is not even
+    /// rendered, so the timeline appears frozen while the detail pane changes.
+    pub scroll_to_selected: bool,
+
     /// Total files found during the last discovery pass **before** the ingest
     /// limit was applied. Equals `discovered_files.len()` when no truncation
     /// occurred. Used to display "Found N, showing M" in the status bar.
@@ -561,6 +568,7 @@ impl AppState {
             dir_watch_poll_interval_ms: crate::util::constants::DIR_WATCH_POLL_INTERVAL_MS,
             show_options: false,
             scroll_top_requested: false,
+            scroll_to_selected: false,
             total_files_found: 0,
             discovery_truncated: false,
             pending_replace_files: None,
@@ -1169,6 +1177,26 @@ impl AppState {
     /// Returns the total number of bookmarked entries.
     pub fn bookmark_count(&self) -> usize {
         self.bookmarks.len()
+    }
+
+    /// Where an Up/Down key press should move `selected_index`.
+    ///
+    /// The timeline renders newest-first by mapping
+    /// `display_idx -> len - 1 - selected_index`, so in that mode moving one
+    /// row DOWN the screen means DECREASING `selected_index`.  Returns `None`
+    /// at either end of the list, or when the list is empty.
+    pub fn next_selection_index(&self, up: bool, down: bool) -> Option<usize> {
+        let n = self.filtered_indices.len();
+        if n == 0 || up == down {
+            return None;
+        }
+        let current = self.selected_index.unwrap_or(0);
+        let increment = if self.sort_descending { up } else { down };
+        if increment {
+            (current + 1 < n).then_some(current + 1)
+        } else {
+            (current > 0).then_some(current - 1)
+        }
     }
 
     /// Reset every filter EXCEPT the source-file selection.
@@ -2212,6 +2240,41 @@ mod tests {
         // clear() resets the counter so a brand-new session starts at 0 again.
         state.clear();
         assert_eq!(state.next_entry_id(), 0);
+    }
+
+    /// Arrow-key navigation must follow what is on screen.  In newest-first
+    /// order the timeline maps `display_idx -> len - 1 - selected_index`, so
+    /// Down must DECREASE selected_index; the original handler incremented it
+    /// in both modes, moving the highlight up the screen after the user
+    /// clicked "Newest first".
+    #[test]
+    fn arrow_navigation_follows_the_display_order() {
+        let mut state = AppState::new(vec![], false);
+        state.filtered_indices = vec![0, 1, 2, 3, 4];
+        state.selected_index = Some(2);
+
+        // Oldest-first: Down moves later in the list, Up moves earlier.
+        state.sort_descending = false;
+        assert_eq!(state.next_selection_index(false, true), Some(3), "down");
+        assert_eq!(state.next_selection_index(true, false), Some(1), "up");
+
+        // Newest-first: the display is reversed, so Down moves earlier.
+        state.sort_descending = true;
+        assert_eq!(
+            state.next_selection_index(false, true),
+            Some(1),
+            "down must move DOWN the screen in newest-first order"
+        );
+        assert_eq!(state.next_selection_index(true, false), Some(3), "up");
+
+        // Ends of the list, and no key / both keys, produce no movement.
+        state.selected_index = Some(4);
+        state.sort_descending = false;
+        assert_eq!(state.next_selection_index(false, true), None, "at the end");
+        assert_eq!(state.next_selection_index(false, false), None, "no key");
+        assert_eq!(state.next_selection_index(true, true), None, "both keys");
+        state.filtered_indices.clear();
+        assert_eq!(state.next_selection_index(false, true), None, "empty list");
     }
 
     /// Escape and the two "Clear filters" buttons must not reset the

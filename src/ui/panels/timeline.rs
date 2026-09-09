@@ -242,6 +242,23 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     if snap_top {
         scroll_area = scroll_area.scroll_offset(egui::vec2(0.0, 0.0));
     }
+    // Keyboard navigation: bring the selected row into view (roughly centred).
+    // show_rows only renders the visible slice, so without this the selection
+    // walks off-screen and the timeline looks frozen.  Cleared unconditionally
+    // so it can never stick.
+    if state.scroll_to_selected {
+        state.scroll_to_selected = false;
+        if let Some(sel) = state.selected_index {
+            let display_idx = if state.sort_descending {
+                filtered.saturating_sub(1).saturating_sub(sel)
+            } else {
+                sel
+            };
+            let target = display_idx as f32 * row_height;
+            let half = (ui.available_height() * 0.5).max(0.0);
+            scroll_area = scroll_area.scroll_offset(egui::vec2(0.0, (target - half).max(0.0)));
+        }
+    }
     scroll_area.show_rows(ui, row_height, filtered, |ui, row_range| {
         for display_idx in row_range {
             // When sort_descending the display positions are reversed:
