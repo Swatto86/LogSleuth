@@ -703,9 +703,10 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             state.discovery_date_input.clear();
             // Clear means "scan all files": trigger a rescan immediately when a
             // path is already configured so the user doesn't have to press Open.
-            // Guard against interrupting an active scan (Bug fix).
+            // Guard against interrupting an active scan, and against silently
+            // discarding loaded entries / bookmarks (the rescan calls clear()).
             if !state.scan_in_progress {
-                state.pending_scan = state.scan_path.clone();
+                state.request_date_rescan();
             }
         }
     });
@@ -760,7 +761,40 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
         }
     });
     if did_update_date && !state.scan_in_progress {
-        state.pending_scan = state.scan_path.clone();
+        state.request_date_rescan();
+    }
+    if state.confirm_date_rescan {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "\u{26a0} Rescanning discards {} loaded entries and {} bookmark(s).",
+                    state.entries.len(),
+                    state.bookmark_count()
+                ))
+                .small()
+                .color(egui::Color32::from_rgb(251, 191, 36)),
+            );
+            if ui
+                .small_button("Rescan anyway")
+                .on_hover_text(
+                    "Discard the loaded entries and bookmarks and rescan with the new date filter",
+                )
+                .clicked()
+            {
+                state.confirm_date_rescan = false;
+                state.pending_scan = state.scan_path.clone();
+            }
+            if ui
+                .small_button("Keep session")
+                .on_hover_text(
+                    "Keep the current entries and bookmarks; the date field stays as typed \
+                     and applies to the next scan",
+                )
+                .clicked()
+            {
+                state.confirm_date_rescan = false;
+            }
+        });
     }
 
     if !state.discovery_date_input.trim().is_empty() && state.discovery_modified_since().is_some() {

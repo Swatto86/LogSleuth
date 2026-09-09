@@ -331,6 +331,11 @@ pub struct AppState {
     /// Consumed and cleared by `gui.rs` (calls `clear()` then `start_scan_files`).
     pub pending_replace_files: Option<Vec<PathBuf>>,
 
+    /// True when a date-filter change wants to rescan but the session holds
+    /// entries or bookmarks that the rescan would discard, so the Files panel
+    /// is showing an inline confirmation.
+    pub confirm_date_rescan: bool,
+
     /// Deferred export request: `(destination, is_json)`.  Set by the
     /// File > Export menu so the "Exporting..." status is painted before the
     /// blocking write starts; consumed by `gui.rs` on the next frame.
@@ -592,6 +597,7 @@ impl AppState {
             total_files_found: 0,
             discovery_truncated: false,
             pending_replace_files: None,
+            confirm_date_rescan: false,
             pending_export: None,
             request_new_session: false,
             discovery_date_input: String::new(),
@@ -1200,6 +1206,22 @@ impl AppState {
         self.bookmarks.len()
     }
 
+    /// Request the rescan that a date-filter change implies.
+    ///
+    /// A rescan goes through `pending_scan`, whose gui.rs handler calls
+    /// `clear()`: that discards every loaded entry, all bookmarks (including
+    /// their annotation labels), the file colours and the file selection, and
+    /// there is no undo -- bookmarks are keyed by entry ID, which the next scan
+    /// reassigns.  When there is something to lose, ask first; when the session
+    /// is empty, rescan straight away as before.
+    pub fn request_date_rescan(&mut self) {
+        if self.entries.is_empty() && self.bookmark_count() == 0 {
+            self.pending_scan = self.scan_path.clone();
+        } else {
+            self.confirm_date_rescan = true;
+        }
+    }
+
     /// Where an Up/Down key press should move `selected_index`.
     ///
     /// The timeline renders newest-first by mapping
@@ -1488,6 +1510,7 @@ impl AppState {
         self.scan_in_progress = false;
         self.pending_scan = None;
         self.pending_append_scan = None;
+        self.confirm_date_rescan = false;
         self.request_cancel = false;
         self.file_list_search.clear();
         self.file_colours.clear();
@@ -2261,6 +2284,39 @@ mod tests {
         // clear() resets the counter so a brand-new session starts at 0 again.
         state.clear();
         assert_eq!(state.next_entry_id(), 0);
+    }
+
+    /// The date quick-fill buttons trigger a rescan, and a rescan calls
+    /// clear(): every loaded entry, every bookmark and its annotation label,
+    /// the file colours and the file selection are discarded with no undo.
+    /// A filter-shaped control must not do that silently.
+    #[test]
+    fn date_rescan_asks_before_discarding_a_populated_session() {
+        let mut state = AppState::new(vec![], false);
+        state.scan_path = Some(std::path::PathBuf::from("D:/Logs"));
+
+        // Nothing loaded: rescan straight away, as before.
+        state.request_date_rescan();
+        assert_eq!(state.pending_scan, state.scan_path);
+        assert!(!state.confirm_date_rescan);
+
+        // Entries loaded: ask first.
+        state.pending_scan = None;
+        state.entries.push(make_entry(1, 1));
+        state.request_date_rescan();
+        assert!(
+            state.pending_scan.is_none(),
+            "a populated session must not be discarded without confirmation"
+        );
+        assert!(state.confirm_date_rescan, "the confirmation must be shown");
+
+        // Bookmarks alone are enough to warrant asking.
+        state.confirm_date_rescan = false;
+        state.entries.clear();
+        state.toggle_bookmark(1);
+        state.request_date_rescan();
+        assert!(state.pending_scan.is_none());
+        assert!(state.confirm_date_rescan);
     }
 
     /// Arrow-key navigation must follow what is on screen.  In newest-first
