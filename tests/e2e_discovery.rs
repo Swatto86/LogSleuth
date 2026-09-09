@@ -903,6 +903,7 @@ fn dlogs_root() -> Option<std::path::PathBuf> {
 ///
 /// Exercises discover_files() against a real, large directory tree.
 #[test]
+#[ignore = "requires the D: log tree on the developer machine"]
 fn e2e_dlogs_discovers_many_files() {
     let Some(dlogs) = dlogs_root() else {
         return; // skip: D:\Logs not available on this machine
@@ -925,6 +926,7 @@ fn e2e_dlogs_discovers_many_files() {
 
 /// Veeam VBR log files in D:\Logs\veeam auto-detect as the veeam-vbr profile.
 #[test]
+#[ignore = "requires the D: log tree on the developer machine"]
 fn e2e_dlogs_veeam_vbr_auto_detects() {
     let Some(dlogs) = dlogs_root() else {
         return;
@@ -961,6 +963,7 @@ fn e2e_dlogs_veeam_vbr_auto_detects() {
 
 /// IIS W3C log files in D:\Logs\iis auto-detect as the iis-w3c profile.
 #[test]
+#[ignore = "requires the D: log tree on the developer machine"]
 fn e2e_dlogs_iis_w3c_auto_detects() {
     let Some(dlogs) = dlogs_root() else {
         return;
@@ -1007,6 +1010,7 @@ fn e2e_dlogs_iis_w3c_auto_detects() {
 
 /// Syslog files in D:\Logs\system auto-detect as a syslog profile.
 #[test]
+#[ignore = "requires the D: log tree on the developer machine"]
 fn e2e_dlogs_syslog_auto_detects() {
     let Some(dlogs) = dlogs_root() else {
         return;
@@ -1059,6 +1063,7 @@ fn e2e_dlogs_syslog_auto_detects() {
 /// The test validates that *some* SQL Server profile is detected (not plain-text)
 /// and that the result is one of the two expected SQL profiles.
 #[test]
+#[ignore = "requires the D: log tree on the developer machine"]
 fn e2e_dlogs_sql_agent_auto_detects() {
     let Some(dlogs) = dlogs_root() else {
         return;
@@ -1096,61 +1101,58 @@ fn e2e_dlogs_sql_agent_auto_detects() {
 /// lines when no preceding entry existed, leaving every file after the first
 /// with 0 entries and falsely showing "433 entries from 1 file".
 #[test]
-fn e2e_dlogs_vbr_multiple_files_each_contribute_entries() {
-    let Some(dlogs) = dlogs_root() else {
-        return;
-    };
-    let veeam_dir = dlogs.join("veeam");
-    if !veeam_dir.is_dir() {
-        return;
-    }
-
+fn e2e_vbr_multiple_files_each_contribute_entries() {
     let profiles = load_profiles();
     let vbr_profile = profiles
         .iter()
         .find(|p| p.id == "veeam-vbr")
         .expect("veeam-vbr profile must be loaded");
 
-    // Collect all .log files in the veeam folder.
-    let log_files: Vec<_> = fs::read_dir(&veeam_dir)
-        .expect("read veeam dir")
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("log"))
-        .collect();
-
-    assert!(
-        !log_files.is_empty(),
-        "D:\\Logs\\veeam must contain at least one .log file"
-    );
+    let dir = tempfile::tempdir().unwrap();
+    let body = "[15.01.2024 14:30:22] <01> Info     Job started
+                [15.01.2024 14:30:23] <01> Error    Job failed
+";
 
     let mut files_with_entries = 0usize;
-    let mut files_checked = 0usize;
-
-    for path in &log_files {
-        let Ok(content) = fs::read_to_string(path) else {
-            continue;
-        };
-        if content.trim().is_empty() {
-            continue;
-        }
-        files_checked += 1;
-        let result = parse_content(&content, path, vbr_profile, &ParseConfig::default(), 0);
+    for name in ["Svc.VeeamBackup.log", "Restore.1.log"] {
+        let path = dir.path().join(name);
+        fs::write(&path, body).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        let result = parse_content(&content, &path, vbr_profile, &ParseConfig::default(), 0);
         if !result.entries.is_empty() {
             files_with_entries += 1;
         }
     }
 
-    // We need at least 2 non-empty VBR files in D:\Logs\veeam to be useful.
-    // If there's only 1 file, this test is vacuously not reproducible.
-    if files_checked < 2 {
-        return; // not enough data to exercise the regression
-    }
+    assert_eq!(
+        files_with_entries, 2,
+        "every VBR file must produce entries, not just the first (regression for Bug 3)"
+    );
 
-    assert!(
-        files_with_entries >= 2,
-        "at least 2 VBR files must produce entries (regression for Bug 3); \
-         checked {files_checked} files, only {files_with_entries} had entries"
+    // Bug 3 proper: in continuation mode a leading line with no prior entry to
+    // append to must be recorded as a parse error and skipped -- it must not
+    // cause the rest of the file to be dropped.  Veeam logs routinely open
+    // with a banner line that does not match the entry pattern.
+    let banner_path = dir.path().join("Svc.VeeamBackup.banner.log");
+    fs::write(
+        &banner_path,
+        "=== Veeam Backup service log ===
+[15.01.2024 14:30:22] <01> Info     Job started
+",
+    )
+    .unwrap();
+    let banner_content = fs::read_to_string(&banner_path).unwrap();
+    let banner_result = parse_content(
+        &banner_content,
+        &banner_path,
+        vbr_profile,
+        &ParseConfig::default(),
+        0,
+    );
+    assert_eq!(
+        banner_result.entries.len(),
+        1,
+        "a non-matching leading line must not drop the rest of the file (Bug 3 regression)"
     );
 }
 
@@ -1160,25 +1162,18 @@ fn e2e_dlogs_vbr_multiple_files_each_contribute_entries() {
 /// Before the model.rs fix, infer_severity_from_message() returned
 /// Severity::Info as its default fallback instead of Severity::Unknown.
 #[test]
-fn e2e_dlogs_vbr_severity_is_not_uniform_info() {
-    let Some(dlogs) = dlogs_root() else {
-        return;
-    };
-    let restore_log = dlogs.join("veeam").join("Restore.1.log");
-    if !restore_log.exists() {
-        return;
-    }
-
+fn e2e_vbr_severity_is_not_uniform_info() {
     let profiles = load_profiles();
     let vbr_profile = profiles
         .iter()
         .find(|p| p.id == "veeam-vbr")
         .expect("veeam-vbr profile must be loaded");
 
-    let content = fs::read_to_string(&restore_log).expect("read Restore.1.log");
+    let fixture_path = fixture("veeam_vbr_sample.log");
+    let content = fs::read_to_string(&fixture_path).expect("read veeam fixture");
     let result = parse_content(
         &content,
-        &restore_log,
+        &fixture_path,
         vbr_profile,
         &ParseConfig::default(),
         0,
@@ -1186,27 +1181,56 @@ fn e2e_dlogs_vbr_severity_is_not_uniform_info() {
 
     assert!(
         !result.entries.is_empty(),
-        "Restore.1.log must produce at least one parsed entry"
+        "fixture must produce at least one parsed entry"
     );
 
-    // Count distinct severity values.
     let distinct_severities: std::collections::HashSet<_> =
         result.entries.iter().map(|e| e.severity).collect();
-
     assert!(
         distinct_severities.len() >= 2,
-        "Restore.1.log must contain at least two distinct severity levels \
-         (regression for Bug 1 - all entries were Info); got: {distinct_severities:?}"
+        "fixture must contain at least two distinct severity levels          (regression for Bug 1 - all entries were Info); got: {distinct_severities:?}"
     );
 
-    // The file must NOT consist entirely of Info entries.
     let all_info = result
         .entries
         .iter()
         .all(|e| e.severity == logsleuth::core::model::Severity::Info);
     assert!(
         !all_info,
-        "Restore.1.log must not produce only Severity::Info entries (Bug 1 regression)"
+        "fixture must not produce only Severity::Info entries (Bug 1 regression)"
+    );
+
+    // The fixture above exercises the structured path (a `level` capture group
+    // mapped through severity_mapping).  Bug 1 lived in the OTHER path: the
+    // fallback in FormatProfile::infer_severity_from_message, which returned
+    // Severity::Info for a line with no recognisable severity token and so
+    // classified every unstructured entry as Info.
+    let plain = profiles
+        .iter()
+        .find(|p| p.id == "plain-text")
+        .expect("plain-text profile must be loaded");
+    let unclassifiable = "Job started at offset 42
+Copied 17 objects
+";
+    let plain_result = parse_content(
+        unclassifiable,
+        &PathBuf::from("unstructured.log"),
+        plain,
+        &ParseConfig::default(),
+        0,
+    );
+    assert!(!plain_result.entries.is_empty());
+    assert!(
+        plain_result
+            .entries
+            .iter()
+            .all(|e| e.severity == logsleuth::core::model::Severity::Unknown),
+        "a line with no severity token must be Unknown, not Info          (regression for Bug 1 - the infer_severity_from_message fallback); got: {:?}",
+        plain_result
+            .entries
+            .iter()
+            .map(|e| e.severity)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -1248,9 +1272,6 @@ fn e2e_dlogs_vbo365_auto_detects() {
     // This test uses the committed fixture, not the D:\Logs folder, so it
     // always runs — no dlogs_root() guard needed.
     let fixture_path = fixture("veeam_vbo365_sample.log");
-    if !fixture_path.exists() {
-        return;
-    }
 
     let profiles = load_profiles();
     let content = fs::read_to_string(&fixture_path).expect("read veeam_vbo365_sample.log");
@@ -1277,6 +1298,7 @@ fn e2e_dlogs_vbo365_auto_detects() {
 /// auto-detection, continuation-mode parsing, and plain-text fallback — all
 /// function correctly on real data.
 #[test]
+#[ignore = "requires the D: log tree on the developer machine"]
 fn e2e_dlogs_full_pipeline_smoke() {
     let Some(dlogs) = dlogs_root() else {
         return;
