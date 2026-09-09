@@ -577,6 +577,46 @@ mod tests {
         );
     }
 
+    /// Truncation must keep the most recently modified files, not an arbitrary
+    /// subset: the warning text promises the user the freshest content.
+    /// `test_max_files_truncates_gracefully` above checks only the count, which
+    /// an inverted comparator satisfies just as well.
+    #[test]
+    fn test_max_files_keeps_the_most_recently_modified() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        // oldest -> newest
+        for (i, name) in ["old.log", "mid.log", "new.log"].iter().enumerate() {
+            let p = root.join(name);
+            fs::write(&p, "line\n").unwrap();
+            let f = fs::File::options().write(true).open(&p).unwrap();
+            f.set_modified(base + Duration::from_secs(3600 * i as u64))
+                .unwrap();
+        }
+
+        let config = DiscoveryConfig {
+            max_files: 2,
+            ..Default::default()
+        };
+        let (files, _warnings, total_found) = discover_files(root, &config, |_, _| {}).unwrap();
+
+        assert_eq!(total_found, 3);
+        let mut names: Vec<String> = files
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_str().unwrap().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["mid.log".to_string(), "new.log".to_string()],
+            "truncation must keep the two most recently modified files"
+        );
+    }
+
     #[test]
     fn test_root_not_found() {
         let result = discover_files(

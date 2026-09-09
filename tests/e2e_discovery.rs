@@ -80,10 +80,13 @@ fn e2e_discovers_nonexistent_root_returns_error() {
     );
 }
 
-/// When more files exist than the limit, discovery succeeds and truncates
-/// to the `max_files` most recently modified entries, adding a warning.
+/// When more files exist than the limit, discovery succeeds and truncates the
+/// list, adding a warning. Which files survive (most recently modified) is
+/// asserted by `test_max_files_keeps_the_most_recently_modified` in
+/// core::discovery, where mtimes can be set explicitly -- the fixture files'
+/// mtimes here come from the git checkout and are not controllable.
 #[test]
-fn e2e_max_files_truncates_to_most_recent() {
+fn e2e_max_files_truncates_file_list() {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures");
