@@ -14,7 +14,6 @@
 // applied to the row (red-on-red contrast is avoided).
 
 use crate::app::state::AppState;
-use crate::core::filter::FilterState;
 use crate::ui::theme;
 use egui::text::{LayoutJob, TextFormat};
 
@@ -163,11 +162,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 )
                                 .clicked()
                             {
-                                state.filter_state = FilterState::default();
-                                // Keep the multi-search input buffer in sync
-                                // with the reset multi_search filter.
-                                state.multi_search_input.clear();
-                                state.apply_filters();
+                                // Keeps the ticked-file set: it records which
+                                // files are loaded, not a filter to clear.
+                                state.clear_filters_preserving_file_selection();
                             }
                             if state.activity_window_secs.is_some()
                                 && ui

@@ -1171,6 +1171,28 @@ impl AppState {
         self.bookmarks.len()
     }
 
+    /// Reset every filter EXCEPT the source-file selection.
+    ///
+    /// `source_files` / `hide_all_sources` express which files the user has
+    /// ticked -- and therefore which files have entries loaded -- not a filter
+    /// the user asked to clear.  Resetting them makes every discovered file
+    /// render as ticked, including unparsed ones, and because the checkbox is
+    /// already ticked its `changed()` never fires, so the on-demand parse can
+    /// no longer be triggered by ticking it.
+    pub fn clear_filters_preserving_file_selection(&mut self) {
+        let source_files = std::mem::take(&mut self.filter_state.source_files);
+        let hide_all_sources = self.filter_state.hide_all_sources;
+        let fuzzy = self.filter_state.fuzzy;
+        self.filter_state = FilterState {
+            fuzzy,
+            ..FilterState::default()
+        };
+        self.filter_state.source_files = source_files;
+        self.filter_state.hide_all_sources = hide_all_sources;
+        self.multi_search_input.clear();
+        self.apply_filters();
+    }
+
     /// Remove all bookmarks and reset the `bookmarks_only` filter.
     /// Calls `apply_filters()` to refresh the timeline.
     pub fn clear_bookmarks(&mut self) {
@@ -2190,6 +2212,37 @@ mod tests {
         // clear() resets the counter so a brand-new session starts at 0 again.
         state.clear();
         assert_eq!(state.next_entry_id(), 0);
+    }
+
+    /// Escape and the two "Clear filters" buttons must not reset the
+    /// source-file selection: `source_files` / `hide_all_sources` record which
+    /// files the user ticked (and therefore which files have entries loaded),
+    /// not a filter.  Clearing them redraws every unparsed file as ticked, and
+    /// because the checkbox is already ticked it can no longer be ticked to
+    /// trigger the on-demand parse.
+    #[test]
+    fn clear_filters_preserves_file_selection() {
+        let mut state = AppState::new(vec![], false);
+        state
+            .filter_state
+            .source_files
+            .insert(std::path::PathBuf::from("a.log"));
+        state.filter_state.hide_all_sources = false;
+        state.filter_state.text_search = "boom".to_string();
+
+        state.clear_filters_preserving_file_selection();
+
+        assert!(
+            state.filter_state.text_search.is_empty(),
+            "text filter must be cleared"
+        );
+        assert!(
+            state
+                .filter_state
+                .source_files
+                .contains(&std::path::PathBuf::from("a.log")),
+            "the ticked-file set must survive a filter clear"
+        );
     }
 
     /// `AppState::clear()` is a full session reset: it discards bookmarks (and

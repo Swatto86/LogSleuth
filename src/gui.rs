@@ -1395,11 +1395,9 @@ impl eframe::App for LogSleuthApp {
                 }
                 // Escape — Clear all filters
                 if i.key_pressed(egui::Key::Escape) {
-                    self.state.filter_state = crate::core::filter::FilterState::default();
                     self.state.activity_window_secs = None;
                     self.state.activity_window_input.clear();
-                    self.state.multi_search_input.clear();
-                    self.state.apply_filters();
+                    self.state.clear_filters_preserving_file_selection();
                 }
                 // Ctrl+S — Open scan summary
                 if ctrl

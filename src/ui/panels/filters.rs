@@ -102,12 +102,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             .on_hover_text("Remove all active filters and show every entry")
             .clicked()
         {
-            state.filter_state = crate::core::filter::FilterState {
-                fuzzy,
-                ..Default::default()
-            };
-            state.multi_search_input.clear();
-            state.apply_filters();
+            state.clear_filters_preserving_file_selection();
         }
 
         // Summary shortcut (disabled when no filtered entries yet)
