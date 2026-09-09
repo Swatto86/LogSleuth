@@ -112,6 +112,23 @@ jobs:
       - name: Rename release binary
         run: cp target/release/logsleuth LogSleuth-macos
 
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build DMG
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          bash installer/macos/create-dmg.sh "$VER"
+
+      - name: Upload macOS DMG artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: LogSleuth-*.dmg
+          if-no-files-found: error
+
       - name: Upload macOS artefact
         uses: actions/upload-artifact@v4
         with:
@@ -155,6 +172,23 @@ jobs:
       - name: Rename release binary
         run: cp target/release/logsleuth LogSleuth-linux
 
+      - name: Build AppImage
+        env:
+          # Run appimagetool by extracting it rather than mounting it, so the
+          # runner does not need libfuse2.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          bash installer/linux/create-appimage.sh "$VER"
+
+      - name: Upload Linux AppImage artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: LogSleuth-*.AppImage
+          if-no-files-found: error
+
       - name: Upload Linux artefact
         uses: actions/upload-artifact@v4
         with:
@@ -194,3 +228,5 @@ jobs:
             LogSleuth_*-setup.exe
             LogSleuth-macos
             LogSleuth-linux
+            LogSleuth-*.dmg
+            LogSleuth-*.AppImage
