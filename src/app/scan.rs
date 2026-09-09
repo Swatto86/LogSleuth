@@ -1290,6 +1290,10 @@ fn run_files_scan(
     const META_TIMEOUT_SECS: u64 = 10;
     for path in &paths {
         if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            // Must notify: the UI clears `scan_in_progress` only on
+            // ParsingCompleted / Failed / Cancelled.  A silent return here
+            // leaves the app stuck in scanning mode forever.
+            send!(ScanProgress::Cancelled);
             return;
         }
         let path_owned = path.clone();
@@ -1554,5 +1558,29 @@ mod tests {
         let actual = read_file_content(&path, true).expect("read large utf16 file");
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn cancelled_files_scan_reports_cancelled() {
+        use crate::core::model::ScanProgress;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{mpsc, Arc};
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(true));
+        super::run_files_scan(
+            vec![std::path::PathBuf::from("does-not-matter.log")],
+            Vec::new(),
+            crate::core::parser::ParseConfig::default(),
+            tx,
+            cancel,
+            1000,
+            0,
+            None,
+        );
+        let msgs: Vec<ScanProgress> = rx.into_iter().collect();
+        assert!(
+            msgs.iter().any(|m| matches!(m, ScanProgress::Cancelled)),
+            "a cancelled file scan must send ScanProgress::Cancelled so the UI can clear scan_in_progress"
+        );
     }
 }
