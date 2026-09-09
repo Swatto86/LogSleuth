@@ -63,6 +63,40 @@ impl LogSleuthApp {
         self.state.pending_scan = Some(dir);
     }
 
+    /// Re-scan the external profiles directory and merge the results with the
+    /// built-ins.  Preserves all current scan, filter and session state.
+    ///
+    /// Files that failed to parse or validate are reported to the user, not
+    /// just to the log: `load_all_profiles` returns them as errors, and a
+    /// tracing::warn! is invisible unless --debug or a log level is set, so a
+    /// plain "Profiles reloaded" would tell the user their broken custom
+    /// profile had loaded fine.
+    pub fn reload_profiles(&mut self) {
+        let dir = self.state.user_profiles_dir.clone();
+        let (profiles, errors) = crate::app::profile_mgr::load_all_profiles(dir.as_deref());
+        for err in &errors {
+            tracing::warn!(error = %err, "Profile reload warning");
+            if self.state.warnings.len() < MAX_WARNINGS {
+                self.state
+                    .warnings
+                    .push(format!("Profile load failed: {err}"));
+            }
+        }
+        let total = profiles.len();
+        let external = profiles.iter().filter(|p| !p.is_builtin).count();
+        let failed = errors.len();
+        self.state.profiles = profiles;
+        self.state.status_message = if failed > 0 {
+            format!(
+                "\u{26a0} Profiles reloaded - {total} total ({external} external), \
+                 {failed} file(s) failed to load. See View > Scan Summary for details."
+            )
+        } else {
+            format!("Profiles reloaded - {total} total ({external} external).")
+        };
+        tracing::info!(total, external, failed, "Profiles reloaded via Options panel");
+    }
+
     #[cfg(windows)]
     fn queue_missing_windows_event_logs(&mut self) {
         let selection = match crate::app::windows_event_logs::collect_event_viewer_log_files() {
@@ -1299,17 +1333,7 @@ impl eframe::App for LogSleuthApp {
         // scan, filter, and session state.
         if self.state.request_reload_profiles {
             self.state.request_reload_profiles = false;
-            let dir = self.state.user_profiles_dir.clone();
-            let (profiles, errors) = crate::app::profile_mgr::load_all_profiles(dir.as_deref());
-            for err in &errors {
-                tracing::warn!(error = %err, "Profile reload warning");
-            }
-            let total = profiles.len();
-            let external = profiles.iter().filter(|p| !p.is_builtin).count();
-            self.state.profiles = profiles;
-            self.state.status_message =
-                format!("Profiles reloaded - {total} total ({external} external).");
-            tracing::info!(total, external, "Profiles reloaded via Options panel");
+            self.reload_profiles();
         }
 
         // -----------------------------------------------------------------
@@ -2108,6 +2132,36 @@ mod tests {
     use super::LogSleuthApp;
     use crate::app::state::AppState;
     use crate::core::model::DiscoveredFile;
+
+    /// A profile file that fails to parse must be reported to the user, not
+    /// only to the tracing log (which is off unless --debug or a log level is
+    /// configured).  Before this, the status bar reported plain success and
+    /// the user concluded their custom profile had loaded.
+    #[test]
+    fn reload_profiles_reports_broken_profile_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("broken.toml"), "this is not toml").unwrap();
+
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.user_profiles_dir = Some(dir.path().to_path_buf());
+
+        app.reload_profiles();
+
+        assert!(
+            app.state.status_message.contains("failed to load"),
+            "the status bar must say a profile failed to load, got: {}",
+            app.state.status_message
+        );
+        assert!(
+            app.state
+                .warnings
+                .iter()
+                .any(|w| w.contains("Profile load failed")),
+            "the failure must be recorded in state.warnings so the Scan Summary \
+             and the Files tab badge show it; got: {:?}",
+            app.state.warnings
+        );
+    }
 
     /// Ctrl+O must leave the session intact and let the `pending_scan` handler
     /// do the reset.  Clearing here would set `tail_active = false` and

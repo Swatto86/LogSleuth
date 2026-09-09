@@ -281,6 +281,21 @@ fn main() {
     // Create application state
     let mut state = app::state::AppState::new(profiles, cli.debug);
 
+    // Surface profile load failures in the UI as well as the log: tracing is
+    // off unless --debug or a log level is configured, so a user whose custom
+    // profile is broken would otherwise get no feedback at all.
+    for err in &profile_errors {
+        if state.warnings.len() < util::constants::MAX_WARNINGS {
+            state.warnings.push(format!("Profile load failed: {err}"));
+        }
+    }
+    if !profile_errors.is_empty() {
+        state.status_message = format!(
+            "\u{26a0} {} profile file(s) failed to load. See View > Scan Summary for details.",
+            profile_errors.len()
+        );
+    }
+
     // Apply config.toml values where they override defaults (Rule 13).
     state.max_files_limit = app_config.max_files;
     state.max_scan_depth = app_config.max_depth;
