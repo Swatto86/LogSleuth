@@ -47,6 +47,22 @@ impl LogSleuthApp {
         }
     }
 
+    /// Queue a full scan of `dir`, as requested by Ctrl+O.
+    ///
+    /// This must NOT call `AppState::clear()` itself.  `clear()` sets
+    /// `tail_active = false` and `tail_base_count = 0` without stopping the
+    /// background tail thread, so the `if self.state.tail_active` guard in the
+    /// `pending_scan` handler would no longer fire: the thread would be
+    /// orphaned, keep injecting entries from the previous directory, and the
+    /// reset baseline would make `evict_tail_entries` drain the new session's
+    /// freshly scanned entries from index 0.  The `pending_scan` handler
+    /// performs the reset in the correct order -- stop the tail and the dir
+    /// watcher first, then clear.
+    pub fn request_open_directory(&mut self, dir: std::path::PathBuf) {
+        self.state.scan_path = Some(dir.clone());
+        self.state.pending_scan = Some(dir);
+    }
+
     #[cfg(windows)]
     fn queue_missing_windows_event_logs(&mut self) {
         let selection = match crate::app::windows_event_logs::collect_event_viewer_log_files() {
@@ -1394,11 +1410,7 @@ impl eframe::App for LogSleuthApp {
             if self.state.shortcut_open_directory {
                 self.state.shortcut_open_directory = false;
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                    let date_input = self.state.discovery_date_input.clone();
-                    self.state.clear();
-                    self.state.discovery_date_input = date_input;
-                    self.state.scan_path = Some(dir.clone());
-                    self.state.pending_scan = Some(dir);
+                    self.request_open_directory(dir);
                 }
             }
         }
@@ -2093,7 +2105,51 @@ fn merge_additional_discovered_files(
 #[cfg(test)]
 mod tests {
     use super::merge_additional_discovered_files;
+    use super::LogSleuthApp;
+    use crate::app::state::AppState;
     use crate::core::model::DiscoveredFile;
+
+    /// Ctrl+O must leave the session intact and let the `pending_scan` handler
+    /// do the reset.  Clearing here would set `tail_active = false` and
+    /// `tail_base_count = 0` without stopping the tail thread, so the
+    /// `if tail_active { stop_tail() }` guard in that handler could never fire
+    /// and the orphaned thread would keep appending entries to -- and evicting
+    /// entries from -- the new session.
+    #[test]
+    fn open_directory_shortcut_leaves_tail_state_for_the_pending_scan_handler() {
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.tail_active = true;
+        app.state.entries.push(crate::core::model::LogEntry {
+            id: 0,
+            timestamp: None,
+            severity: crate::core::model::Severity::Info,
+            source_file: std::path::PathBuf::from("a.log"),
+            line_number: 1,
+            thread: None,
+            component: None,
+            message: "x".to_string(),
+            raw_text: "x".to_string(),
+            profile_id: "plain-text".to_string(),
+            file_modified: None,
+        });
+        app.state.set_tail_base();
+
+        app.request_open_directory(std::path::PathBuf::from("some-dir"));
+
+        assert!(
+            app.state.tail_active,
+            "Ctrl+O must not reset tail_active: the pending_scan handler needs it              to know the tail thread is still running and must be stopped"
+        );
+        assert_eq!(
+            app.state.tail_base_count, 1,
+            "Ctrl+O must not reset the tail baseline before the tail is stopped"
+        );
+        assert_eq!(
+            app.state.pending_scan,
+            Some(std::path::PathBuf::from("some-dir")),
+            "the scan must still be queued"
+        );
+    }
 
     fn discovered(
         path: &str,

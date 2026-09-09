@@ -2192,6 +2192,35 @@ mod tests {
         assert_eq!(state.next_entry_id(), 0);
     }
 
+    /// `clear()` wipes the live-tail bookkeeping (`tail_active` and
+    /// `tail_base_count`) but does NOT stop the background tail thread.  Any
+    /// caller of `clear()` must therefore call `TailManager::stop_tail()`
+    /// FIRST: once `tail_active` is false, the `if state.tail_active` guards in
+    /// gui.rs can no longer fire, the tail thread is orphaned, and the reset
+    /// baseline makes `evict_tail_entries` drain from index 0 -- deleting the
+    /// new session's freshly scanned entries.
+    #[test]
+    fn test_clear_resets_tail_base_count_and_tail_active() {
+        let mut state = AppState::new(vec![], false);
+        for id in 0..5u64 {
+            state.entries.push(make_entry(id, id as i64));
+        }
+        state.set_tail_base();
+        state.tail_active = true;
+        assert_eq!(state.tail_base_count, 5);
+
+        state.clear();
+
+        assert_eq!(
+            state.tail_base_count, 0,
+            "clear() resets the tail baseline, so the tail must be stopped before it is called"
+        );
+        assert!(
+            !state.tail_active,
+            "clear() resets tail_active, so a later `if tail_active` guard cannot stop the thread"
+        );
+    }
+
     /// Regression: removing entries below the live-tail baseline must shift
     /// `tail_base_count` down by the number of removed scan entries.  A stale
     /// (too-high) boundary makes ring-buffer eviction miscount the tail
