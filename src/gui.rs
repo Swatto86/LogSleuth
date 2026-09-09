@@ -63,6 +63,70 @@ impl LogSleuthApp {
         self.state.pending_scan = Some(dir);
     }
 
+    /// Queue an export instead of performing it inline.
+    ///
+    /// The write is O(filtered entries) -- up to MAX_TOTAL_ENTRIES (1,000,000)
+    /// -- and runs on the UI thread.  Doing it in the click handler means no
+    /// frame is painted while it runs, so the window blanks and Windows adds
+    /// "(Not Responding)" with no progress message of any kind.  Recording the
+    /// request here lets this frame paint the "Exporting..." status; the next
+    /// `update()` performs the write.
+    pub fn request_export(&mut self, dest: std::path::PathBuf, json: bool, entry_count: usize) {
+        let label = if json { "JSON" } else { "CSV" };
+        self.state.status_message = format!("Exporting {entry_count} entries to {label}\u{2026}");
+        self.state.pending_export = Some((dest, json));
+    }
+
+    /// Perform a queued export, if any.  Called at the top of `update()`, one
+    /// frame after the click that queued it.
+    pub fn run_pending_export(&mut self) {
+        let Some((dest, json)) = self.state.pending_export.take() else {
+            return;
+        };
+        let entry_count = self.state.filtered_indices.len();
+        let filter_desc = self.state.filter_description();
+        let label = if json { "JSON" } else { "CSV" };
+        // SEC-04: atomic write via temp file + rename.
+        let tmp = dest.with_extension(if json { "json.tmp" } else { "csv.tmp" });
+        let status = {
+            let metadata = crate::core::export::ExportMetadata {
+                scan_path: self.state.scan_path.as_deref(),
+                filter_description: &filter_desc,
+                entry_count,
+            };
+            match std::fs::File::create(&tmp) {
+                Ok(f) => {
+                    let filtered_entries = self
+                        .state
+                        .filtered_indices
+                        .iter()
+                        .filter_map(|&i| self.state.entries.get(i));
+                    let result = if json {
+                        crate::core::export::export_json(filtered_entries, f, &dest, &metadata)
+                    } else {
+                        crate::core::export::export_csv(filtered_entries, f, &dest, &metadata)
+                    };
+                    match result {
+                        Ok(n) => {
+                            if let Err(e) = std::fs::rename(&tmp, &dest) {
+                                let _ = std::fs::remove_file(&tmp);
+                                format!("{label} export failed (rename): {e}")
+                            } else {
+                                format!("Exported {n} entries to {label}.")
+                            }
+                        }
+                        Err(e) => {
+                            let _ = std::fs::remove_file(&tmp);
+                            format!("{label} export failed: {e}")
+                        }
+                    }
+                }
+                Err(e) => format!("Cannot create file: {e}"),
+            }
+        };
+        self.state.status_message = status;
+    }
+
     /// Re-scan the external profiles directory and merge the results with the
     /// built-ins.  Preserves all current scan, filter and session state.
     ///
@@ -1336,6 +1400,10 @@ impl eframe::App for LogSleuthApp {
             self.reload_profiles();
         }
 
+        // Run a queued export one frame after the click, so the "Exporting..."
+        // status message is actually painted before the blocking write starts.
+        self.run_pending_export();
+
         // -----------------------------------------------------------------
         // Global keyboard shortcuts (Section 7 of the specification)
         // -----------------------------------------------------------------
@@ -1528,49 +1596,8 @@ impl eframe::App for LogSleuthApp {
                                     .set_file_name("export.csv")
                                     .save_file()
                                 {
-                                    let filter_desc = self.state.filter_description();
-                                    let metadata = crate::core::export::ExportMetadata {
-                                        scan_path: self.state.scan_path.as_deref(),
-                                        filter_description: &filter_desc,
-                                        entry_count,
-                                    };
-                                    // SEC-04: atomic write via temp file + rename
-                                    let tmp = dest.with_extension("csv.tmp");
-                                    match std::fs::File::create(&tmp) {
-                                        Ok(f) => {
-                                            let filtered_entries = self
-                                                .state
-                                                .filtered_indices
-                                                .iter()
-                                                .filter_map(|&i| self.state.entries.get(i));
-                                            match crate::core::export::export_csv(
-                                                filtered_entries,
-                                                f,
-                                                &dest,
-                                                &metadata,
-                                            ) {
-                                                Ok(n) => {
-                                                    if let Err(e) = std::fs::rename(&tmp, &dest) {
-                                                        let _ = std::fs::remove_file(&tmp);
-                                                        self.state.status_message =
-                                                            format!("CSV export failed (rename): {e}");
-                                                    } else {
-                                                        self.state.status_message =
-                                                            format!("Exported {n} entries to CSV.");
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    let _ = std::fs::remove_file(&tmp);
-                                                    self.state.status_message =
-                                                        format!("CSV export failed: {e}");
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            self.state.status_message =
-                                                format!("Cannot create file: {e}");
-                                        }
-                                    }
+                                    self.request_export(dest, false, entry_count);
+                                    ctx.request_repaint();
                                 }
                                 ui.close_menu();
                             }
@@ -1592,49 +1619,8 @@ impl eframe::App for LogSleuthApp {
                                     .set_file_name("export.json")
                                     .save_file()
                                 {
-                                    let filter_desc = self.state.filter_description();
-                                    let metadata = crate::core::export::ExportMetadata {
-                                        scan_path: self.state.scan_path.as_deref(),
-                                        filter_description: &filter_desc,
-                                        entry_count,
-                                    };
-                                    // SEC-04: atomic write via temp file + rename
-                                    let tmp = dest.with_extension("json.tmp");
-                                    match std::fs::File::create(&tmp) {
-                                        Ok(f) => {
-                                            let filtered_entries = self
-                                                .state
-                                                .filtered_indices
-                                                .iter()
-                                                .filter_map(|&i| self.state.entries.get(i));
-                                            match crate::core::export::export_json(
-                                                filtered_entries,
-                                                f,
-                                                &dest,
-                                                &metadata,
-                                            ) {
-                                                Ok(n) => {
-                                                    if let Err(e) = std::fs::rename(&tmp, &dest) {
-                                                        let _ = std::fs::remove_file(&tmp);
-                                                        self.state.status_message =
-                                                            format!("JSON export failed (rename): {e}");
-                                                    } else {
-                                                        self.state.status_message =
-                                                            format!("Exported {n} entries to JSON.");
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    let _ = std::fs::remove_file(&tmp);
-                                                    self.state.status_message =
-                                                        format!("JSON export failed: {e}");
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            self.state.status_message =
-                                                format!("Cannot create file: {e}");
-                                        }
-                                    }
+                                    self.request_export(dest, true, entry_count);
+                                    ctx.request_repaint();
                                 }
                                 ui.close_menu();
                             }
@@ -2124,6 +2110,66 @@ mod tests {
     use super::LogSleuthApp;
     use crate::app::state::AppState;
     use crate::core::model::DiscoveredFile;
+
+    fn entry(id: u64) -> crate::core::model::LogEntry {
+        crate::core::model::LogEntry {
+            id,
+            timestamp: None,
+            severity: crate::core::model::Severity::Info,
+            source_file: std::path::PathBuf::from("a.log"),
+            line_number: id,
+            thread: None,
+            component: None,
+            message: format!("message {id}"),
+            raw_text: format!("message {id}"),
+            profile_id: "plain-text".to_string(),
+            file_modified: None,
+        }
+    }
+
+    /// The export click handler must only QUEUE the work.  Writing up to a
+    /// million entries inside the handler means no frame is painted while it
+    /// runs: the window blanks, Windows marks it "(Not Responding)" and the
+    /// user sees no progress message at all.
+    #[test]
+    fn export_click_defers_the_write_and_shows_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("export.csv");
+
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.entries = (0..3).map(entry).collect();
+        app.state.filtered_indices = vec![0, 1, 2];
+
+        app.request_export(dest.clone(), false, 3);
+
+        assert!(
+            !dest.exists(),
+            "the click must not perform the write; it blocks the frame that would show progress"
+        );
+        assert!(
+            app.state.status_message.contains("Exporting"),
+            "the user must see an in-progress message, got: {}",
+            app.state.status_message
+        );
+        assert!(app.state.pending_export.is_some(), "the export must be queued");
+
+        // The next frame performs it.
+        app.run_pending_export();
+
+        assert!(dest.exists(), "the deferred export must write the file");
+        assert!(
+            app.state.status_message.contains("Exported 3 entries to CSV"),
+            "got: {}",
+            app.state.status_message
+        );
+        assert!(app.state.pending_export.is_none());
+        let body = std::fs::read_to_string(&dest).unwrap();
+        assert!(body.starts_with("# LogSleuth Export"));
+        assert!(
+            !dir.path().join("export.csv.tmp").exists(),
+            "no .tmp file may be left behind on success"
+        );
+    }
 
     /// A profile file that fails to parse must be reported to the user, not
     /// only to the tracing log (which is off unless --debug or a log level is

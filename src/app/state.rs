@@ -324,6 +324,11 @@ pub struct AppState {
     /// Consumed and cleared by `gui.rs` (calls `clear()` then `start_scan_files`).
     pub pending_replace_files: Option<Vec<PathBuf>>,
 
+    /// Deferred export request: `(destination, is_json)`.  Set by the
+    /// File > Export menu so the "Exporting..." status is painted before the
+    /// blocking write starts; consumed by `gui.rs` on the next frame.
+    pub pending_export: Option<(PathBuf, bool)>,
+
     /// Set by any UI panel to request a full session reset: clears all scan
     /// results **and** the selected directory path, returning to the initial
     /// "no directory selected" state. Consumed and cleared by `gui.rs`.
@@ -572,6 +577,7 @@ impl AppState {
             total_files_found: 0,
             discovery_truncated: false,
             pending_replace_files: None,
+            pending_export: None,
             request_new_session: false,
             discovery_date_input: String::new(),
             sidebar_tab: 0,
