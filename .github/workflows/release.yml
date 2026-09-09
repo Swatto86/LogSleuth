@@ -223,6 +223,8 @@ jobs:
           name: LogSleuth ${{ inputs.tag || github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # These names are documented in README.md's Download table.
+          # Change both together.
           files: |
             LogSleuth.exe
             LogSleuth_*-setup.exe

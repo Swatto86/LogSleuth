@@ -252,8 +252,8 @@ RUST_LOG=debug cargo test -- --nocapture
 - **release.yml**: Triggered on `v*` tag push.
   - Builds release binaries on all platforms
   - Builds platform installers (NSIS, DMG, AppImage)
-  - **`build-windows-portable`** job: compiles with `RUSTFLAGS="-C target-feature=+crt-static"` and produces `LogSleuth-{VERSION}-windows-portable.exe` — a fully self-contained EXE with the MSVC CRT statically linked; no installation or redistributable required
-  - Creates GitHub Release with 4 Windows artifacts: installer + portable EXE; macOS DMG; Linux AppImage
+  - **`build-windows-portable`** job: compiles with `RUSTFLAGS="-C target-feature=+crt-static"` and produces `LogSleuth.exe` — a fully self-contained EXE with the MSVC CRT statically linked; no installation or redistributable required
+  - Creates a GitHub Release with 6 artefacts: `LogSleuth_{VERSION}_x64-setup.exe`, `LogSleuth.exe`, `LogSleuth-{VERSION}.dmg`, `LogSleuth-macos`, `LogSleuth-{VERSION}.AppImage`, `LogSleuth-linux` — the same names documented in README.md's Download table
 
 ### Release
 

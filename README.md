@@ -8,10 +8,12 @@ Grab the latest release from the [Releases page](https://github.com/swatto86/Log
 
 | File | Description |
 |------|-------------|
-| `LogSleuth-Setup-{version}.exe` | Windows installer — Start Menu shortcut, per-user or per-machine |
-| `LogSleuth-{version}-windows-portable.exe` | Windows portable — single EXE, no installation required, no runtime dependencies |
-| `LogSleuth-{version}.dmg` | macOS disk image |
+| `LogSleuth_{version}_x64-setup.exe` | Windows installer — per-machine, Start Menu shortcut (requires administrator) |
+| `LogSleuth.exe` | Windows portable — single EXE, no installation required, no runtime dependencies |
+| `LogSleuth-{version}.dmg` | macOS disk image (unsigned — right-click ▸ Open on first launch) |
+| `LogSleuth-macos` | macOS bare binary — `chmod +x LogSleuth-macos` then run |
 | `LogSleuth-{version}.AppImage` | Linux AppImage (no installation required) |
+| `LogSleuth-linux` | Linux bare binary — `chmod +x LogSleuth-linux` then run |
 
 > The portable Windows EXE has the MSVC CRT statically linked and runs on any Windows 10/11 machine without the Visual C++ Redistributable.
 
