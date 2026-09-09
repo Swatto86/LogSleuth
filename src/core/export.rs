@@ -16,6 +16,22 @@ pub struct ExportMetadata<'a> {
     pub entry_count: usize,
 }
 
+/// Neutralise spreadsheet formula injection (CWE-1236).
+///
+/// Excel, LibreOffice Calc and Google Sheets evaluate a cell whose first
+/// character is `=`, `+`, `-`, `@`, a tab or a carriage return.  Log content is
+/// untrusted input -- a URL, a User-Agent or a failed-login username written by
+/// a remote party -- so such fields are prefixed with an apostrophe, which
+/// spreadsheets strip and treat as a literal-text marker.
+fn sanitise_csv_field(value: &str) -> std::borrow::Cow<'_, str> {
+    match value.chars().next() {
+        Some('=') | Some('+') | Some('-') | Some('@') | Some('\t') | Some('\r') => {
+            std::borrow::Cow::Owned(format!("'{value}"))
+        }
+        _ => std::borrow::Cow::Borrowed(value),
+    }
+}
+
 /// Export filtered entries to CSV format.
 ///
 /// Writes a metadata comment block followed by: timestamp, severity,
@@ -70,16 +86,22 @@ pub fn export_csv<'a, W: Write>(
     let mut count = 0;
     for entry in entries {
         let ts = entry.timestamp.map(|t| t.to_rfc3339()).unwrap_or_default();
+        let line_no = entry.line_number.to_string();
+        let source_raw = entry.source_file.display().to_string();
+        let source = sanitise_csv_field(&source_raw);
+        let thread = sanitise_csv_field(entry.thread.as_deref().unwrap_or(""));
+        let component = sanitise_csv_field(entry.component.as_deref().unwrap_or(""));
+        let message = sanitise_csv_field(&entry.message);
 
         csv_writer
             .write_record([
-                &ts,
+                ts.as_str(),
                 entry.severity.label(),
-                &entry.source_file.display().to_string(),
-                &entry.line_number.to_string(),
-                entry.thread.as_deref().unwrap_or(""),
-                entry.component.as_deref().unwrap_or(""),
-                &entry.message,
+                source.as_ref(),
+                line_no.as_str(),
+                thread.as_ref(),
+                component.as_ref(),
+                message.as_ref(),
             ])
             .map_err(|e| ExportError::Csv {
                 path: export_path.to_path_buf(),
@@ -169,6 +191,42 @@ mod tests {
             profile_id: "test".to_string(),
             file_modified: None,
         }
+    }
+
+    #[test]
+    fn test_csv_export_neutralises_formula_injection() {
+        let mut entries = vec![
+            make_entry(1, "=cmd|'/c calc'!A1"),
+            make_entry(2, "+1+1"),
+            make_entry(3, "@SUM(A1:A2)"),
+            make_entry(4, "-2+3"),
+            make_entry(5, "harmless message"),
+        ];
+        entries[0].component = Some("=1+1".to_string());
+        entries[0].thread = Some("@evil".to_string());
+
+        let mut buf = Vec::new();
+        let meta = ExportMetadata {
+            scan_path: None,
+            filter_description: "No filter (all entries)",
+            entry_count: entries.len(),
+        };
+        export_csv(entries.iter(), &mut buf, &PathBuf::from("out.csv"), &meta).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        // No data cell may begin with a formula trigger character.
+        assert!(
+            output.contains("'=cmd|'"),
+            "message formula must be prefixed: {output}"
+        );
+        assert!(output.contains("'+1+1"), "leading + must be prefixed");
+        assert!(output.contains("'@SUM(A1:A2)"), "leading @ must be prefixed");
+        assert!(output.contains("'-2+3"), "leading - must be prefixed");
+        assert!(output.contains("'=1+1"), "component formula must be prefixed");
+        assert!(output.contains("'@evil"), "thread formula must be prefixed");
+        // Ordinary text is untouched.
+        assert!(output.contains("harmless message"));
+        assert!(!output.contains("'harmless message"));
     }
 
     #[test]
