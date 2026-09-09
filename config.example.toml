@@ -14,6 +14,7 @@
 # include_patterns = ["*.log", "*.log.[0-9]*", "*.txt"]
 # exclude_patterns = ["*.gz", "*.zip", "*.bak", "*.tmp", "node_modules", ".git", "__pycache__"]
 
+# NOTE: the keys below are reserved and NOT yet implemented; they are ignored.
 [parsing]
 # chunk_size_bytes = 65536        # Read chunk size (64 KB)
 # max_entry_size_bytes = 65536    # Maximum single entry size (64 KB)
@@ -25,9 +26,11 @@
 # theme = "dark"                  # "dark" or "light"
 # timestamp_display = "local"     # "local" or "utc"
 # correlation_window_seconds = 30 # Cross-log correlation time window
+# NOTE: reserved and NOT yet implemented; ignored.
 # filter_debounce_ms = 300        # Text filter input debounce delay
 
 [export]
+# NOTE: reserved and NOT yet implemented; ignored.
 # large_export_warning_threshold = 100000  # Warn before exporting this many entries
 
 [profiles]

@@ -281,6 +281,13 @@ pub struct AppState {
     /// Changes are applied to the next scan/watch start.
     pub max_scan_depth: usize,
 
+    /// Include glob patterns used for discovery and the directory watcher.
+    /// Seeded from `[discovery] include_patterns` in config.toml.
+    pub include_patterns: Vec<String>,
+    /// Exclude glob patterns used for discovery and the directory watcher.
+    /// Seeded from `[discovery] exclude_patterns` in config.toml.
+    pub exclude_patterns: Vec<String>,
+
     /// How often the live tail background thread polls watched files (ms).
     /// User-configurable via the Options dialog; defaults to TAIL_POLL_INTERVAL_MS.
     /// Applied when a new tail session is started.
@@ -569,6 +576,14 @@ impl AppState {
             max_files_limit: crate::util::constants::DEFAULT_MAX_FILES,
             max_total_entries: crate::util::constants::MAX_TOTAL_ENTRIES,
             max_scan_depth: crate::util::constants::DEFAULT_MAX_DEPTH,
+            include_patterns: crate::util::constants::DEFAULT_INCLUDE_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            exclude_patterns: crate::util::constants::DEFAULT_EXCLUDE_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             tail_poll_interval_ms: crate::util::constants::TAIL_POLL_INTERVAL_MS,
             dir_watch_poll_interval_ms: crate::util::constants::DIR_WATCH_POLL_INTERVAL_MS,
             show_options: false,

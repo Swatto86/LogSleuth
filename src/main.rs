@@ -299,6 +299,8 @@ fn main() {
     // Apply config.toml values where they override defaults (Rule 13).
     state.max_files_limit = app_config.max_files;
     state.max_scan_depth = app_config.max_depth;
+    state.include_patterns = app_config.include_patterns.clone();
+    state.exclude_patterns = app_config.exclude_patterns.clone();
     state.dark_mode = app_config.dark_mode;
     state.correlation_window_secs = app_config.correlation_window_secs;
     state.correlation_window_input = app_config.correlation_window_secs.to_string();

@@ -488,6 +488,8 @@ impl eframe::App for LogSleuthApp {
                             DirWatchConfig {
                                 poll_interval_ms: self.state.dir_watch_poll_interval_ms,
                                 max_depth: self.state.max_scan_depth,
+                                include_patterns: self.state.include_patterns.clone(),
+                                exclude_patterns: self.state.exclude_patterns.clone(),
                                 // Forward modified_since so the watcher applies the same
                                 // date gate as the initial scan.  Without this, files that
                                 // predate the filter are not in known_paths (the scan never
@@ -991,6 +993,8 @@ impl eframe::App for LogSleuthApp {
                     max_files: self.state.max_files_limit,
                     max_depth: self.state.max_scan_depth,
                     max_total_entries: self.state.max_total_entries,
+                    include_patterns: self.state.include_patterns.clone(),
+                    exclude_patterns: self.state.exclude_patterns.clone(),
                     modified_since,
                     ..DiscoveryConfig::default()
                 },
@@ -1024,6 +1028,8 @@ impl eframe::App for LogSleuthApp {
                     max_files: self.state.max_files_limit,
                     max_depth: self.state.max_scan_depth,
                     max_total_entries: self.state.max_total_entries,
+                    include_patterns: self.state.include_patterns.clone(),
+                    exclude_patterns: self.state.exclude_patterns.clone(),
                     modified_since,
                     ..DiscoveryConfig::default()
                 },
@@ -1078,6 +1084,8 @@ impl eframe::App for LogSleuthApp {
                     max_files: self.state.max_files_limit,
                     max_depth: self.state.max_scan_depth,
                     max_total_entries: self.state.max_total_entries,
+                    include_patterns: self.state.include_patterns.clone(),
+                    exclude_patterns: self.state.exclude_patterns.clone(),
                     modified_since,
                     ..DiscoveryConfig::default()
                 },
@@ -1911,6 +1919,8 @@ impl eframe::App for LogSleuthApp {
                             // Bug fix: forward user-configured depth limit so the
                             // watcher covers the same directory tree as the scan.
                             max_depth: self.state.max_scan_depth,
+                            include_patterns: self.state.include_patterns.clone(),
+                            exclude_patterns: self.state.exclude_patterns.clone(),
                             modified_since: None,
                             ..DirWatchConfig::default()
                         },

@@ -169,6 +169,10 @@ pub struct AppConfig {
     pub max_depth: usize,
     /// Maximum files to discover per scan.
     pub max_files: usize,
+    /// Include glob patterns for discovery.
+    pub include_patterns: Vec<String>,
+    /// Exclude glob patterns for discovery.
+    pub exclude_patterns: Vec<String>,
 
     // -- UI --
     /// Dark mode (true) or light mode (false).
@@ -190,6 +194,14 @@ impl Default for AppConfig {
         Self {
             max_depth: constants::DEFAULT_MAX_DEPTH,
             max_files: constants::DEFAULT_MAX_FILES,
+            include_patterns: constants::DEFAULT_INCLUDE_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            exclude_patterns: constants::DEFAULT_EXCLUDE_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             dark_mode: true,
             correlation_window_secs: constants::DEFAULT_CORRELATION_WINDOW_SECS,
             font_size: constants::DEFAULT_FONT_SIZE,
@@ -278,6 +290,50 @@ pub fn load_config(config_dir: &Path) -> (AppConfig, Vec<String>) {
         }
     }
 
+    // -- Discovery: include_patterns / exclude_patterns --
+    if let Some(ref pats) = raw.discovery.include_patterns {
+        if pats.is_empty() {
+            warnings.push("[discovery] include_patterns is empty. Using defaults.".to_string());
+        } else {
+            config.include_patterns = pats.clone();
+        }
+    }
+    if let Some(ref pats) = raw.discovery.exclude_patterns {
+        config.exclude_patterns = pats.clone();
+    }
+
+    // -- Keys that are parsed for forward compatibility but not implemented --
+    // Accepting them silently is worse than ignoring them: the loader warns
+    // about out-of-range values for every key it does honour, so silence reads
+    // as acceptance.
+    let mut unimplemented: Vec<&str> = Vec::new();
+    if raw.parsing.chunk_size_bytes.is_some() {
+        unimplemented.push("[parsing] chunk_size_bytes");
+    }
+    if raw.parsing.max_entry_size_bytes.is_some() {
+        unimplemented.push("[parsing] max_entry_size_bytes");
+    }
+    if raw.parsing.large_file_threshold_bytes.is_some() {
+        unimplemented.push("[parsing] large_file_threshold_bytes");
+    }
+    if raw.parsing.worker_threads.is_some() {
+        unimplemented.push("[parsing] worker_threads");
+    }
+    if raw.parsing.content_detection_lines.is_some() {
+        unimplemented.push("[parsing] content_detection_lines");
+    }
+    if raw.ui.filter_debounce_ms.is_some() {
+        unimplemented.push("[ui] filter_debounce_ms");
+    }
+    if raw.export.large_export_warning_threshold.is_some() {
+        unimplemented.push("[export] large_export_warning_threshold");
+    }
+    for key in unimplemented {
+        warnings.push(format!(
+            "{key} is not implemented in this version and is ignored."
+        ));
+    }
+
     // -- UI: theme --
     if let Some(ref theme) = raw.ui.theme {
         match theme.to_lowercase().as_str() {
@@ -349,4 +405,62 @@ pub fn load_config(config_dir: &Path) -> (AppConfig, Vec<String>) {
     }
 
     (config, warnings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Write a config.toml where `load_config` looks for it: one level above
+    /// the config dir it is given.
+    fn write_config(body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("config");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(dir.path().join(constants::CONFIG_FILE_NAME), body).unwrap();
+        (dir, cfg_dir)
+    }
+
+    /// config.example.toml advertises [discovery] include_patterns, but the
+    /// value was parsed into RawConfig and never read: discovery always used
+    /// DEFAULT_INCLUDE_PATTERNS. There is no Options-dialog equivalent, so
+    /// config.toml is the only advertised way to scan e.g. *.out files.
+    #[test]
+    fn test_include_patterns_from_config_are_applied() {
+        let (_dir, cfg_dir) = write_config("[discovery]\ninclude_patterns = [\"*.out\"]\n");
+        let (cfg, warnings) = load_config(&cfg_dir);
+        assert_eq!(cfg.include_patterns, vec!["*.out".to_string()]);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn test_exclude_patterns_from_config_are_applied() {
+        let (_dir, cfg_dir) = write_config("[discovery]\nexclude_patterns = [\"*.bak\"]\n");
+        let (cfg, _warnings) = load_config(&cfg_dir);
+        assert_eq!(cfg.exclude_patterns, vec!["*.bak".to_string()]);
+    }
+
+    /// A key that is accepted but does nothing must say so. The loader warns
+    /// about out-of-range values for every key it honours, so silence here
+    /// reads as acceptance.
+    #[test]
+    fn test_unimplemented_keys_warn() {
+        let (_dir, cfg_dir) = write_config("[parsing]\nworker_threads = 4\n");
+        let (_cfg, warnings) = load_config(&cfg_dir);
+        assert!(
+            warnings.iter().any(|w| w.contains("worker_threads")),
+            "an ignored key must produce a warning, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_config_file_uses_builtin_pattern_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cfg, warnings) = load_config(&dir.path().join("config"));
+        assert!(warnings.is_empty());
+        assert_eq!(
+            cfg.include_patterns.len(),
+            constants::DEFAULT_INCLUDE_PATTERNS.len()
+        );
+    }
 }
