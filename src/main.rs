@@ -326,12 +326,12 @@ fn main() {
 
     // Try restoring the previous session.  All errors are silently ignored:
     // a missing or corrupt file simply starts the app in a clean state.
-    // Only read by the Windows Event Viewer auto-load below.
-    #[cfg_attr(not(windows), allow(unused_variables, unused_mut, unused_assignments))]
-    let mut session_restored = false;
-    if let Some(session) = app::session::load(&session_file) {
+    let session = app::session::load(&session_file);
+    // Only needed by the Windows Event Viewer auto-load below.
+    #[cfg(windows)]
+    let session_restored = session.is_some();
+    if let Some(session) = session {
         tracing::info!(path = %session_file.display(), "Restoring previous session");
-        session_restored = true;
         let has_scan = session.scan_path.is_some();
         state.restore_from_session(session);
         // Queue the re-scan via initial_scan (not pending_scan) so the
