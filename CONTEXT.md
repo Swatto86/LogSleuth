@@ -17,3 +17,9 @@ builds use `powershell -File scripts/build-installer.ps1`, deriving the version 
 
 Version 1.1.3 reconciles the saved review with both sets of unfinished local fixes;
 see [docs/review-1.1.3.md](docs/review-1.1.3.md) and [CHANGELOG.md](CHANGELOG.md).
+
+The 1.2.0 workspace keeps everyday actions on a wrapping toolbar and search above
+its timeline. Sources show actual load status; advanced filters and scan controls
+are expandable. The bottom inspector is allocated only for a selected entry.
+The UI uses the existing request/worker paths; session and configuration formats
+are unchanged. `ui/workspace.rs` emits dialog/export actions to the GUI owner.

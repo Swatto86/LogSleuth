@@ -54,7 +54,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         .color(egui::Color32::from_rgb(156, 163, 175)),
                     );
                 });
-            } else if state.filter_state.hide_all_sources {
+            } else if state.filter_state.hide_all_sources
+                || (state.entries.is_empty()
+                    && state
+                        .discovered_files
+                        .iter()
+                        .all(|file| file.parsing_skipped))
+            {
                 // ---- State 2: files discovered/loaded but nothing selected ----
                 let n = state.discovered_files.len();
                 let word = if n == 1 { "file" } else { "files" };
@@ -74,7 +80,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new(
-                            "Tick files in the Files tab to load and view their entries.\n\
+                            "Tick files in the Sources tab to load and view their entries.\n\
                              Use \u{201c}Select all\u{201d} to load everything at once.",
                         )
                         .color(egui::Color32::from_rgb(156, 163, 175)),
@@ -190,7 +196,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     let row_height = theme::row_height(font_size);
 
     // Sort order toolbar -- compact single-line bar above the scroll area.
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new("Select a row to inspect · Shift selects a range").small().weak());
         let (sort_label, sort_hint) = if state.sort_descending {
             (
                 "\u{2193} Newest first",
@@ -298,6 +305,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("?");
+            let display_file = if file_name.chars().count() > 26 {
+                format!("{}…", file_name.chars().take(25).collect::<String>())
+            } else {
+                file_name.to_owned()
+            };
             let first_line = entry.message.lines().next().unwrap_or(&entry.message);
 
             let font = egui::FontId::monospace(font_size);
@@ -314,7 +326,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 },
             );
             row_job.append(
-                &format!("{} | {} | {}", ts, file_name, first_line),
+                &format!("{ts}  {display_file:<26}  {first_line}"),
                 0.0,
                 TextFormat {
                     font_id: font.clone(),
@@ -337,23 +349,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     );
                 }
             }
-
-            // Severity accent underline — a 2 px strip at the bottom of the
-            // row in the severity colour.  Gives a clear visual cue without
-            // washing out the entire row background.
-            // Only Critical / Error / Warning get an underline.
-            let show_severity_accent = matches!(
-                entry.severity,
-                crate::core::model::Severity::Critical
-                    | crate::core::model::Severity::Error
-                    | crate::core::model::Severity::Warning
-            );
-
-            // Save cursor position and available width BEFORE the row is
-            // laid out, so we can paint the severity underline AFTER the
-            // row content (fixing z-order: underline on top of selection).
-            let row_top = ui.cursor().min;
-            let full_width = ui.available_width();
 
             // Teal tint on correlated rows (drawn first so that the gold
             // bookmark tint on bookmarked+correlated rows takes visual priority).
@@ -400,7 +395,8 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             // Each row: 4 px coloured file stripe | star button | selectable label
             let response = ui
                 .horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                    ui.spacing_mut().button_padding.y = 2.0;
                     // Coloured left stripe — visual CMTrace-style file indicator.
                     let (bar_rect, _) =
                         ui.allocate_exact_size(egui::vec2(4.0, row_height), egui::Sense::hover());
@@ -437,7 +433,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                         bookmark_toggle = Some(entry_id);
                     }
 
-                    ui.selectable_label(is_selected, row_job)
+                    ui.add(egui::SelectableLabel::new(is_selected, row_job))
                 })
                 .inner;
 
@@ -501,16 +497,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                     .italics(),
                 );
             });
-
-            // Paint severity accent underline AFTER the row content so it
-            // renders on top of the selection/hover highlight (z-order fix).
-            if show_severity_accent {
-                let underline_rect = egui::Rect::from_min_size(
-                    egui::pos2(row_top.x, row_top.y + row_height - 2.0),
-                    egui::vec2(full_width, 2.0),
-                );
-                ui.painter().rect_filled(underline_rect, 0.0, sev_colour);
-            }
         }
     });
 

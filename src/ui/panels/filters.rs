@@ -12,7 +12,7 @@ use crate::ui::theme;
 
 /// Render the filter controls sidebar section.
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("Filters")
+    ui.heading("Refine your results")
         .on_hover_text("Narrow down which log entries are shown in the timeline. Filters are combined: an entry must match all active filters to appear.");
     ui.separator();
 
@@ -47,6 +47,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     // Single row -- severity presets + utility actions combined.
     ui.horizontal_wrapped(|ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         let fuzzy = state.filter_state.fuzzy;
         if ui
             .small_button("Errors only")
@@ -64,7 +65,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.apply_filters();
         }
         if ui
-            .small_button("Errors + Warn")
+            .small_button("Errors + warnings")
             .on_hover_text("Show Critical, Error, and Warning entries")
             .clicked()
         {
@@ -80,7 +81,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         // Single click brings up the most recent problem signals across all loaded files,
         // and continues to show live tail entries that fall within the advancing window.
         if ui
-            .small_button("Err+Warn+15m")
+            .small_button("Recent problems (15m)")
             .on_hover_text(
                 "Show only Error / Warning entries from the last 15 minutes.\n\
                  When Live Tail is active the window advances automatically.",
@@ -98,7 +99,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
             state.apply_filters();
         }
         if ui
-            .small_button("Clear")
+            .small_button("Reset filters")
             .on_hover_text("Remove all active filters and show every entry")
             .clicked()
         {
@@ -154,7 +155,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 )
             } else {
                 (
-                    "\u{d7} clear bm",
+                    "Clear bookmarks",
                     "Remove all bookmarks (you will be asked to confirm)",
                     egui::Color32::from_rgb(156, 163, 175),
                 )
@@ -177,36 +178,48 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(6.0);
     ui.separator();
 
-    // Severity checkboxes with severity-coloured labels
-    ui.label("Severity:").on_hover_text(
-        "Check the severity levels you want to see. Unchecked levels are hidden from the timeline.",
-    );
+    // Explicit All option reflects the engine's empty-set-means-all semantics.
+    ui.label("Severity:")
+        .on_hover_text("Choose one or more levels to include, or All levels to show everything.");
     let mut changed = false;
-    for severity in Severity::all() {
-        let colour = theme::severity_colour(severity, state.dark_mode);
-        let label = egui::RichText::new(severity.label()).color(colour);
-        let mut checked = state.filter_state.severity_levels.contains(severity);
-        let tooltip = match severity {
-            Severity::Critical => "Fatal errors that crash or halt a service",
-            Severity::Error => "Failures requiring attention but not necessarily fatal",
-            Severity::Warning => "Potential problems or degraded conditions",
-            Severity::Info => "Normal operational messages",
-            Severity::Debug => "Verbose diagnostic output for developers",
-            Severity::Unknown => "Entries whose severity could not be determined",
-        };
+    ui.horizontal_wrapped(|ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         if ui
-            .checkbox(&mut checked, label)
-            .on_hover_text(tooltip)
-            .changed()
+            .selectable_label(
+                !state.filter_state.has_active_severity_filter(),
+                "All levels",
+            )
+            .clicked()
         {
-            if checked {
-                state.filter_state.severity_levels.insert(*severity);
-            } else {
-                state.filter_state.severity_levels.remove(severity);
-            }
+            state.filter_state.severity_levels.clear();
             changed = true;
         }
-    }
+        for severity in Severity::all() {
+            let colour = theme::severity_colour(severity, state.dark_mode);
+            let label = egui::RichText::new(severity.label()).color(colour);
+            let checked = state.filter_state.severity_levels.contains(severity);
+            let tooltip = match severity {
+                Severity::Critical => "Fatal errors that crash or halt a service",
+                Severity::Error => "Failures requiring attention but not necessarily fatal",
+                Severity::Warning => "Potential problems or degraded conditions",
+                Severity::Info => "Normal operational messages",
+                Severity::Debug => "Verbose diagnostic output for developers",
+                Severity::Unknown => "Entries whose severity could not be determined",
+            };
+            if ui
+                .selectable_label(checked, label)
+                .on_hover_text(tooltip)
+                .clicked()
+            {
+                if !checked {
+                    state.filter_state.severity_levels.insert(*severity);
+                } else {
+                    state.filter_state.severity_levels.remove(severity);
+                }
+                changed = true;
+            }
+        }
+    });
     if changed {
         state.apply_filters();
     }
@@ -214,66 +227,17 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(6.0);
     ui.separator();
 
-    // Text search (substring or fuzzy depending on mode toggle)
-    ui.label("Text search:")
-        .on_hover_text("Filter entries whose message contains this text. Toggle the ~ button for fuzzy (non-contiguous) matching.");
-    ui.horizontal(|ui| {
-        let re = ui
-            .text_edit_singleline(&mut state.filter_state.text_search)
-            .on_hover_text(
-                "Type to search. Matches anywhere in the log message (case-insensitive).",
-            );
-        if state.request_focus_text_search {
-            state.request_focus_text_search = false;
-            re.request_focus();
-        }
-        if re.changed() {
-            // Debounce: mark filter dirty rather than calling apply_filters()
-            // immediately.  The render loop fires apply_filters() once the text
-            // has been unchanged for FILTER_DEBOUNCE_MS ms, preventing an O(n)
-            // filter pass on every individual keystroke.
-            state.filter_dirty_at = Some(std::time::Instant::now());
-        }
-        // Fuzzy mode toggle button: lights up when active
-        let fuzzy_colour = if state.filter_state.fuzzy {
-            egui::Color32::from_rgb(96, 165, 250) // blue-ish when active
-        } else {
-            ui.style().visuals.text_color()
-        };
-        let fuzzy_btn = ui.add(
-            egui::Button::new(egui::RichText::new("~").color(fuzzy_colour))
-                .small()
-                .min_size(egui::vec2(18.0, 0.0)),
-        );
-        if fuzzy_btn
-            .on_hover_text(
-                "Toggle fuzzy matching.\n\
-                 When ON, your search term is treated as a sequence of characters \
-                 that must all appear in order, but not necessarily adjacent \
-                 -- e.g. \"cnerr\" matches \"Connection error\".\n\
-                 When OFF, only exact substring matches are shown.",
-            )
-            .clicked()
-        {
-            state.filter_state.fuzzy = !state.filter_state.fuzzy;
-            state.apply_filters();
-        }
-    });
-    // Mode label under the search box
-    if !state.filter_state.text_search.is_empty() {
-        ui.label(
-            egui::RichText::new(if state.filter_state.fuzzy {
-                "\u{223c} fuzzy"
-            } else {
-                "= exact"
-            })
+    ui.label(
+        egui::RichText::new("Search messages above the timeline · Ctrl+F")
             .small()
             .weak(),
-        );
-    }
-
-    ui.add_space(4.0);
-
+    );
+    egui::CollapsingHeader::new(if !state.filter_state.regex_pattern.is_empty()
+        || !state.filter_state.exclude_text.is_empty() || !state.filter_state.multi_search.is_empty()
+        || state.filter_state.dedup_mode != DedupMode::Off { "Advanced matching · active" } else { "Advanced matching" })
+        .id_salt("advanced_matching")
+        .open(state.request_focus_regex_search.then_some(true))
+        .show(ui, |ui| {
     // Regex search with compile-error feedback
     ui.label("Regex:")
         .on_hover_text(r"Filter entries using a regular expression. Examples: ^ERROR, timeout|refused, \d{3}\.\d{3}");
@@ -418,6 +382,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     ui.separator();
 
     // -------------------------------------------------------------------------
+    });
+    egui::CollapsingHeader::new(if state.filter_state.has_time_filter() { "Time range · active" } else { "Time range" })
+        .id_salt("time_filters").show(ui, |ui| {
     // Time range filter
     // -------------------------------------------------------------------------
     ui.label("Time range:")
@@ -715,6 +682,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     }
 
     // -------------------------------------------------------------------------
+    });
     // Time correlation overlay controls
     // -------------------------------------------------------------------------
     // Only shown once entries are loaded — the feature requires a selection.

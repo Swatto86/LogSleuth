@@ -24,15 +24,21 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Section 1: Scan controls — collapsible so the file list dominates once a
     // scan has completed.  `default_open(true)` shows everything on first run.
     // -------------------------------------------------------------------------
-    let scan_heading = if let Some(ref path) = state.scan_path {
-        let dir = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-        format!("Scan \u{2014} {dir}")
-    } else {
-        "Scan".to_string()
-    };
-
-    egui::CollapsingHeader::new(egui::RichText::new(scan_heading).strong())
-        .default_open(true)
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("Choose the logs to load").strong());
+    ui.label(
+        egui::RichText::new("Checked files contribute entries to your timeline.")
+            .small()
+            .weak(),
+    );
+    if let Some(path) = &state.scan_path {
+        ui.add(egui::Label::new(path.display().to_string()).truncate())
+            .on_hover_text(path.display().to_string());
+    }
+    egui::CollapsingHeader::new("Scan settings & troubleshooting")
+        .id_salt("source_scan_settings_v2")
+        .open(state.confirm_date_rescan.then_some(true))
+        .default_open(false)
         .show(ui, |ui| {
             render_scan_controls(ui, state);
         });
@@ -42,58 +48,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Combines discovery metadata (profile, size) with the source-file filter
     // checkboxes, eliminating the duplicate list that was in filters.rs.
     // -------------------------------------------------------------------------
-    if state.tail_active || (!state.scan_in_progress && !state.entries.is_empty()) {
-        ui.horizontal(|ui| {
-            if state.tail_active {
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("\u{25a0} Stop Tail")
-                                .color(egui::Color32::from_rgb(239, 68, 68)),
-                        )
-                        .small(),
-                    )
-                    .on_hover_text("Stop watching files for new log lines")
-                    .clicked()
-                {
-                    state.request_stop_tail = true;
-                }
-                let scroll_colour = if state.tail_auto_scroll {
-                    egui::Color32::from_rgb(34, 197, 94)
-                } else {
-                    egui::Color32::from_rgb(107, 114, 128)
-                };
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("\u{2193} Auto")
-                                .small()
-                                .color(scroll_colour),
-                        )
-                        .small()
-                        .frame(false),
-                    )
-                    .on_hover_text("Toggle auto-scroll to newest entry")
-                    .clicked()
-                {
-                    state.tail_auto_scroll = !state.tail_auto_scroll;
-                }
-            } else if ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new("\u{25cf} Live Tail")
-                            .color(egui::Color32::from_rgb(34, 197, 94)),
-                    )
-                    .small(),
-                )
-                .on_hover_text("Watch loaded files for new log lines written in real time")
-                .clicked()
-            {
-                state.request_start_tail = true;
-            }
-        });
-    }
-
     if !state.discovered_files.is_empty() {
         ui.add_space(6.0);
 
@@ -227,7 +181,13 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         });
 
         // Activity window — shown near Live Tail so related controls are grouped.
-        render_activity_window(ui, state);
+        egui::CollapsingHeader::new(if state.activity_window_secs.is_some() {
+            "Recent sources · active"
+        } else {
+            "Recent sources"
+        })
+        .id_salt("recent_sources")
+        .show(ui, |ui| render_activity_window(ui, state));
 
         ui.add_space(2.0);
 
@@ -457,21 +417,23 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         if visible.is_empty() {
             ui.label(egui::RichText::new("No files match.").small().weak());
         } else {
-            let row_height = crate::ui::theme::row_height(state.ui_font_size);
+            let row_height = state.ui_font_size * 2.0 + 24.0;
             egui::ScrollArea::vertical()
                 .id_salt("discovery_file_list")
                 .auto_shrink([false; 2])
                 .show_rows(ui, row_height, visible.len(), |ui, row_range| {
                     for display_idx in row_range {
                         let entry_idx = visible[display_idx];
-                        let (path, name, size_text, profile_text, profile_colour, mtime_text, parsing_skipped) =
+                        let (path, name, size_text, profile_text, _profile_colour, mtime_text, parsing_skipped) =
                             &file_entries[entry_idx];
 
-                        let mut checked = !state.filter_state.hide_all_sources
+                        let mut checked = !*parsing_skipped && !state.filter_state.hide_all_sources
                             && (state.filter_state.source_files.is_empty()
                                 || state.filter_state.source_files.contains(path));
 
+                        ui.vertical(|ui| {
                         ui.horizontal(|ui| {
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                             // Coloured dot matching the file's timeline stripe colour.
                             let dot_colour = state.colour_for_file(path);
                             let (dot_rect, _) =
@@ -480,7 +442,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 .circle_filled(dot_rect.center(), 4.0, dot_colour);
 
                             // Checkbox + filename.
-                            let skip_note = if *parsing_skipped { " \u{2298}" } else { "" }; // ⊘ = not loaded
                             let hover_detail = if mtime_text.is_empty() {
                                 format!("{}\n{size_text}  \u{b7}  {profile_text}", path.display())
                             } else {
@@ -507,14 +468,14 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                             } else {
                                 hover_detail
                             };
-                            let name_label = egui::RichText::new(format!("{name}{skip_note}")).small();
+                            let name_label = egui::RichText::new(name).small();
                             let name_label = if *parsing_skipped {
                                 name_label.color(egui::Color32::from_rgb(156, 163, 175))
                             } else {
                                 name_label
                             };
                             let cb_resp = ui
-                                .checkbox(&mut checked, name_label)
+                                .allocate_ui_with_layout(egui::vec2((ui.available_width() - 32.0).max(80.0), 26.0), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.checkbox(&mut checked, name_label)).inner
                                 .on_hover_text(hover_detail);
 
                             if cb_resp.changed() {
@@ -587,26 +548,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 }
                             }
 
-                            // Profile label and mtime — right-aligned, coloured by match
-                            // quality.  In right-to-left order: profile is at the far
-                            // right, mtime immediately to its left.
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        egui::RichText::new(profile_text.as_str())
-                                            .small()
-                                            .color(*profile_colour),
-                                    );
-                                    if !mtime_text.is_empty() {
-                                        ui.label(
-                                            egui::RichText::new(mtime_text.as_str())
-                                                .small()
-                                                .weak(),
-                                        );
-                                    }
-                                },
-                            );
+                        });
+                        let load_status = if *parsing_skipped { "Not loaded" } else { "Loaded" };
+                        ui.add(egui::Label::new(egui::RichText::new(format!("{load_status} · {size_text} · {profile_text}")).small().weak()).truncate())
+                            .on_hover_text(format!("{profile_text} · Modified {mtime_text}"));
                         });
                     }
                 });
@@ -861,7 +806,7 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
             if ui
                 .add_enabled(
                     !state.scan_in_progress,
-                    egui::Button::new("Open Log(s)\u{2026}"),
+                    egui::Button::new("Replace session with files…"),
                 )
                 .on_hover_text("Select individual local log files to open as a new session. On Windows, Event Viewer logs are auto-added.")
                 .clicked()
@@ -1396,16 +1341,77 @@ mod tests {
     use super::*;
 
     #[test]
+    fn first_click_on_an_unloaded_source_requests_parsing() {
+        let mut state = AppState::new(vec![], false);
+        let path = std::path::PathBuf::from("fixture.log");
+        state
+            .discovered_files
+            .push(crate::core::model::DiscoveredFile {
+                path: path.clone(),
+                size: 10,
+                modified: None,
+                profile_id: None,
+                detection_confidence: 0.0,
+                is_large: false,
+                parsing_skipped: true,
+            });
+        let ctx = egui::Context::default();
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| render(ui, &mut state));
+        });
+        fn file_label(shape: &egui::Shape) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == "fixture.log" => {
+                    Some(shape.visual_bounding_rect().center())
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(file_label),
+                _ => None,
+            }
+        }
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|s| file_label(&s.shape))
+            .expect("source must be visible");
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| render(ui, &mut state));
+            },
+        );
+        assert_eq!(state.pending_single_files, Some(vec![path]));
+    }
+
+    #[test]
     fn stop_tail_is_rendered_with_no_files_or_entries() {
         let mut state = AppState::new(vec![], false);
         state.tail_active = true;
         let ctx = egui::Context::default();
         let output = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| render(ui, &mut state));
+            egui::CentralPanel::default().show(ctx, |ui| {
+                crate::ui::workspace::toolbar(ui, &mut state, false);
+            });
         });
         fn has_stop(shape: &egui::Shape) -> bool {
             match shape {
-                egui::Shape::Text(text) => text.galley.job.text.contains("Stop Tail"),
+                egui::Shape::Text(text) => text.galley.job.text.contains("Stop live tail"),
                 egui::Shape::Vec(shapes) => shapes.iter().any(has_stop),
                 _ => false,
             }

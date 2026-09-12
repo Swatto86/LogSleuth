@@ -16,3 +16,8 @@ See [ATLAS.md](ATLAS.md) for the wider code map. These are the main ownership bo
   `src/platform/config.rs` owns application-specific configuration locations.
 - `src/ui/panels` render state and queue operations; rescan confirmation and row selection
   are shared state operations so keyboard and mouse follow the same rules.
+
+`src/ui/workspace.rs` renders the action bar, welcome flow and timeline search.
+It emits actions for file dialogs/export; `gui.rs` handles those external effects.
+Both sidebar and timeline retain virtual scrolling. Source checkboxes reflect
+whether a discovered file has actually been parsed, including metadata-only scans.

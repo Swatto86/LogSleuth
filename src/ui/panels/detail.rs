@@ -47,9 +47,11 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         .selected_index
         .and_then(|si| state.filtered_indices.get(si).copied());
 
+    ui.label(egui::RichText::new("Entry inspector").small().weak());
+
     // Coloured severity badge as a heading row
     let sev_colour = theme::severity_colour(&entry.severity, state.dark_mode);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new(entry.severity.label())
                 .strong()
@@ -73,41 +75,47 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 
     ui.separator();
 
-    // Metadata grid
-    egui::Grid::new("detail_meta_grid")
-        .num_columns(2)
-        .spacing([8.0, 2.0])
+    egui::CollapsingHeader::new("Source details")
+        .id_salt("entry_source_metadata")
         .show(ui, |ui| {
-            ui.label("File:")
-                .on_hover_text("Full path to the source log file");
-            ui.label(egui::RichText::new(entry.source_file.display().to_string()).monospace());
-            ui.end_row();
+            // Metadata grid
+            egui::Grid::new("detail_meta_grid")
+                .num_columns(2)
+                .spacing([8.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label("File:")
+                        .on_hover_text("Full path to the source log file");
+                    ui.label(
+                        egui::RichText::new(entry.source_file.display().to_string()).monospace(),
+                    );
+                    ui.end_row();
 
-            ui.label("Line:")
-                .on_hover_text("Line number in the source file where this entry starts");
-            ui.label(entry.line_number.to_string());
-            ui.end_row();
+                    ui.label("Line:")
+                        .on_hover_text("Line number in the source file where this entry starts");
+                    ui.label(entry.line_number.to_string());
+                    ui.end_row();
 
-            ui.label("Profile:")
-                .on_hover_text("The format profile used to parse this log entry");
-            ui.label(&entry.profile_id);
-            ui.end_row();
+                    ui.label("Profile:")
+                        .on_hover_text("The format profile used to parse this log entry");
+                    ui.label(&entry.profile_id);
+                    ui.end_row();
 
-            if let Some(ref thread) = entry.thread {
-                ui.label("Thread:")
-                    .on_hover_text("Thread ID or name extracted from the log entry");
-                ui.label(egui::RichText::new(thread).monospace());
-                ui.end_row();
-            }
+                    if let Some(ref thread) = entry.thread {
+                        ui.label("Thread:")
+                            .on_hover_text("Thread ID or name extracted from the log entry");
+                        ui.label(egui::RichText::new(thread).monospace());
+                        ui.end_row();
+                    }
 
-            if let Some(ref component) = entry.component {
-                ui.label("Component:")
-                    .on_hover_text("Source component or module that emitted this log entry");
-                ui.label(component);
-                ui.end_row();
-            }
+                    if let Some(ref component) = entry.component {
+                        ui.label("Component:").on_hover_text(
+                            "Source component or module that emitted this log entry",
+                        );
+                        ui.label(component);
+                        ui.end_row();
+                    }
+                });
         });
-
     ui.add_space(4.0);
 
     // -------------------------------------------------------------------------

@@ -34,6 +34,19 @@ Download `SHA256SUMS` alongside assets and compare using `Get-FileHash -Algorith
 on Windows, `sha256sum -c SHA256SUMS` on Linux, or `shasum -a 256 -c SHA256SUMS` on macOS.
 See [1.1.3 migration notes](CHANGELOG.md) for CSV header and Unix configuration changes.
 
+## Workspace
+
+Use **Open folder** or **Add log files** on the action bar to bring logs into the
+workspace. Adding files preserves the current session; replacing a session remains
+an explicitly named File menu action.
+
+The **Sources** panel shows each file's loading status. Check a file to load it;
+search messages above the timeline and use **Filters** for severity, time or advanced
+matching. **All levels** means no severity restriction. Select a timeline entry to
+open its full-message inspector, then copy, bookmark or export useful evidence.
+**Start live tail**, **Stop live tail**, **Export results** and **Settings** stay on
+the action bar. Scan settings and recent-source controls expand when needed.
+
 ## What It Does
 
 Point LogSleuth at a directory and it will:

@@ -447,12 +447,7 @@ impl Drop for LogSleuthApp {
 
 impl eframe::App for LogSleuthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Apply the user's chosen theme every frame (cheap; egui diffs internally).
-        if self.state.dark_mode {
-            ctx.set_visuals(egui::Visuals::dark());
-        } else {
-            ctx.set_visuals(egui::Visuals::light());
-        }
+        ui::theme::apply(ctx, self.state.dark_mode);
 
         // Apply the user-selected font size every frame.
         // All five standard TextStyles are scaled proportionally from the body
@@ -466,7 +461,7 @@ impl eframe::App for LogSleuthApp {
             style.text_styles = [
                 (
                     TextStyle::Small,
-                    FontId::new((size * 0.75).max(8.0), FontFamily::Proportional),
+                    FontId::new((size * 0.85).max(10.0), FontFamily::Proportional),
                 ),
                 (TextStyle::Body, FontId::new(size, FontFamily::Proportional)),
                 (
@@ -1639,7 +1634,7 @@ impl eframe::App for LogSleuthApp {
                         ui.close_menu();
                     }
                     let open_logs_btn =
-                        ui.add_enabled(!scanning, egui::Button::new("Open Log(s)\u{2026}"));
+                        ui.add_enabled(!scanning, egui::Button::new("Replace session with files…"));
                     if open_logs_btn
                         .on_hover_text(if scanning {
                             "Cannot open files while a scan is in progress"
@@ -1852,6 +1847,14 @@ impl eframe::App for LogSleuthApp {
             });
         });
 
+        let mut workspace_action = None;
+        egui::TopBottomPanel::top("workspace_actions")
+            .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(12))
+            .show(ctx, |ui| {
+                let exporting = self.export_job.is_some() || self.state.pending_export.is_some();
+                workspace_action = ui::workspace::toolbar(ui, &mut self.state, exporting);
+            });
+
         // Local flag for WATCH badge toggle; consumed after the status bar closure
         // so that `&mut self` is available to start/stop the watcher.
         // Some(true) = resume, Some(false) = pause, None = no action.
@@ -1885,9 +1888,9 @@ impl eframe::App for LogSleuthApp {
                         "Directory watch active - click to pause"
                     };
                     let watch_label = if self.state.dir_watcher_scanning {
-                        egui::RichText::new(" \u{1f441} WATCH ... ")
+                        egui::RichText::new(" Checking for new files… ")
                     } else {
-                        egui::RichText::new(" \u{1f441} WATCH ")
+                        egui::RichText::new(" Watch folder ")
                     };
                     if ui
                         .add(
@@ -1911,7 +1914,7 @@ impl eframe::App for LogSleuthApp {
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(" \u{1f441} WATCH ")
+                                egui::RichText::new(" Watch folder ")
                                     .strong()
                                     .color(egui::Color32::from_rgba_premultiplied(
                                         96, 165, 250, 110,
@@ -1927,7 +1930,7 @@ impl eframe::App for LogSleuthApp {
                     ui.separator();
                 }
                 if self.export_job.is_some() { ui.spinner(); }
-                ui.label(&self.state.status_message)
+                ui.add(egui::Label::new(&self.state.status_message).truncate())
                     .on_hover_text(&self.state.status_message);
                 // Cancel button visible only while a scan is running
                 if self.state.scan_in_progress && ui.small_button("Cancel")
@@ -2054,31 +2057,35 @@ impl eframe::App for LogSleuthApp {
             }
         }
 
-        // Detail pane (bottom)
-        egui::TopBottomPanel::bottom("detail_pane")
-            .resizable(true)
-            .default_height(ui::theme::DETAIL_PANE_HEIGHT)
-            .show(ctx, |ui| {
-                ui::panels::detail::render(ui, &mut self.state);
-            });
+        // The inspector takes space only when there is an entry to inspect.
+        if self.state.selected_entry().is_some() {
+            egui::TopBottomPanel::bottom("entry_inspector_v2")
+                .resizable(true)
+                .default_height(ui::theme::DETAIL_PANE_HEIGHT + 50.0)
+                .min_height(130.0)
+                .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(12))
+                .show(ctx, |ui| {
+                    ui::panels::detail::render(ui, &mut self.state);
+                });
+        }
 
         // Left sidebar — tab-based, resizable.
         // 'Files' tab: collapsible scan controls + unified file list with
         //              inline source-file filter checkboxes and solo buttons.
         // 'Filters' tab: severity, text, regex, time, correlation controls.
         // Resizable so users can widen it when file names are long.
-        egui::SidePanel::left("sidebar")
+        egui::SidePanel::left("workspace_sources_v2")
             .default_width(ui::theme::SIDEBAR_WIDTH)
             .min_width(300.0)
-            .max_width(800.0)
+            .max_width((ctx.screen_rect().width() * 0.5).max(300.0))
             .resizable(true)
             .show(ctx, |ui| {
                 // Tab strip — Files tab shows the file count as a badge.
                 ui.horizontal(|ui| {
                     let files_label = if self.state.discovered_files.is_empty() {
-                        "Files".to_string()
+                        "Sources".to_string()
                     } else {
-                        format!("Files ({})", self.state.discovered_files.len())
+                        format!("Sources ({})", self.state.discovered_files.len())
                     };
                     if ui
                         .selectable_label(self.state.sidebar_tab == 0, files_label)
@@ -2120,9 +2127,42 @@ impl eframe::App for LogSleuthApp {
             });
 
         // Central panel (timeline)
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui::panels::timeline::render(ui, &mut self.state);
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(18))
+            .show(ctx, |ui| {
+                if self.state.discovered_files.is_empty() && self.state.entries.is_empty() {
+                    if let Some(action) = ui::workspace::welcome(ui, &mut self.state) {
+                        workspace_action = Some(action);
+                    }
+                } else {
+                    ui::workspace::search(ui, &mut self.state);
+                    ui::panels::timeline::render(ui, &mut self.state);
+                }
+            });
+        if let Some(action) = workspace_action {
+            match action {
+                ui::workspace::Action::OpenFolder => self.state.shortcut_open_directory = true,
+                ui::workspace::Action::AddFiles => {
+                    if let Some(files) = rfd::FileDialog::new()
+                        .add_filter("Log files", crate::util::constants::LOG_FILE_EXTENSIONS)
+                        .add_filter("All files", &["*"])
+                        .pick_files()
+                    {
+                        self.state.pending_single_files = Some(files);
+                    }
+                }
+                ui::workspace::Action::Export(json) => {
+                    let extension = if json { "json" } else { "csv" };
+                    if let Some(dest) = rfd::FileDialog::new()
+                        .add_filter(extension, &[extension])
+                        .set_file_name(format!("logsleuth-results.{extension}"))
+                        .save_file()
+                    {
+                        self.request_export(dest, json, self.state.filtered_indices.len());
+                    }
+                }
+            }
+        }
 
         // Summary dialogs (modal-ish)
         ui::panels::summary::render(ctx, &mut self.state);

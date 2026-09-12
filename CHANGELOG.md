@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+- Rework the workspace with a permanent action bar, guided welcome screen and a narrower Sources panel.
+- Keep message search and matching/loaded counts above the timeline; group advanced matching and time filters into expandable sections.
+- Show explicit All levels and individual severity choices, and keep live-tail, export and settings actions easy to find.
+- Open an entry inspector on selection, prioritize the complete message and expand source metadata on demand.
+- Refresh dark/light colors, text sizing, spacing, source rows and aligned timeline text.
+- Correct metadata-only source checkboxes so one click loads a file; explain the unloaded state instead of blaming filters.
+- Preserve existing session/configuration formats, file selection, bookmarks, exports and worker behavior.
+
 ## 1.1.3
 
 - Reconcile the 36 saved review findings and pending Windows/Linux fixes.

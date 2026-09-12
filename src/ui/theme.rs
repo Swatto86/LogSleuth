@@ -99,7 +99,7 @@ pub fn file_colour(index: usize) -> Color32 {
 }
 
 /// Layout constants.
-pub const SIDEBAR_WIDTH: f32 = 460.0;
+pub const SIDEBAR_WIDTH: f32 = 340.0;
 pub const DETAIL_PANE_HEIGHT: f32 = 200.0;
 pub const STATUS_BAR_HEIGHT: f32 = 28.0;
 
@@ -107,8 +107,57 @@ pub const STATUS_BAR_HEIGHT: f32 = 28.0;
 /// font size.  Produces a consistent single-line row height that scales
 /// proportionally with the user's font-size preference.
 ///
-/// At the default 14 pt this returns 22 px; at the old hardcoded 12 pt it
-/// returns 20 px (matching the previous constant).
+/// Includes room for controls as well as the text.
 pub fn row_height(font_size: f32) -> f32 {
-    (font_size + 8.0).round()
+    (font_size + 12.0).round().max(28.0)
+}
+
+/// A consistent desktop palette with readable controls in both themes.
+pub fn apply(ctx: &egui::Context, dark: bool) {
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    let text = if dark {
+        Color32::from_rgb(230, 236, 244)
+    } else {
+        Color32::from_rgb(30, 42, 57)
+    };
+    visuals.override_text_color = Some(text);
+    visuals.widgets.noninteractive.fg_stroke.color = text;
+    visuals.widgets.inactive.fg_stroke.color = text;
+    visuals.panel_fill = if dark {
+        Color32::from_rgb(25, 30, 39)
+    } else {
+        Color32::from_rgb(247, 249, 252)
+    };
+    visuals.window_fill = visuals.panel_fill;
+    visuals.extreme_bg_color = if dark {
+        Color32::from_rgb(17, 22, 30)
+    } else {
+        Color32::WHITE
+    };
+    visuals.faint_bg_color = if dark {
+        Color32::from_rgb(31, 38, 49)
+    } else {
+        Color32::from_rgb(236, 241, 248)
+    };
+    visuals.selection.bg_fill = if dark {
+        Color32::from_rgb(39, 77, 117)
+    } else {
+        Color32::from_rgb(203, 223, 246)
+    };
+    visuals.selection.stroke.color = if dark {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(15, 38, 65)
+    };
+    ctx.set_visuals(visuals);
+    ctx.style_mut(|style| {
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        style.spacing.interact_size.y = 28.0;
+        style.spacing.window_margin = egui::Margin::same(16);
+    });
 }

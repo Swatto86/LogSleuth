@@ -30,11 +30,12 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
     }
 
     let mut open = true;
-    egui::Window::new("Options")
+    egui::Window::new("Settings")
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
-        .default_width(420.0)
+        .default_width(520.0)
+        .max_height((ctx.screen_rect().height() - 100.0).max(200.0))
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, true])

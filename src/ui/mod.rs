@@ -6,3 +6,4 @@
 
 pub mod panels;
 pub mod theme;
+pub mod workspace;
