@@ -31,8 +31,8 @@ else
     VERSION="$(grep '^version' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
 fi
 
-if [[ -z "$VERSION" ]]; then
-    echo "ERROR: could not determine version. Pass it as the first argument or ensure Cargo.toml is present." >&2
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: version must be X.Y.Z. Pass it as the first argument or ensure Cargo.toml is present." >&2
     exit 1
 fi
 

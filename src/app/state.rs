@@ -341,8 +341,7 @@ pub struct AppState {
     pub confirm_date_rescan: bool,
 
     /// Deferred export request: `(destination, is_json)`.  Set by the
-    /// File > Export menu so the "Exporting..." status is painted before the
-    /// blocking write starts; consumed by `gui.rs` on the next frame.
+    /// File > Export menu; consumed by the GUI's background export worker.
     pub pending_export: Option<(PathBuf, bool)>,
 
     /// Set by any UI panel to request a full session reset: clears all scan
@@ -1241,11 +1240,43 @@ impl AppState {
     /// reassigns.  When there is something to lose, ask first; when the session
     /// is empty, rescan straight away as before.
     pub fn request_date_rescan(&mut self) {
+        if self.scan_path.is_none() {
+            return;
+        }
         if self.entries.is_empty() && self.bookmark_count() == 0 {
             self.pending_scan = self.scan_path.clone();
         } else {
             self.confirm_date_rescan = true;
         }
+    }
+
+    /// Normal discovery is opt-in; Troubleshoot Mode explicitly opts into ingestion.
+    pub fn automatic_parse_filter(&self) -> Option<HashSet<PathBuf>> {
+        if self.troubleshoot_mode {
+            None
+        } else {
+            Some(HashSet::new())
+        }
+    }
+
+    /// Shared mouse and keyboard selection in filtered-row coordinates.
+    pub fn select_row(&mut self, idx: usize, toggle: bool, extend: bool) {
+        if idx >= self.filtered_indices.len() {
+            return;
+        }
+        if toggle {
+            if !self.selected_indices.remove(&idx) {
+                self.selected_indices.insert(idx);
+            }
+        } else if extend {
+            let anchor = self.selected_index.unwrap_or(idx);
+            self.selected_indices
+                .extend(anchor.min(idx)..=anchor.max(idx));
+        } else {
+            self.selected_indices.clear();
+        }
+        self.selected_index = Some(idx);
+        self.update_correlation();
     }
 
     /// Where an Up/Down key press should move `selected_index`.
@@ -1259,12 +1290,14 @@ impl AppState {
         if n == 0 || up == down {
             return None;
         }
-        let current = self.selected_index.unwrap_or(0);
+        let Some(current) = self.selected_index else {
+            return Some(if self.sort_descending { n - 1 } else { 0 });
+        };
         let increment = if self.sort_descending { up } else { down };
         if increment {
             (current + 1 < n).then_some(current + 1)
         } else {
-            (current > 0).then_some(current - 1)
+            current.checked_sub(1)
         }
     }
 
@@ -2336,10 +2369,15 @@ mod tests {
         assert!(state.status_message.contains("Removed 2 bookmark(s)"));
     }
 
-    /// The date quick-fill buttons trigger a rescan, and a rescan calls
-    /// clear(): every loaded entry, every bookmark and its annotation label,
-    /// the file colours and the file selection are discarded with no undo.
-    /// A filter-shaped control must not do that silently.
+    #[test]
+    fn troubleshoot_mode_opts_into_new_file_parsing() {
+        let mut state = AppState::new(vec![], false);
+        assert_eq!(state.automatic_parse_filter(), Some(HashSet::new()));
+        state.troubleshoot_mode = true;
+        assert_eq!(state.automatic_parse_filter(), None);
+    }
+
+    /// Rescanning must not silently discard entries or bookmarks.
     #[test]
     fn date_rescan_asks_before_discarding_a_populated_session() {
         let mut state = AppState::new(vec![], false);

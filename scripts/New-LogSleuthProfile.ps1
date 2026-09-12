@@ -3,7 +3,7 @@
     Generate a LogSleuth format profile (.toml) from a directory of log files.
 
 .DESCRIPTION
-    Scans a log directory, samples the first 50 lines of each unique filename-prefix
+    Scans a log directory, samples the first 20 lines of each unique filename-prefix
     group, infers the timestamp format, severity keywords, and line structure, then
     writes a ready-to-use .toml profile to the LogSleuth external profiles directory
     (or a path you specify).
@@ -37,7 +37,7 @@
 
 .PARAMETER SampleLines
     Number of lines to read from the start of each representative file.
-    Default: 50.
+    Default: 20.
 
 .PARAMETER Force
     Overwrite an existing .toml at the output path without prompting.
@@ -72,7 +72,7 @@ param(
 
     [Parameter()]
     [ValidateRange(10, 500)]
-    [int]$SampleLines = 50,
+    [int]$SampleLines = 20,
 
     [Parameter()]
     [switch]$Force
@@ -375,7 +375,7 @@ $lines.Add("")
 $lines.Add("[detection]")
 $patsToml = ($filePatterns | ForEach-Object { "`"$_`"" }) -join ", "
 $lines.Add("file_patterns = [$patsToml]")
-$lines.Add("# content_match: regex tested against the first 20 lines for auto-detection.")
+$lines.Add("# content_match: regex tested against the first 20 lines; at least 30% must match without a filename match.")
 if ($tsConfident) {
     $lines.Add("content_match = `"$(ConvertTo-TomlString $contentMatch)`"")
 } else {
@@ -408,7 +408,7 @@ if ($foundSeverity.Count -gt 0) {
     $lines.Add("# the 'level' capture group is absent or unrecognised. Most severe wins.")
     $lines.Add("[severity_override]")
     foreach ($kv in $foundSeverity.GetEnumerator() | Sort-Object Name) {
-        $key = $kv.Key.ToLower()
+        $key = $kv.Key.ToLowerInvariant()
         $lines.Add("$key = [`"$(ConvertTo-TomlString $kv.Value)`"]")
     }
 }

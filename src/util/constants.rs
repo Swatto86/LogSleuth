@@ -300,9 +300,6 @@ pub const MIN_CORRELATION_WINDOW_SECS: i64 = 1;
 /// too broad to be meaningful for most log correlation workflows.
 pub const MAX_CORRELATION_WINDOW_SECS: i64 = 3_600;
 
-/// Debounce delay in milliseconds for text filter input.
-pub const DEFAULT_FILTER_DEBOUNCE_MS: u64 = 300;
-
 /// Maximum value (in minutes) accepted by custom time-range and activity-window
 /// text inputs. Prevents meaningless multi-million-year windows and avoids the
 /// `u64` overflow edge case in `checked_mul(60)` for extremely large inputs.
@@ -388,3 +385,6 @@ pub const SESSION_FILE_NAME: &str = "session.json";
 
 /// User profiles subdirectory name.
 pub const PROFILES_DIR_NAME: &str = "profiles";
+
+/// Common file-picker extensions; All files also permits arbitrary rotations.
+pub const LOG_FILE_EXTENSIONS: &[&str] = &["log", "txt", "evtx", "log.1", "log.2", "log.3"];

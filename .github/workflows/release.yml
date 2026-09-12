@@ -19,6 +19,9 @@ on:
         description: 'Tag to build (e.g. v1.2.3)'
         required: false
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -57,7 +60,7 @@ jobs:
         # Windows 10/11 machine without the VC++ Redistributable pre-installed.
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
-        run: cargo build --release
+        run: cargo build --locked --release
 
       - name: Rename release binary
         shell: pwsh
@@ -65,8 +68,11 @@ jobs:
 
       - name: Build NSIS installer
         shell: pwsh
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          $ver = ("${{ inputs.tag || github.ref_name }}") -replace '^v',''
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Invalid release tag" }
+          $ver = $env:TAG.Substring(1)
           $exe = Get-ChildItem 'LogSleuth.exe','target/release/logsleuth.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { throw 'LogSleuth exe not found' }
           $out = Join-Path (Get-Location).Path "LogSleuth_${ver}_x64-setup.exe"
@@ -107,7 +113,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --locked --release
 
       - name: Rename release binary
         run: cp target/release/logsleuth LogSleuth-macos
@@ -167,7 +173,7 @@ jobs:
             pkg-config
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --locked --release
 
       - name: Rename release binary
         run: cp target/release/logsleuth LogSleuth-linux
@@ -216,6 +222,9 @@ jobs:
       - name: List downloaded artefacts (diagnostic)
         run: ls -lh
 
+      - name: Compute release checksums
+        run: sha256sum LogSleuth* > SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -226,6 +235,7 @@ jobs:
           # These names are documented in README.md's Download table.
           # Change both together.
           files: |
+            SHA256SUMS
             LogSleuth.exe
             LogSleuth_*-setup.exe
             LogSleuth-macos

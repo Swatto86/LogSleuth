@@ -32,11 +32,16 @@ pub struct LogSleuthApp {
     /// When true, queue missing Windows Event Viewer logs after the current
     /// scan completes so EVTX data remains available across directory/file scans.
     auto_queue_event_logs_after_scan: bool,
+    export_job: Option<std::thread::JoinHandle<String>>,
+    keyboard_input_last_frame: bool,
+    startup_warnings: Vec<String>,
 }
 
 impl LogSleuthApp {
     /// Create a new application instance with the given state.
-    pub fn new(state: AppState) -> Self {
+    pub fn new(mut state: AppState) -> Self {
+        let startup_warnings = std::mem::take(&mut state.warnings);
+        state.request_start_tail_after_scan |= state.troubleshoot_mode;
         Self {
             state,
             scan_manager: ScanManager::new(),
@@ -44,6 +49,187 @@ impl LogSleuthApp {
             dir_watcher: DirWatcher::new(),
             last_activity_filter_time: std::time::Instant::now(),
             auto_queue_event_logs_after_scan: false,
+            export_job: None,
+            keyboard_input_last_frame: false,
+            startup_warnings,
+        }
+    }
+
+    fn stop_live_tail(&mut self) {
+        self.state.request_stop_tail = false;
+        self.state.request_start_tail = false;
+        self.state.request_start_tail_after_scan = false;
+        self.tail_manager.stop_tail();
+        self.state.tail_active = false;
+        self.state.status_message = "Live tail stopped.".to_string();
+    }
+
+    fn directory_watch_config(&self) -> DirWatchConfig {
+        DirWatchConfig {
+            poll_interval_ms: self.state.dir_watch_poll_interval_ms,
+            max_depth: self.state.max_scan_depth,
+            include_patterns: self.state.include_patterns.clone(),
+            exclude_patterns: self.state.exclude_patterns.clone(),
+            modified_since: self.state.discovery_modified_since(),
+            ..DirWatchConfig::default()
+        }
+    }
+
+    fn start_pending_scan(&mut self) {
+        if let Some(path) = self.state.pending_scan.take() {
+            // Stop any current dir watcher before starting the new scan.
+            // It will be restarted automatically when ParsingCompleted fires.
+            self.dir_watcher.stop_watch();
+            self.state.dir_watcher_active = false;
+            // Bug fix: stop any running live tail before clear().  Without
+            // this, the tail thread keeps sending NewEntries from the old
+            // session's files, which contaminate the new session's entries.
+            if self.state.tail_active {
+                self.tail_manager.stop_tail();
+            }
+            // Capture the date filter BEFORE clear() — clear() does not reset
+            // discovery_date_input intentionally (user preference, not scan state).
+            let modified_since = self.state.discovery_modified_since();
+            let start_tail = self.state.request_start_tail_after_scan;
+            self.state.clear();
+            self.state.request_start_tail_after_scan = start_tail;
+            self.state.scan_in_progress = true;
+            self.state.fresh_scan_in_progress = true;
+            self.state.scan_path = Some(path.clone());
+            self.scan_manager.start_scan(
+                path,
+                self.state.profiles.clone(),
+                DiscoveryConfig {
+                    max_files: self.state.max_files_limit,
+                    max_depth: self.state.max_scan_depth,
+                    max_total_entries: self.state.max_total_entries,
+                    include_patterns: self.state.include_patterns.clone(),
+                    exclude_patterns: self.state.exclude_patterns.clone(),
+                    modified_since,
+                    ..DiscoveryConfig::default()
+                },
+                // parse_path_filter = empty set: discover and profile all files
+                // without reading any content.  Entries load only when the user
+                // ticks a file in the Files tab (parse-on-demand, Rule 17).
+                // Keeps startup fast and memory near-zero until explicit opt-in.
+                self.state.automatic_parse_filter(),
+            );
+            self.auto_queue_event_logs_after_scan = true;
+        }
+    }
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input()
+            || (self.keyboard_input_last_frame && ctx.input(|i| i.key_pressed(egui::Key::Escape)))
+        {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            for open in [
+                &mut self.state.show_options,
+                &mut self.state.show_about,
+                &mut self.state.show_log_summary,
+                &mut self.state.show_summary,
+            ] {
+                if *open {
+                    *open = false;
+                    return;
+                }
+            }
+        }
+        let scanning = self.state.scan_in_progress;
+        let mut copy = None;
+        ctx.input(|i| {
+            let ctrl = i.modifiers.ctrl || i.modifiers.mac_cmd;
+            let shift = i.modifiers.shift;
+
+            // Ctrl+O — Open directory
+            if ctrl && !shift && i.key_pressed(egui::Key::O) && !scanning {
+                self.state.shortcut_open_directory = true;
+            }
+            // Ctrl+F — Focus text search
+            if ctrl && !shift && i.key_pressed(egui::Key::F) {
+                self.state.sidebar_tab = 1;
+                self.state.request_focus_text_search = true;
+            }
+            // Ctrl+Shift+F — Focus regex search
+            if ctrl && shift && i.key_pressed(egui::Key::F) {
+                self.state.sidebar_tab = 1;
+                self.state.request_focus_regex_search = true;
+            }
+            // Ctrl+R or F5 — Rescan current directory
+            if !scanning
+                && ((ctrl && !shift && i.key_pressed(egui::Key::R)) || i.key_pressed(egui::Key::F5))
+            {
+                self.state.request_date_rescan();
+            }
+            // Ctrl+1 — Quick filter: Errors only
+            if ctrl && i.key_pressed(egui::Key::Num1) {
+                let fs = &mut self.state.filter_state;
+                let source_files = fs.source_files.clone();
+                let hide_all = fs.hide_all_sources;
+                *fs = crate::core::filter::FilterState::errors_only_from(fs.fuzzy);
+                fs.source_files = source_files;
+                fs.hide_all_sources = hide_all;
+                // Keep the multi-search input buffer in sync with the
+                // reset multi_search filter so the UI does not show
+                // terms that are no longer applied.
+                self.state.multi_search_input.clear();
+                self.state.apply_filters();
+            }
+            // Ctrl+2 — Quick filter: Errors + Warnings
+            if ctrl && i.key_pressed(egui::Key::Num2) {
+                let fs = &mut self.state.filter_state;
+                let source_files = fs.source_files.clone();
+                let hide_all = fs.hide_all_sources;
+                *fs = crate::core::filter::FilterState::errors_and_warnings_from(fs.fuzzy);
+                fs.source_files = source_files;
+                fs.hide_all_sources = hide_all;
+                self.state.multi_search_input.clear();
+                self.state.apply_filters();
+            }
+            // Escape — Clear all filters
+            if i.key_pressed(egui::Key::Escape) {
+                self.state.activity_window_secs = None;
+                self.state.activity_window_input.clear();
+                self.state.clear_filters_preserving_file_selection();
+            }
+            // Ctrl+S — Open scan summary
+            if ctrl && !shift && i.key_pressed(egui::Key::S) && self.state.scan_summary.is_some() {
+                self.state.show_summary = true;
+            }
+            if ctrl && i.key_pressed(egui::Key::Space) {
+                if let Some(idx) = self.state.selected_index {
+                    self.state.select_row(idx, true, false);
+                }
+            }
+            if ctrl && i.key_pressed(egui::Key::C) {
+                let text = if self.state.selected_indices.is_empty() {
+                    self.state
+                        .selected_entry()
+                        .map(|e| e.raw_text.clone())
+                        .unwrap_or_default()
+                } else {
+                    self.state.selected_entries_report()
+                };
+                copy = Some(text);
+            }
+            // Up/Down — Navigate entries in the timeline
+            // In newest-first order the display is reversed, so moving one
+            // row down the screen means decreasing selected_index -- see
+            // AppState::next_selection_index.  The scroll request is what
+            // brings the new selection into the virtualised viewport.
+            {
+                let up = i.key_pressed(egui::Key::ArrowUp);
+                let down = i.key_pressed(egui::Key::ArrowDown);
+                if let Some(idx) = self.state.next_selection_index(up, down) {
+                    self.state.select_row(idx, false, shift);
+                    self.state.scroll_to_selected = true;
+                }
+            }
+        });
+        if let Some(text) = copy {
+            ctx.copy_text(text);
         }
     }
 
@@ -63,68 +249,85 @@ impl LogSleuthApp {
         self.state.pending_scan = Some(dir);
     }
 
-    /// Queue an export instead of performing it inline.
-    ///
-    /// The write is O(filtered entries) -- up to MAX_TOTAL_ENTRIES (1,000,000)
-    /// -- and runs on the UI thread.  Doing it in the click handler means no
-    /// frame is painted while it runs, so the window blanks and Windows adds
-    /// "(Not Responding)" with no progress message of any kind.  Recording the
-    /// request here lets this frame paint the "Exporting..." status; the next
-    /// `update()` performs the write.
+    /// Queue a snapshot export; only one export may run at a time.
     pub fn request_export(&mut self, dest: std::path::PathBuf, json: bool, entry_count: usize) {
+        if self.export_job.is_some() || self.state.pending_export.is_some() {
+            self.state.status_message = "An export is already running.".to_string();
+            return;
+        }
         let label = if json { "JSON" } else { "CSV" };
         self.state.status_message = format!("Exporting {entry_count} entries to {label}\u{2026}");
         self.state.pending_export = Some((dest, json));
     }
 
-    /// Perform a queued export, if any.  Called at the top of `update()`, one
-    /// frame after the click that queued it.
+    /// Poll completion without blocking the UI, or start the queued export.
     pub fn run_pending_export(&mut self) {
+        if self
+            .export_job
+            .as_ref()
+            .is_some_and(|job| job.is_finished())
+        {
+            if let Some(job) = self.export_job.take() {
+                self.state.status_message = job
+                    .join()
+                    .unwrap_or_else(|_| "Export failed: worker panicked.".to_string());
+            }
+        }
+        if self.export_job.is_some() {
+            return;
+        }
         let Some((dest, json)) = self.state.pending_export.take() else {
             return;
         };
-        let entry_count = self.state.filtered_indices.len();
-        let filter_desc = self.state.filter_description();
-        let label = if json { "JSON" } else { "CSV" };
-        // SEC-04: atomic write via temp file + rename.
-        let tmp = dest.with_extension(if json { "json.tmp" } else { "csv.tmp" });
-        let status = {
-            let metadata = crate::core::export::ExportMetadata {
-                scan_path: self.state.scan_path.as_deref(),
-                filter_description: &filter_desc,
-                entry_count,
-            };
-            match std::fs::File::create(&tmp) {
-                Ok(f) => {
-                    let filtered_entries = self
-                        .state
-                        .filtered_indices
-                        .iter()
-                        .filter_map(|&i| self.state.entries.get(i));
-                    let result = if json {
-                        crate::core::export::export_json(filtered_entries, f, &dest, &metadata)
+        // Own the selected snapshot so scans, tailing and filters can keep changing.
+        let entries: Vec<_> = self
+            .state
+            .filtered_indices
+            .iter()
+            .filter_map(|&i| self.state.entries.get(i).cloned())
+            .collect();
+        let scan_path = self.state.scan_path.clone();
+        let filter_description = self.state.filter_description();
+        let spawn = std::thread::Builder::new()
+            .name("logsleuth-export".into())
+            .spawn(move || {
+                let label = if json { "JSON" } else { "CSV" };
+                let metadata = crate::core::export::ExportMetadata {
+                    scan_path: scan_path.as_deref(),
+                    filter_description: &filter_description,
+                    entry_count: entries.len(),
+                };
+                let result = (|| -> Result<usize, String> {
+                    let mut temp = crate::platform::fs::create_atomic_temp(&dest)
+                        .map_err(|e| e.to_string())?;
+                    let count = if json {
+                        crate::core::export::export_json(
+                            entries.iter(),
+                            temp.as_file_mut(),
+                            &dest,
+                            &metadata,
+                        )
                     } else {
-                        crate::core::export::export_csv(filtered_entries, f, &dest, &metadata)
-                    };
-                    match result {
-                        Ok(n) => {
-                            if let Err(e) = std::fs::rename(&tmp, &dest) {
-                                let _ = std::fs::remove_file(&tmp);
-                                format!("{label} export failed (rename): {e}")
-                            } else {
-                                format!("Exported {n} entries to {label}.")
-                            }
-                        }
-                        Err(e) => {
-                            let _ = std::fs::remove_file(&tmp);
-                            format!("{label} export failed: {e}")
-                        }
+                        crate::core::export::export_csv(
+                            entries.iter(),
+                            temp.as_file_mut(),
+                            &dest,
+                            &metadata,
+                        )
                     }
+                    .map_err(|e| e.to_string())?;
+                    temp.persist(&dest).map_err(|e| e.to_string())?;
+                    Ok(count)
+                })();
+                match result {
+                    Ok(count) => format!("Exported {count} entries to {label}."),
+                    Err(error) => format!("{label} export failed: {error}"),
                 }
-                Err(e) => format!("Cannot create file: {e}"),
-            }
-        };
-        self.state.status_message = status;
+            });
+        match spawn {
+            Ok(job) => self.export_job = Some(job),
+            Err(error) => self.state.status_message = format!("Cannot start export: {error}"),
+        }
     }
 
     /// Re-scan the external profiles directory and merge the results with the
@@ -158,7 +361,12 @@ impl LogSleuthApp {
         } else {
             format!("Profiles reloaded - {total} total ({external} external).")
         };
-        tracing::info!(total, external, failed, "Profiles reloaded via Options panel");
+        tracing::info!(
+            total,
+            external,
+            failed,
+            "Profiles reloaded via Options panel"
+        );
     }
 
     #[cfg(windows)]
@@ -167,9 +375,19 @@ impl LogSleuthApp {
             Ok(selection) => selection,
             Err(e) => {
                 tracing::warn!(error = %e, "Automatic Event Viewer log append skipped");
+                if self.state.warnings.len() < MAX_WARNINGS {
+                    self.state
+                        .warnings
+                        .push(format!("Event Viewer logs could not be loaded: {e}"));
+                }
                 return;
             }
         };
+        if (selection.access_denied > 0 || selection.unreadable > 0)
+            && self.state.warnings.len() < MAX_WARNINGS
+        {
+            self.state.warnings.push(format!("Event Viewer: {} inaccessible and {} unreadable logs. Check permissions or Event Log Readers membership.", selection.access_denied, selection.unreadable));
+        }
         if selection.files.is_empty() {
             return;
         }
@@ -215,6 +433,16 @@ impl LogSleuthApp {
 
     #[cfg(not(windows))]
     fn queue_missing_windows_event_logs(&mut self) {}
+}
+
+impl Drop for LogSleuthApp {
+    fn drop(&mut self) {
+        if let Some(job) = self.export_job.take() {
+            if job.join().is_err() {
+                tracing::warn!("Export worker panicked during shutdown");
+            }
+        }
+    }
 }
 
 impl eframe::App for LogSleuthApp {
@@ -485,21 +713,7 @@ impl eframe::App for LogSleuthApp {
                         self.dir_watcher.start_watch(
                             dir.clone(),
                             known,
-                            DirWatchConfig {
-                                poll_interval_ms: self.state.dir_watch_poll_interval_ms,
-                                max_depth: self.state.max_scan_depth,
-                                include_patterns: self.state.include_patterns.clone(),
-                                exclude_patterns: self.state.exclude_patterns.clone(),
-                                // Forward modified_since so the watcher applies the same
-                                // date gate as the initial scan.  Without this, files that
-                                // predate the filter are not in known_paths (the scan never
-                                // included them) so the watcher sees every old file as
-                                // "newly created" and floods the file list with them.
-                                // This is the primary cause of out-of-filter files
-                                // appearing in the Files panel after setting a date filter.
-                                modified_since: self.state.discovery_modified_since(),
-                                ..DirWatchConfig::default()
-                            },
+                            self.directory_watch_config(),
                         );
                         self.state.dir_watcher_active = true;
                         tracing::info!(dir = %dir.display(), "Directory watcher (re)started after scan");
@@ -514,11 +728,8 @@ impl eframe::App for LogSleuthApp {
 
                     // Troubleshoot mode: auto-start Live Tail after the initial
                     // scan completes so new log lines are captured immediately.
-                    if self.state.request_start_tail_after_scan {
-                        self.state.request_start_tail_after_scan = false;
-                        if !self.state.tail_active {
-                            self.state.request_start_tail = true;
-                        }
+                    if self.state.request_start_tail_after_scan && !self.state.tail_active {
+                        self.state.request_start_tail = true;
                     }
 
                     // Session restore: re-add any "Add File(s)..." files that were
@@ -607,7 +818,8 @@ impl eframe::App for LogSleuthApp {
                         self.state.status_message = format!(
                             "Directory watcher: {count} new file(s) discovered -- tick in Files tab to load entries."
                         );
-                        // Opt-in model: newly-discovered files are profiled but not
+                        // Normal discovery is opt-in; Troubleshoot Mode ingests automatically.
+                        // Newly-discovered files in normal mode are profiled but not
                         // parsed.  The user ticks their checkbox to load entries.
                         // This matches the initial pending_scan behaviour and prevents
                         // silent RAM growth from auto-parsed files the user never opens.
@@ -617,7 +829,7 @@ impl eframe::App for LogSleuthApp {
                             self.state.profiles.clone(),
                             self.state.max_total_entries,
                             id_start,
-                            Some(std::collections::HashSet::new()),
+                            self.state.automatic_parse_filter(),
                         );
                     }
                 }
@@ -634,11 +846,13 @@ impl eframe::App for LogSleuthApp {
                     self.state.status_message = format!("Scan failed: {error}");
                     self.state.scan_in_progress = false;
                     self.auto_queue_event_logs_after_scan = false;
+                    self.state.request_start_tail_after_scan = false;
                 }
                 crate::core::model::ScanProgress::Cancelled => {
                     self.state.status_message = "Scan cancelled.".to_string();
                     self.state.scan_in_progress = false;
                     self.auto_queue_event_logs_after_scan = false;
+                    self.state.request_start_tail_after_scan = false;
                 }
             }
         }
@@ -835,7 +1049,8 @@ impl eframe::App for LogSleuthApp {
                         // already assigned during the initial scan (bookmarks /
                         // correlation use entry IDs as stable keys).
                         let id_start = self.state.next_entry_id();
-                        // Opt-in model: newly-discovered files are profiled but not
+                        // Normal discovery is opt-in; Troubleshoot Mode ingests automatically.
+                        // Newly-discovered files in normal mode are profiled but not
                         // fully parsed.  Passing Some(empty) as parse_path_filter
                         // causes the scan pipeline to run filename-only profile
                         // detection for each file and set parsing_skipped=true so
@@ -849,7 +1064,7 @@ impl eframe::App for LogSleuthApp {
                             self.state.profiles.clone(),
                             self.state.max_total_entries,
                             id_start,
-                            Some(std::collections::HashSet::new()),
+                            self.state.automatic_parse_filter(),
                         );
                     }
                 }
@@ -968,44 +1183,7 @@ impl eframe::App for LogSleuthApp {
 
         // ---- Handle flags set by discovery panel ----
         // pending_scan: a panel requested a full rescan of the active directory.
-        if let Some(path) = self.state.pending_scan.take() {
-            // Stop any current dir watcher before starting the new scan.
-            // It will be restarted automatically when ParsingCompleted fires.
-            self.dir_watcher.stop_watch();
-            self.state.dir_watcher_active = false;
-            // Bug fix: stop any running live tail before clear().  Without
-            // this, the tail thread keeps sending NewEntries from the old
-            // session's files, which contaminate the new session's entries.
-            if self.state.tail_active {
-                self.tail_manager.stop_tail();
-            }
-            // Capture the date filter BEFORE clear() — clear() does not reset
-            // discovery_date_input intentionally (user preference, not scan state).
-            let modified_since = self.state.discovery_modified_since();
-            self.state.clear();
-            self.state.scan_in_progress = true;
-            self.state.fresh_scan_in_progress = true;
-            self.state.scan_path = Some(path.clone());
-            self.scan_manager.start_scan(
-                path,
-                self.state.profiles.clone(),
-                DiscoveryConfig {
-                    max_files: self.state.max_files_limit,
-                    max_depth: self.state.max_scan_depth,
-                    max_total_entries: self.state.max_total_entries,
-                    include_patterns: self.state.include_patterns.clone(),
-                    exclude_patterns: self.state.exclude_patterns.clone(),
-                    modified_since,
-                    ..DiscoveryConfig::default()
-                },
-                // parse_path_filter = empty set: discover and profile all files
-                // without reading any content.  Entries load only when the user
-                // ticks a file in the Files tab (parse-on-demand, Rule 17).
-                // Keeps startup fast and memory near-zero until explicit opt-in.
-                Some(std::collections::HashSet::new()),
-            );
-            self.auto_queue_event_logs_after_scan = true;
-        }
+        self.start_pending_scan();
         // pending_append_scan: append a directory to the current session.
         if let Some(path) = self.state.pending_append_scan.take() {
             let modified_since = self.state.discovery_modified_since();
@@ -1058,8 +1236,8 @@ impl eframe::App for LogSleuthApp {
             //     auto-parsing potentially thousands of files the user may not
             //     want loaded.  The user re-selects files explicitly.
             //
-            // NEVER pass None here — None means parse EVERYTHING which is the root
-            // cause of the RAM blowup when the session was saved with nothing checked.
+            // Troubleshoot Mode deliberately opts into automatic parsing;
+            // normal mode preserves the opt-in selection model.
             let parse_path_filter = if !self.state.filter_state.source_files.is_empty()
                 && !self.state.filter_state.hide_all_sources
             {
@@ -1074,7 +1252,7 @@ impl eframe::App for LogSleuthApp {
                     source_files_empty = self.state.filter_state.source_files.is_empty(),
                     "Session restore: no explicit file selection -- using opt-in model (parse nothing)"
                 );
-                Some(std::collections::HashSet::new())
+                self.state.automatic_parse_filter()
             };
             self.state.scan_in_progress = true;
             self.scan_manager.start_scan(
@@ -1343,6 +1521,7 @@ impl eframe::App for LogSleuthApp {
                 self.tail_manager
                     .start_tail(files, start_id, self.state.tail_poll_interval_ms);
                 self.state.tail_active = true;
+                self.state.request_start_tail_after_scan = false;
                 self.state.status_message = if files_total > MAX_TAIL_WATCH_FILES {
                     let mut msg = format!(
                         "Live tail active \u{2014} watching {watching} of {files_total} checked \
@@ -1365,10 +1544,7 @@ impl eframe::App for LogSleuthApp {
 
         // request_stop_tail: a panel wants to stop live tail.
         if self.state.request_stop_tail {
-            self.state.request_stop_tail = false;
-            self.tail_manager.stop_tail();
-            self.state.tail_active = false;
-            self.state.status_message = "Live tail stopped.".to_string();
+            self.stop_live_tail();
         }
 
         // request_new_session: reset everything and return to the blank initial state.
@@ -1408,95 +1584,23 @@ impl eframe::App for LogSleuthApp {
             self.reload_profiles();
         }
 
-        // Run a queued export one frame after the click, so the "Exporting..."
-        // status message is actually painted before the blocking write starts.
+        // Preserve startup diagnostics after any initial session reset.
+        self.state.warnings.extend(
+            self.startup_warnings
+                .drain(..)
+                .take(MAX_WARNINGS.saturating_sub(self.state.warnings.len())),
+        );
+        // Start or poll the owned export worker without blocking rendering.
         self.run_pending_export();
+        if self.export_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
 
         // -----------------------------------------------------------------
         // Global keyboard shortcuts (Section 7 of the specification)
         // -----------------------------------------------------------------
         {
-            let scanning = self.state.scan_in_progress;
-            ctx.input(|i| {
-                let ctrl = i.modifiers.ctrl || i.modifiers.mac_cmd;
-                let shift = i.modifiers.shift;
-
-                // Ctrl+O — Open directory
-                if ctrl && !shift && i.key_pressed(egui::Key::O) && !scanning {
-                    self.state.shortcut_open_directory = true;
-                }
-                // Ctrl+F — Focus text search
-                if ctrl && !shift && i.key_pressed(egui::Key::F) {
-                    self.state.sidebar_tab = 1;
-                    self.state.request_focus_text_search = true;
-                }
-                // Ctrl+Shift+F — Focus regex search
-                if ctrl && shift && i.key_pressed(egui::Key::F) {
-                    self.state.sidebar_tab = 1;
-                    self.state.request_focus_regex_search = true;
-                }
-                // Ctrl+R or F5 — Rescan current directory
-                if !scanning
-                    && ((ctrl && !shift && i.key_pressed(egui::Key::R))
-                        || i.key_pressed(egui::Key::F5))
-                {
-                    if let Some(path) = self.state.scan_path.clone() {
-                        self.state.pending_scan = Some(path);
-                    }
-                }
-                // Ctrl+1 — Quick filter: Errors only
-                if ctrl && i.key_pressed(egui::Key::Num1) {
-                    let fs = &mut self.state.filter_state;
-                    let source_files = fs.source_files.clone();
-                    let hide_all = fs.hide_all_sources;
-                    *fs = crate::core::filter::FilterState::errors_only_from(fs.fuzzy);
-                    fs.source_files = source_files;
-                    fs.hide_all_sources = hide_all;
-                    // Keep the multi-search input buffer in sync with the
-                    // reset multi_search filter so the UI does not show
-                    // terms that are no longer applied.
-                    self.state.multi_search_input.clear();
-                    self.state.apply_filters();
-                }
-                // Ctrl+2 — Quick filter: Errors + Warnings
-                if ctrl && i.key_pressed(egui::Key::Num2) {
-                    let fs = &mut self.state.filter_state;
-                    let source_files = fs.source_files.clone();
-                    let hide_all = fs.hide_all_sources;
-                    *fs = crate::core::filter::FilterState::errors_and_warnings_from(fs.fuzzy);
-                    fs.source_files = source_files;
-                    fs.hide_all_sources = hide_all;
-                    self.state.multi_search_input.clear();
-                    self.state.apply_filters();
-                }
-                // Escape — Clear all filters
-                if i.key_pressed(egui::Key::Escape) {
-                    self.state.activity_window_secs = None;
-                    self.state.activity_window_input.clear();
-                    self.state.clear_filters_preserving_file_selection();
-                }
-                // Ctrl+S — Open scan summary
-                if ctrl
-                    && !shift
-                    && i.key_pressed(egui::Key::S)
-                    && self.state.scan_summary.is_some()
-                {
-                    self.state.show_summary = true;
-                }
-                // Up/Down — Navigate entries in the timeline
-                // In newest-first order the display is reversed, so moving one
-                // row down the screen means decreasing selected_index -- see
-                // AppState::next_selection_index.  The scroll request is what
-                // brings the new selection into the virtualised viewport.
-                {
-                    let up = i.key_pressed(egui::Key::ArrowUp);
-                    let down = i.key_pressed(egui::Key::ArrowDown);
-                    if let Some(idx) = self.state.next_selection_index(up, down) {
-                        self.state.selected_index = Some(idx);
-                        self.state.scroll_to_selected = true;
-                    }
-                }
-            });
+            self.handle_shortcuts(ctx);
 
             // Handle shortcut_open_directory outside the input closure (needs &mut self)
             if self.state.shortcut_open_directory {
@@ -1545,7 +1649,8 @@ impl eframe::App for LogSleuthApp {
                         .clicked()
                     {
                         if let Some(files) = rfd::FileDialog::new()
-                            .add_filter("Log files", &["log", "txt", "log.1", "log.2", "log.3"])
+                            .add_filter("Log files", crate::util::constants::LOG_FILE_EXTENSIONS)
+                            .add_filter("All files", &["*"])
                             .pick_files()
                         {
                             self.state.pending_replace_files = Some(files);
@@ -1563,7 +1668,8 @@ impl eframe::App for LogSleuthApp {
                         .clicked()
                     {
                         if let Some(files) = rfd::FileDialog::new()
-                            .add_filter("Log files", &["log", "txt", "log.1", "log.2", "log.3"])
+                            .add_filter("Log files", crate::util::constants::LOG_FILE_EXTENSIONS)
+                            .add_filter("All files", &["*"])
                             .pick_files()
                         {
                             self.state.pending_single_files = Some(files);
@@ -1820,7 +1926,9 @@ impl eframe::App for LogSleuthApp {
                     }
                     ui.separator();
                 }
-                ui.label(&self.state.status_message);
+                if self.export_job.is_some() { ui.spinner(); }
+                ui.label(&self.state.status_message)
+                    .on_hover_text(&self.state.status_message);
                 // Cancel button visible only while a scan is running
                 if self.state.scan_in_progress && ui.small_button("Cancel")
                     .on_hover_text("Stop the running scan. Files already parsed will be kept.")
@@ -1911,20 +2019,8 @@ impl eframe::App for LogSleuthApp {
                         .iter()
                         .map(|f| f.path.clone())
                         .collect();
-                    self.dir_watcher.start_watch(
-                        dir,
-                        known,
-                        DirWatchConfig {
-                            poll_interval_ms: self.state.dir_watch_poll_interval_ms,
-                            // Bug fix: forward user-configured depth limit so the
-                            // watcher covers the same directory tree as the scan.
-                            max_depth: self.state.max_scan_depth,
-                            include_patterns: self.state.include_patterns.clone(),
-                            exclude_patterns: self.state.exclude_patterns.clone(),
-                            modified_since: None,
-                            ..DirWatchConfig::default()
-                        },
-                    );
+                    self.dir_watcher
+                        .start_watch(dir, known, self.directory_watch_config());
                     self.state.dir_watcher_active = true;
                     self.state.status_message = "Directory watch resumed.".to_string();
                     tracing::info!("Directory watch resumed by user");
@@ -1963,7 +2059,7 @@ impl eframe::App for LogSleuthApp {
             .resizable(true)
             .default_height(ui::theme::DETAIL_PANE_HEIGHT)
             .show(ctx, |ui| {
-                ui::panels::detail::render(ui, &self.state);
+                ui::panels::detail::render(ui, &mut self.state);
             });
 
         // Left sidebar — tab-based, resizable.
@@ -2033,6 +2129,7 @@ impl eframe::App for LogSleuthApp {
         ui::panels::log_summary::render(ctx, &mut self.state);
         ui::panels::about::render(ctx, &mut self.state);
         ui::panels::options::render(ctx, &mut self.state);
+        self.keyboard_input_last_frame = ctx.wants_keyboard_input();
 
         // Activity window + relative time auto-advance is handled by the
         // consolidated block earlier in update() to avoid calling
@@ -2121,6 +2218,117 @@ mod tests {
     use crate::app::state::AppState;
     use crate::core::model::DiscoveredFile;
 
+    fn press(
+        app: &mut LogSleuthApp,
+        ctx: &egui::Context,
+        key: egui::Key,
+        modifiers: egui::Modifiers,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                modifiers,
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |ctx| app.handle_shortcuts(ctx),
+        )
+    }
+
+    #[test]
+    fn keyboard_navigation_extends_toggles_and_copies_selection() {
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.entries = vec![entry(1), entry(2), entry(3)];
+        app.state.filtered_indices = vec![0, 1, 2];
+        app.state.sort_descending = false;
+        let ctx = egui::Context::default();
+        press(&mut app, &ctx, egui::Key::ArrowUp, egui::Modifiers::NONE);
+        assert_eq!(app.state.selected_index, Some(0));
+        press(&mut app, &ctx, egui::Key::ArrowUp, egui::Modifiers::NONE);
+        assert_eq!(app.state.selected_index, Some(0));
+        press(&mut app, &ctx, egui::Key::ArrowDown, egui::Modifiers::SHIFT);
+        assert_eq!(app.state.selected_indices, [0, 1].into_iter().collect());
+        assert!(app.state.scroll_to_selected);
+        press(&mut app, &ctx, egui::Key::Space, egui::Modifiers::CTRL);
+        assert_eq!(app.state.selected_indices, [0].into_iter().collect());
+        let output = press(&mut app, &ctx, egui::Key::C, egui::Modifiers::CTRL);
+        assert!(output.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t.contains(&app.state.entries[0].raw_text))));
+    }
+
+    #[test]
+    fn escape_closes_dialog_without_clearing_filters() {
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.filter_state.text_search = "keep".into();
+        app.state.show_about = true;
+        press(
+            &mut app,
+            &egui::Context::default(),
+            egui::Key::Escape,
+            egui::Modifiers::NONE,
+        );
+        assert!(!app.state.show_about);
+        assert_eq!(app.state.filter_state.text_search, "keep");
+    }
+
+    #[test]
+    fn shortcuts_leave_focused_text_input_alone() {
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.filter_state.text_search = "keep".into();
+        let ctx = egui::Context::default();
+        let mut text = String::from("editing");
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+            });
+        });
+        assert!(ctx.wants_keyboard_input());
+        app.keyboard_input_last_frame = ctx.wants_keyboard_input();
+        press(&mut app, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
+        assert_eq!(app.state.filter_state.text_search, "keep");
+    }
+
+    #[test]
+    fn pending_scan_preserves_troubleshoot_tail_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.pending_scan = Some(dir.path().to_owned());
+        app.state.request_start_tail_after_scan = true;
+        app.start_pending_scan();
+        assert!(app.state.request_start_tail_after_scan);
+        assert!(app.state.scan_in_progress);
+        app.scan_manager.cancel_scan();
+    }
+
+    #[test]
+    fn watch_start_and_resume_share_date_and_scope() {
+        let mut app = LogSleuthApp::new(AppState::new(vec![], false));
+        app.state.discovery_date_input = "2024-01-15".into();
+        app.state.max_scan_depth = 4;
+        app.state.exclude_patterns = vec!["private".into()];
+        let config = app.directory_watch_config();
+        assert!(config.modified_since.is_some());
+        assert_eq!(config.modified_since, app.state.discovery_modified_since());
+        assert_eq!(config.max_depth, 4);
+        assert_eq!(config.exclude_patterns, vec!["private"]);
+    }
+
+    #[test]
+    fn stopping_tail_cancels_pending_troubleshoot_autostart() {
+        let mut state = AppState::new(vec![], false);
+        state.troubleshoot_mode = true;
+        let mut app = LogSleuthApp::new(state);
+        assert!(app.state.request_start_tail_after_scan);
+        app.stop_live_tail();
+        assert!(!app.state.request_start_tail_after_scan);
+        assert!(!app.state.request_start_tail);
+        assert!(!app.state.tail_active);
+    }
+
     fn entry(id: u64) -> crate::core::model::LogEntry {
         crate::core::model::LogEntry {
             id,
@@ -2161,14 +2369,26 @@ mod tests {
             "the user must see an in-progress message, got: {}",
             app.state.status_message
         );
-        assert!(app.state.pending_export.is_some(), "the export must be queued");
+        assert!(
+            app.state.pending_export.is_some(),
+            "the export must be queued"
+        );
 
         // The next frame performs it.
         app.run_pending_export();
+        assert!(app.export_job.is_some(), "export has a background owner");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.export_job.is_some() && std::time::Instant::now() < deadline {
+            app.run_pending_export();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.export_job.is_none(), "export completed");
 
         assert!(dest.exists(), "the deferred export must write the file");
         assert!(
-            app.state.status_message.contains("Exported 3 entries to CSV"),
+            app.state
+                .status_message
+                .contains("Exported 3 entries to CSV"),
             "got: {}",
             app.state.status_message
         );
@@ -2334,7 +2554,7 @@ mod tests {
         assert_eq!(discovered_files.len(), 2);
         let b_file = discovered_files
             .iter()
-            .find(|f| f.path == std::path::PathBuf::from("b.log"))
+            .find(|f| f.path == std::path::Path::new("b.log"))
             .expect("b.log should exist after merge");
         assert_eq!(b_file.profile_id.as_deref(), Some("json-lines"));
         assert!(!b_file.parsing_skipped);

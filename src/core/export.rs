@@ -24,11 +24,13 @@ pub struct ExportMetadata<'a> {
 /// a remote party -- so such fields are prefixed with an apostrophe, which
 /// spreadsheets strip and treat as a literal-text marker.
 fn sanitise_csv_field(value: &str) -> std::borrow::Cow<'_, str> {
-    match value.chars().next() {
-        Some('=') | Some('+') | Some('-') | Some('@') | Some('\t') | Some('\r') => {
-            std::borrow::Cow::Owned(format!("'{value}"))
-        }
-        _ => std::borrow::Cow::Borrowed(value),
+    let trimmed = value.trim_start_matches(char::is_whitespace);
+    if matches!(trimmed.chars().next(), Some('=' | '+' | '-' | '@'))
+        || matches!(value.chars().next(), Some('\t' | '\r' | '\n'))
+    {
+        std::borrow::Cow::Owned(format!("'{value}"))
+    } else {
+        std::borrow::Cow::Borrowed(value)
     }
 }
 
@@ -41,16 +43,17 @@ fn sanitise_csv_field(value: &str) -> std::borrow::Cow<'_, str> {
 /// without collecting them into a temporary `Vec`.
 pub fn export_csv<'a, W: Write>(
     entries: impl Iterator<Item = &'a LogEntry>,
-    mut writer: W,
+    writer: W,
     export_path: &Path,
     metadata: &ExportMetadata<'_>,
 ) -> Result<usize, ExportError> {
-    // EXP-03: metadata header as CSV comment lines
+    // Keep each metadata item in one CSV field, including embedded delimiters.
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
     let scan = metadata
         .scan_path
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "(individual files)".to_string());
+    let mut csv_writer = csv::WriterBuilder::new().flexible(true).from_writer(writer);
     for line in [
         "# LogSleuth Export".to_string(),
         format!("# Exported: {now}"),
@@ -59,13 +62,13 @@ pub fn export_csv<'a, W: Write>(
         format!("# Entries: {}", metadata.entry_count),
         String::new(),
     ] {
-        writeln!(writer, "{line}").map_err(|e| ExportError::Io {
-            path: export_path.to_path_buf(),
-            source: e,
-        })?;
+        csv_writer
+            .write_record([line])
+            .map_err(|e| ExportError::Csv {
+                path: export_path.to_path_buf(),
+                source: e,
+            })?;
     }
-
-    let mut csv_writer = csv::Writer::from_writer(writer);
 
     // Column header
     csv_writer
@@ -73,7 +76,7 @@ pub fn export_csv<'a, W: Write>(
             "timestamp",
             "severity",
             "source_file",
-            "line",
+            "line_number",
             "thread",
             "component",
             "message",
@@ -177,6 +180,101 @@ mod tests {
     use crate::core::model::Severity;
     use std::path::PathBuf;
 
+    #[test]
+    fn test_csv_metadata_is_single_field() {
+        let scan = Path::new("logs,=1+1\n=2+2");
+        let filter = "message contains \"ready, steady\"";
+        let meta = ExportMetadata {
+            scan_path: Some(scan),
+            filter_description: filter,
+            entry_count: 0,
+        };
+        let mut buf = Vec::new();
+        export_csv(std::iter::empty(), &mut buf, Path::new("out.csv"), &meta).unwrap();
+        let records = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .flexible(true)
+            .from_reader(buf.as_slice())
+            .records()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(records.len(), 7);
+        for record in &records[..6] {
+            assert_eq!(record.len(), 1, "{record:?}");
+        }
+        assert_eq!(&records[2][0], "# Scan path: logs,=1+1\n=2+2");
+        assert_eq!(&records[3][0], format!("# Filter: {filter}"));
+        assert_eq!(records[6].len(), 7);
+    }
+
+    #[test]
+    fn test_csv_formula_cells_are_literal_and_json_is_lossless() {
+        for dangerous in [
+            "=1+1",
+            "+1",
+            "-1",
+            "@SUM(A1:A2)",
+            "  =1+1",
+            "\tordinary",
+            "\rordinary",
+            "\nordinary",
+            "=HYPERLINK(\"https://example.test/\",\"a,b\")\nnext",
+        ] {
+            let mut entry = make_entry(1, dangerous);
+            entry.thread = Some(dangerous.to_owned());
+            entry.component = Some(dangerous.to_owned());
+            entry.source_file = PathBuf::from(dangerous);
+            let meta = ExportMetadata {
+                scan_path: None,
+                filter_description: "none",
+                entry_count: 1,
+            };
+            let mut buf = Vec::new();
+            export_csv(
+                std::iter::once(&entry),
+                &mut buf,
+                Path::new("out.csv"),
+                &meta,
+            )
+            .unwrap();
+            let records = csv::ReaderBuilder::new()
+                .has_headers(false)
+                .flexible(true)
+                .from_reader(buf.as_slice())
+                .records()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(records.len(), 8);
+            let row = &records[7];
+            assert_eq!(row.len(), 7);
+            for column in [2, 4, 5, 6] {
+                assert_eq!(&row[column], format!("'{dangerous}"));
+            }
+            assert_eq!(&row[1], entry.severity.label());
+            assert_eq!(&row[3], "1");
+            let mut json = Vec::new();
+            export_json(
+                std::iter::once(&entry),
+                &mut json,
+                Path::new("out.json"),
+                &meta,
+            )
+            .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+            assert_eq!(json["entries"][0]["message"], dangerous);
+        }
+        for ordinary in [
+            "ready",
+            "a,b",
+            "say \"hello\"",
+            "line one\nline two",
+            "  text",
+            "",
+        ] {
+            assert_eq!(sanitise_csv_field(ordinary), ordinary);
+        }
+    }
+
     fn make_entry(id: u64, message: &str) -> LogEntry {
         LogEntry {
             id,
@@ -195,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_csv_export_neutralises_formula_injection() {
-        let mut entries = vec![
+        let mut entries = [
             make_entry(1, "=cmd|'/c calc'!A1"),
             make_entry(2, "+1+1"),
             make_entry(3, "@SUM(A1:A2)"),
@@ -220,9 +318,15 @@ mod tests {
             "message formula must be prefixed: {output}"
         );
         assert!(output.contains("'+1+1"), "leading + must be prefixed");
-        assert!(output.contains("'@SUM(A1:A2)"), "leading @ must be prefixed");
+        assert!(
+            output.contains("'@SUM(A1:A2)"),
+            "leading @ must be prefixed"
+        );
         assert!(output.contains("'-2+3"), "leading - must be prefixed");
-        assert!(output.contains("'=1+1"), "component formula must be prefixed");
+        assert!(
+            output.contains("'=1+1"),
+            "component formula must be prefixed"
+        );
         assert!(output.contains("'@evil"), "thread formula must be prefixed");
         // Ordinary text is untouched.
         assert!(output.contains("harmless message"));
@@ -231,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_csv_export() {
-        let entries = vec![make_entry(1, "Error one"), make_entry(2, "Error two")];
+        let entries = [make_entry(1, "Error one"), make_entry(2, "Error two")];
         let mut buf = Vec::new();
         let meta = ExportMetadata {
             scan_path: Some(Path::new("/tmp/logs")),
@@ -255,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_json_export() {
-        let entries = vec![make_entry(1, "Test message")];
+        let entries = [make_entry(1, "Test message")];
         let mut buf = Vec::new();
         let meta = ExportMetadata {
             scan_path: None,

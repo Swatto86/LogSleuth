@@ -7,7 +7,7 @@ use crate::app::state::AppState;
 use crate::ui::theme;
 
 /// Render the detail pane (bottom panel).
-pub fn render(ui: &mut egui::Ui, state: &AppState) {
+pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Multi-select banner: when multiple entries are selected, show a summary
     // bar with a "Copy Selected" button instead of / above the detail view.
     let multi_count = state.selected_indices.len();
@@ -30,7 +30,7 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
         ui.separator();
     }
 
-    let Some(entry) = state.selected_entry() else {
+    let Some(entry) = state.selected_entry().cloned() else {
         ui.centered_and_justified(|ui| {
             ui.label(
                 egui::RichText::new(
@@ -183,7 +183,9 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
             )
             .clicked()
         {
-            crate::platform::fs::reveal_in_file_manager(&entry.source_file);
+            if let Err(error) = crate::platform::fs::reveal_in_file_manager(&entry.source_file) {
+                state.status_message = format!("Cannot show file in folder: {error}");
+            }
         }
     });
     // Use most of the available panel height so multi-line messages are readable.

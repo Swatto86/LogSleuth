@@ -396,7 +396,8 @@ All cross-thread communication uses `std::sync::mpsc` channels. No shared mutabl
 ## 6. Configuration
 
 Configuration is stored in TOML format at the platform-appropriate location:
-- Linux/macOS: `~/.config/logsleuth/config.toml`
+- Linux: `~/.config/logsleuth/config.toml`
+- macOS: `~/Library/Application Support/LogSleuth/config.toml`
 - Windows: `%APPDATA%\LogSleuth\config.toml`
 
 ```toml
@@ -404,33 +405,19 @@ Configuration is stored in TOML format at the platform-appropriate location:
 max_depth = 10
 max_files = 500
 include_patterns = ["*.log", "*.log.[0-9]*", "*.txt"]
-exclude_patterns = ["*.gz", "*.zip", "*.bak", "node_modules/", ".git/"]
-
-[parsing]
-chunk_size_bytes = 65536
-max_entry_size_bytes = 65536
-large_file_threshold_bytes = 104857600  # 100 MB
-worker_threads = 0                       # 0 = auto (num_cpus)
-content_detection_lines = 20
+exclude_patterns = ["*.gz", "*.zip", "*.bak", "node_modules", ".git"]
 
 [ui]
-theme = "dark"                           # "dark" or "light"
-timestamp_display = "local"              # "local" or "utc"
+theme = "dark"
 correlation_window_seconds = 30
-filter_debounce_ms = 300
-
-[export]
-large_export_warning_threshold = 100000
-
-[profiles]
-user_profile_directory = ""              # Empty = platform default
+font_size = 14.5
 
 [logging]
-level = "info"                           # "error", "warn", "info", "debug", "trace"
-file = ""                                # Empty = stderr only
+level = "info"
+file = ""
 ```
 
-Configuration is validated at startup. Invalid values produce actionable error messages and fall back to defaults. Unknown keys are warned and ignored (forward compatibility).
+Configuration is validated at startup. Invalid values produce actionable error messages and fall back to defaults. Known reserved settings produce warnings; unknown keys are ignored for forward compatibility.
 
 ---
 
@@ -498,7 +485,7 @@ Options:
 
 | Platform | Artifact | Installer |
 |----------|----------|-----------|
-| Windows | `LogSleuth-Setup-x.y.z.exe` | NSIS installer (Start Menu, uninstaller) |
+| Windows | `LogSleuth_x.y.z_x64-setup.exe` | NSIS installer (Start Menu, uninstaller) |
 | macOS | `LogSleuth-x.y.z.dmg` | DMG with .app bundle |
 | Linux | `LogSleuth-x.y.z.AppImage` | AppImage (portable) |
 

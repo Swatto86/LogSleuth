@@ -9,13 +9,30 @@ Grab the latest release from the [Releases page](https://github.com/swatto86/Log
 | File | Description |
 |------|-------------|
 | `LogSleuth_{version}_x64-setup.exe` | Windows installer — per-machine, Start Menu shortcut (requires administrator) |
-| `LogSleuth.exe` | Windows portable — single EXE, no installation required, no runtime dependencies |
+| `LogSleuth.exe` | Windows x64 portable — single EXE, statically linked MSVC CRT |
 | `LogSleuth-{version}.dmg` | macOS disk image (unsigned — right-click ▸ Open on first launch) |
 | `LogSleuth-macos` | macOS bare binary — `chmod +x LogSleuth-macos` then run |
 | `LogSleuth-{version}.AppImage` | Linux AppImage (no installation required) |
 | `LogSleuth-linux` | Linux bare binary — `chmod +x LogSleuth-linux` then run |
+| `SHA256SUMS` | SHA-256 checksums for all six release assets |
 
-> The portable Windows EXE has the MSVC CRT statically linked and runs on any Windows 10/11 machine without the Visual C++ Redistributable.
+Windows targets x64 Windows 10/11 and statically links the MSVC CRT. A working graphics
+driver is required; no WebView2 browser runtime is used.
+
+Linux builds use Ubuntu's current GitHub runner and require a compatible glibc desktop,
+GTK 3, XKB and graphics libraries. Install missing libraries through your distribution's
+package manager (for example `libgtk-3-0` and `libxkbcommon0` on Ubuntu). AppImage requires
+FUSE 2 or can be run with `APPIMAGE_EXTRACT_AND_RUN=1`; see the
+[AppImage FUSE guide](https://docs.appimage.org/user-guide/troubleshooting/fuse.html).
+An AppImage does not guarantee compatibility with older glibc distributions.
+
+macOS builds target the architecture of GitHub's `macos-latest` runner. They are unsigned;
+follow [Apple's instructions for opening an unsigned app](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
+Windows launch is tested locally; Linux/macOS builds and automated tests run in CI.
+
+Download `SHA256SUMS` alongside assets and compare using `Get-FileHash -Algorithm SHA256`
+on Windows, `sha256sum -c SHA256SUMS` on Linux, or `shasum -a 256 -c SHA256SUMS` on macOS.
+See [1.1.3 migration notes](CHANGELOG.md) for CSV header and Unix configuration changes.
 
 ## What It Does
 

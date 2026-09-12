@@ -423,7 +423,7 @@ fn compile_patterns(patterns: &[String], kind: &str) -> Vec<glob::Pattern> {
 /// Returns true if `dir_name` matches any exclude pattern that contains no
 /// wildcard characters. These are treated as directory component exclusions
 /// (e.g. "node_modules", ".git") rather than filename glob patterns.
-fn is_excluded_component(dir_name: &str, exclude_pats: &[glob::Pattern]) -> bool {
+pub(crate) fn is_excluded_component(dir_name: &str, exclude_pats: &[glob::Pattern]) -> bool {
     exclude_pats.iter().any(|p| {
         let pat_str = p.as_str();
         // Only literal patterns (no wildcards) are used as component matchers.

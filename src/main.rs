@@ -392,6 +392,12 @@ fn main() {
     {
         match app::windows_event_logs::collect_event_viewer_log_files() {
             Ok(selection) => {
+                if (selection.access_denied > 0 || selection.unreadable > 0)
+                    && state.warnings.len() < util::constants::MAX_WARNINGS
+                {
+                    state.warnings.push(format!("Event Viewer: {} inaccessible and {} unreadable logs. Check permissions or Event Log Readers membership.", selection.access_denied, selection.unreadable));
+                }
+
                 if !selection.files.is_empty() {
                     let denied_note = if selection.access_denied > 0 {
                         format!(
@@ -412,50 +418,50 @@ fn main() {
                         || state.pending_scan.is_some()
                         || state.pending_replace_files.is_some();
                     match event_log_attach_mode(startup_scan_queued, session_restored) {
-                    EventLogAttach::QueueAfterScan => {
-                        let mut existing: std::collections::HashSet<std::path::PathBuf> =
-                            state.queued_parse_files.iter().cloned().collect();
-                        for p in selection.files {
-                            if existing.insert(p.clone()) {
-                                state.queued_parse_files.push(p);
+                        EventLogAttach::QueueAfterScan => {
+                            let mut existing: std::collections::HashSet<std::path::PathBuf> =
+                                state.queued_parse_files.iter().cloned().collect();
+                            for p in selection.files {
+                                if existing.insert(p.clone()) {
+                                    state.queued_parse_files.push(p);
+                                }
                             }
+                            state.status_message = format!(
+                                "Queued Windows Event Viewer logs to append after startup scan{}.",
+                                note
+                            );
+                            tracing::info!(
+                                queued = state.queued_parse_files.len(),
+                                "Queued automatic Event Viewer log append at startup"
+                            );
                         }
-                        state.status_message = format!(
-                            "Queued Windows Event Viewer logs to append after startup scan{}.",
-                            note
-                        );
-                        tracing::info!(
-                            queued = state.queued_parse_files.len(),
-                            "Queued automatic Event Viewer log append at startup"
-                        );
-                    }
-                    EventLogAttach::Append => {
-                        // A previous session was restored: APPEND instead of
-                        // replacing.  pending_replace_files makes gui.rs call
-                        // AppState::clear() and null scan_path, destroying the
-                        // just-restored bookmarks, filters and colours -- which
-                        // save_session() would then persist.
-                        state.status_message = format!(
+                        EventLogAttach::Append => {
+                            // A previous session was restored: APPEND instead of
+                            // replacing.  pending_replace_files makes gui.rs call
+                            // AppState::clear() and null scan_path, destroying the
+                            // just-restored bookmarks, filters and colours -- which
+                            // save_session() would then persist.
+                            state.status_message = format!(
                             "Session restored. Adding {} Windows Event Viewer log(s) from {}{}...",
                             selection.files.len(),
                             selection.dir.display(),
                             note
                         );
-                        state.pending_single_files = Some(selection.files);
-                        tracing::info!(
-                            "Queued automatic Event Viewer log append after session restore"
-                        );
-                    }
-                    EventLogAttach::Replace => {
-                        state.status_message = format!(
-                            "Opening {} Windows Event Viewer log(s) from {}{}...",
-                            selection.files.len(),
-                            selection.dir.display(),
-                            note
-                        );
-                        state.pending_replace_files = Some(selection.files);
-                        tracing::info!("Queued automatic Event Viewer log load at startup");
-                    }
+                            state.pending_single_files = Some(selection.files);
+                            tracing::info!(
+                                "Queued automatic Event Viewer log append after session restore"
+                            );
+                        }
+                        EventLogAttach::Replace => {
+                            state.status_message = format!(
+                                "Opening {} Windows Event Viewer log(s) from {}{}...",
+                                selection.files.len(),
+                                selection.dir.display(),
+                                note
+                            );
+                            state.pending_replace_files = Some(selection.files);
+                            tracing::info!("Queued automatic Event Viewer log load at startup");
+                        }
                     }
                 } else if selection.access_denied > 0 || selection.unreadable > 0 {
                     state.status_message = format!(
@@ -468,8 +474,24 @@ fn main() {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Automatic Event Viewer log load skipped");
+                state
+                    .warnings
+                    .push(format!("Event Viewer logs could not be loaded: {e}"));
+                state.status_message = format!("Event Viewer logs could not be loaded: {e}");
             }
         }
+    }
+
+    // Add diagnostics after session restoration and startup queue messages so
+    // those assignments cannot erase rejected-profile warnings before launch.
+    if !profile_errors.is_empty() {
+        state.status_message.push('\n');
+        state
+            .status_message
+            .push_str(&app::profile_mgr::profile_load_status(
+                &state.profiles,
+                &profile_errors,
+            ));
     }
 
     // Launch the GUI
@@ -517,7 +539,6 @@ fn main() {
     }
 }
 
-
 #[cfg(all(test, windows))]
 mod tests {
     use super::{event_log_attach_mode, EventLogAttach};
@@ -547,9 +568,6 @@ mod tests {
             EventLogAttach::QueueAfterScan
         );
         // First run: no session file, nothing to lose.
-        assert_eq!(
-            event_log_attach_mode(false, false),
-            EventLogAttach::Replace
-        );
+        assert_eq!(event_log_attach_mode(false, false), EventLogAttach::Replace);
     }
 }

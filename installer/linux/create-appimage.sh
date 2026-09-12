@@ -6,8 +6,11 @@
 #
 # VERSION defaults to the value read from Cargo.toml if not supplied.
 #
-# appimagetool is downloaded automatically from GitHub if not in PATH.
-# Requires: wget or curl (for downloading appimagetool if needed).
+# appimagetool is used from PATH when installed (preferred). Otherwise it is
+# downloaded from a PINNED release and its SHA-256 is verified before it is
+# executed; override APPIMAGETOOL_VERSION and APPIMAGETOOL_SHA256 together to
+# use a different release. The download is never run unverified.
+# Requires: wget or curl and sha256sum (only when downloading appimagetool).
 #
 # Output: LogSleuth-<VERSION>.AppImage in the workspace root.
 
@@ -31,8 +34,8 @@ else
     VERSION="$(grep '^version' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
 fi
 
-if [[ -z "$VERSION" ]]; then
-    echo "ERROR: could not determine version. Pass it as the first argument or ensure Cargo.toml is present." >&2
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: version must be X.Y.Z. Pass it as the first argument or ensure Cargo.toml is present." >&2
     exit 1
 fi
 
@@ -117,8 +120,39 @@ APPIMAGETOOL_BIN="$WORK_DIR/appimagetool"
 if command -v appimagetool &>/dev/null; then
     APPIMAGETOOL_BIN="$(command -v appimagetool)"
 else
-    echo "[create-appimage] appimagetool not found in PATH; downloading..."
-    APPIMAGETOOL_URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+    # The downloaded file is executed with the caller's full privileges, so it
+    # is pinned to a specific release (never the mutable 'continuous' tag,
+    # which upstream overwrites) and its SHA-256 is verified before it runs.
+    #
+    # The default hash below is the sha256 GitHub reports for the
+    # appimagetool-x86_64.AppImage asset of AppImage/appimagetool tag 1.9.1,
+    # confirmed by downloading the asset and hashing it locally. Re-verify it
+    # yourself before trusting it. Override both variables together to use a
+    # different release.
+    APPIMAGETOOL_VERSION="${APPIMAGETOOL_VERSION:-1.9.1}"
+    if [[ "$APPIMAGETOOL_VERSION" == "1.9.1" ]]; then
+        APPIMAGETOOL_SHA256="${APPIMAGETOOL_SHA256:-ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0}"
+    else
+        APPIMAGETOOL_SHA256="${APPIMAGETOOL_SHA256:-}"
+    fi
+    APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+
+    if [[ -z "$APPIMAGETOOL_SHA256" ]]; then
+        echo "ERROR: no expected checksum is configured for appimagetool ${APPIMAGETOOL_VERSION}." >&2
+        echo "       Refusing to download and execute an unverified binary." >&2
+        echo "       Install appimagetool from your distribution, or verify the release" >&2
+        echo "       yourself and re-run with:" >&2
+        echo "         APPIMAGETOOL_VERSION=${APPIMAGETOOL_VERSION} APPIMAGETOOL_SHA256=<sha256> $0" >&2
+        echo "       Release: ${APPIMAGETOOL_URL}" >&2
+        exit 1
+    fi
+
+    if ! command -v sha256sum &>/dev/null; then
+        echo "ERROR: sha256sum is required to verify the appimagetool download." >&2
+        exit 1
+    fi
+
+    echo "[create-appimage] appimagetool not found in PATH; downloading ${APPIMAGETOOL_VERSION}..."
     if command -v wget &>/dev/null; then
         wget -q "$APPIMAGETOOL_URL" -O "$APPIMAGETOOL_BIN"
     elif command -v curl &>/dev/null; then
@@ -127,6 +161,16 @@ else
         echo "ERROR: neither wget nor curl is available to download appimagetool." >&2
         exit 1
     fi
+
+    ACTUAL_SHA256="$(sha256sum "$APPIMAGETOOL_BIN" | cut -d' ' -f1)"
+    if [[ "$ACTUAL_SHA256" != "$APPIMAGETOOL_SHA256" ]]; then
+        rm -f "$APPIMAGETOOL_BIN"
+        echo "ERROR: appimagetool checksum mismatch -- refusing to execute the download." >&2
+        echo "       expected: $APPIMAGETOOL_SHA256" >&2
+        echo "       actual:   $ACTUAL_SHA256" >&2
+        exit 1
+    fi
+
     chmod +x "$APPIMAGETOOL_BIN"
 fi
 

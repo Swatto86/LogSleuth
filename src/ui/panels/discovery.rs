@@ -42,6 +42,58 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // Combines discovery metadata (profile, size) with the source-file filter
     // checkboxes, eliminating the duplicate list that was in filters.rs.
     // -------------------------------------------------------------------------
+    if state.tail_active || (!state.scan_in_progress && !state.entries.is_empty()) {
+        ui.horizontal(|ui| {
+            if state.tail_active {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("\u{25a0} Stop Tail")
+                                .color(egui::Color32::from_rgb(239, 68, 68)),
+                        )
+                        .small(),
+                    )
+                    .on_hover_text("Stop watching files for new log lines")
+                    .clicked()
+                {
+                    state.request_stop_tail = true;
+                }
+                let scroll_colour = if state.tail_auto_scroll {
+                    egui::Color32::from_rgb(34, 197, 94)
+                } else {
+                    egui::Color32::from_rgb(107, 114, 128)
+                };
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("\u{2193} Auto")
+                                .small()
+                                .color(scroll_colour),
+                        )
+                        .small()
+                        .frame(false),
+                    )
+                    .on_hover_text("Toggle auto-scroll to newest entry")
+                    .clicked()
+                {
+                    state.tail_auto_scroll = !state.tail_auto_scroll;
+                }
+            } else if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("\u{25cf} Live Tail")
+                            .color(egui::Color32::from_rgb(34, 197, 94)),
+                    )
+                    .small(),
+                )
+                .on_hover_text("Watch loaded files for new log lines written in real time")
+                .clicked()
+            {
+                state.request_start_tail = true;
+            }
+        });
+    }
+
     if !state.discovered_files.is_empty() {
         ui.add_space(6.0);
 
@@ -173,58 +225,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 state.apply_filters();
             }
         });
-
-        if !state.scan_in_progress && !state.entries.is_empty() {
-            ui.horizontal(|ui| {
-                if state.tail_active {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("\u{25a0} Stop Tail")
-                                    .color(egui::Color32::from_rgb(239, 68, 68)),
-                            )
-                            .small(),
-                        )
-                        .on_hover_text("Stop watching files for new log lines")
-                        .clicked()
-                    {
-                        state.request_stop_tail = true;
-                    }
-                    let scroll_colour = if state.tail_auto_scroll {
-                        egui::Color32::from_rgb(34, 197, 94)
-                    } else {
-                        egui::Color32::from_rgb(107, 114, 128)
-                    };
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("\u{2193} Auto")
-                                    .small()
-                                    .color(scroll_colour),
-                            )
-                            .small()
-                            .frame(false),
-                        )
-                        .on_hover_text("Toggle auto-scroll to newest entry")
-                        .clicked()
-                    {
-                        state.tail_auto_scroll = !state.tail_auto_scroll;
-                    }
-                } else if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("\u{25cf} Live Tail")
-                                .color(egui::Color32::from_rgb(34, 197, 94)),
-                        )
-                        .small(),
-                    )
-                    .on_hover_text("Watch loaded files for new log lines written in real time")
-                    .clicked()
-                {
-                    state.request_start_tail = true;
-                }
-            });
-        }
 
         // Activity window — shown near Live Tail so related controls are grouped.
         render_activity_window(ui, state);
@@ -582,7 +582,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                                 .on_hover_text("Reveal in file manager")
                                 .clicked()
                             {
-                                crate::platform::fs::reveal_in_file_manager(path);
+                                if let Err(error) = crate::platform::fs::reveal_in_file_manager(path) {
+                                    state.status_message = format!("Cannot show file in folder: {error}");
+                                }
                             }
 
                             // Profile label and mtime — right-aligned, coloured by match
@@ -865,7 +867,8 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 .clicked()
             {
                 if let Some(files) = rfd::FileDialog::new()
-                    .add_filter("Log files", &["log", "txt", "log.1", "log.2", "log.3"])
+                    .add_filter("Log files", crate::util::constants::LOG_FILE_EXTENSIONS)
+                    .add_filter("All files", &["*"])
                     .pick_files()
                 {
                     if files.iter().any(|f| is_network_path(f)) {
@@ -1006,7 +1009,7 @@ fn render_scan_controls(ui: &mut egui::Ui, state: &mut AppState) {
                         .on_hover_text("Re-scan the current directory with the active date filter and ingest settings")
                         .clicked()
                     {
-                        state.pending_scan = state.scan_path.clone();
+                        state.request_date_rescan();
                     }
             });
         }
@@ -1385,5 +1388,28 @@ fn render_activity_window(ui: &mut egui::Ui, state: &mut crate::app::state::AppS
             .small()
             .weak(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_tail_is_rendered_with_no_files_or_entries() {
+        let mut state = AppState::new(vec![], false);
+        state.tail_active = true;
+        let ctx = egui::Context::default();
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| render(ui, &mut state));
+        });
+        fn has_stop(shape: &egui::Shape) -> bool {
+            match shape {
+                egui::Shape::Text(text) => text.galley.job.text.contains("Stop Tail"),
+                egui::Shape::Vec(shapes) => shapes.iter().any(has_stop),
+                _ => false,
+            }
+        }
+        assert!(output.shapes.iter().any(|s| has_stop(&s.shape)));
     }
 }

@@ -64,7 +64,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 if (state.ui_font_size - DEFAULT_FONT_SIZE).abs() > 0.1
                     && ui
                         .small_button("Reset")
-                        .on_hover_text("Reset to the built-in default (14 pt)")
+                        .on_hover_text(format!("Reset to the built-in default ({DEFAULT_FONT_SIZE} pt)"))
                         .clicked()
                 {
                     state.ui_font_size = DEFAULT_FONT_SIZE;
@@ -468,7 +468,9 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             state.status_message =
                                 format!("Cannot create profiles folder: {e}");
                         } else {
-                            crate::platform::fs::open_directory(dir);
+                            if let Err(error) = crate::platform::fs::open_directory(dir) {
+                                state.status_message = format!("Cannot open profiles folder: {error}");
+                            }
                         }
                     }
                 }

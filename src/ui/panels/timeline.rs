@@ -222,7 +222,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     // after show_rows so we do not mutable-borrow `state` while `entry` still
     // holds an immutable reference into `state.entries`.
     let mut bookmark_toggle: Option<u64> = None;
-    let mut correlation_update_needed = false;
 
     // Deferred multi-select actions collected during show_rows and applied after.
     let mut click_action: Option<(usize, bool, bool)> = None; // (actual_idx, ctrl, shift)
@@ -532,37 +531,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     //   Ctrl+Click    -> toggle individual entry in multi-select
     //   Shift+Click   -> range-select from last selected_index to clicked row
     if let Some((actual_idx, ctrl, shift)) = click_action {
-        if ctrl {
-            // Toggle the clicked entry in the multi-select set.
-            if state.selected_indices.contains(&actual_idx) {
-                state.selected_indices.remove(&actual_idx);
-            } else {
-                state.selected_indices.insert(actual_idx);
-            }
-            // Update primary selection to the clicked entry for detail pane.
-            state.selected_index = Some(actual_idx);
-            correlation_update_needed = true;
-        } else if shift {
-            // Range select: from the anchor (selected_index) to the clicked row.
-            if let Some(anchor) = state.selected_index {
-                let lo = anchor.min(actual_idx);
-                let hi = anchor.max(actual_idx);
-                for i in lo..=hi {
-                    state.selected_indices.insert(i);
-                }
-            } else {
-                // No anchor: treat as single select.
-                state.selected_indices.clear();
-                state.selected_indices.insert(actual_idx);
-                state.selected_index = Some(actual_idx);
-            }
-            correlation_update_needed = true;
-        } else {
-            // Plain click: single-select, clear multi-select.
-            state.selected_indices.clear();
-            state.selected_index = Some(actual_idx);
-            correlation_update_needed = true;
-        }
+        state.select_row(actual_idx, ctrl, shift);
     }
 
     // Copy multi-selected entries to clipboard (deferred from context menu).
@@ -571,12 +540,5 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
         ui.ctx().copy_text(report);
         let n = state.selected_indices.len();
         state.status_message = format!("Copied {n} selected entries to clipboard.");
-    }
-
-    // Recompute the correlation window for the newly selected entry (if any).
-    // This is deferred from the click handler above so the &mut self call does
-    // not conflict with the immutable entry borrow inside show_rows.
-    if correlation_update_needed {
-        state.update_correlation();
     }
 }

@@ -169,7 +169,7 @@ fn e2e_auto_detects_veeam_vbr_profile() {
         detection.profile_id
     );
     assert!(
-        detection.confidence >= 0.3,
+        detection.confidence > logsleuth::util::constants::AUTO_DETECT_FILENAME_BONUS,
         "confidence should exceed threshold, got {}",
         detection.confidence
     );
@@ -387,7 +387,10 @@ fn e2e_veeam_vbr_timestamps_are_parsed() {
     // All entries in a primary-matched entry should have Some timestamp.
     // (Continuation lines inherit the parent entry's timestamp via folding,
     // so total entries with ts should equal total primary-matched entries.)
-    let _ = (total, entries_with_ts); // suppress unused-variable warning
+    assert_eq!(
+        entries_with_ts, total,
+        "every parsed VBR fixture entry must retain its timestamp"
+    );
 }
 
 /// Severity levels in veeam_vbr_sample.log are mapped correctly.
@@ -1535,4 +1538,49 @@ fn e2e_discovery_date_filter_is_honoured_by_menu_open_directory() {
         "a modified_since date of 2099-01-01 must exclude all fixture files \
          (files are not from the future); got {files:?}"
     );
+}
+
+/// Exercise the shipped generator with Windows PowerShell 5.1.
+#[cfg(windows)]
+#[test]
+fn e2e_generated_profile() {
+    let shell = "powershell.exe";
+    for sample in [
+        "2024-01-15 12:00:00 INFO ready\n".repeat(10),
+        "unstructured INFO message\n".repeat(10),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        fs::create_dir(&logs).unwrap();
+        for name in ["first.log", "second.log"] {
+            fs::write(logs.join(name), &sample).unwrap();
+        }
+        let output = dir.path().join("generated.toml");
+        let result = std::process::Command::new(shell)
+            .env("APPDATA", dir.path())
+            .arg("-NoProfile")
+            .arg("-File")
+            .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/New-LogSleuthProfile.ps1"))
+            .arg("-LogDirectory")
+            .arg(&logs)
+            .arg("-OutputPath")
+            .arg(&output)
+            .args(["-ProfileId", "generated-test", "-Force"])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let text = fs::read_to_string(&output).unwrap();
+        let definition = profile::parse_profile_toml(&text, &output).unwrap();
+        let compiled = profile::validate_and_compile(definition, &output, false).unwrap();
+        assert!(!compiled.file_patterns.is_empty());
+        assert!(compiled
+            .severity_override
+            .values()
+            .any(|patterns| !patterns.is_empty()));
+    }
 }

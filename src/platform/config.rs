@@ -23,6 +23,17 @@ pub struct PlatformPaths {
     pub data_dir: PathBuf,
 }
 
+fn application_config_root(config_dir: &Path) -> &Path {
+    #[cfg(target_os = "windows")]
+    {
+        config_dir.parent().unwrap_or(config_dir)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        config_dir
+    }
+}
+
 impl PlatformPaths {
     /// Resolve platform-appropriate paths.
     ///
@@ -30,13 +41,10 @@ impl PlatformPaths {
     pub fn resolve() -> Self {
         if let Some(proj_dirs) = ProjectDirs::from("", "", constants::APP_ID) {
             let config_dir = proj_dirs.config_dir().to_path_buf();
-            // Profiles live one level above config/ so the user-visible path is
-            // %APPDATA%\LogSleuth\profiles\ rather than the deeper
-            // %APPDATA%\LogSleuth\config\profiles\.
-            let user_profiles_dir = config_dir
-                .parent()
-                .unwrap_or(&config_dir)
-                .join(constants::PROFILES_DIR_NAME);
+            // Windows adds a trailing config directory; Unix platforms already
+            // return the application configuration root.
+            let user_profiles_dir =
+                application_config_root(&config_dir).join(constants::PROFILES_DIR_NAME);
             let data_dir = proj_dirs.data_dir().to_path_buf();
 
             tracing::debug!(
@@ -219,12 +227,22 @@ impl Default for AppConfig {
 /// (fail-fast on misconfiguration per Rule 13 -- the application still starts
 /// but the user is informed).
 pub fn load_config(config_dir: &Path) -> (AppConfig, Vec<String>) {
-    let config_path = config_dir
-        .parent()
-        .unwrap_or(config_dir)
-        .join(constants::CONFIG_FILE_NAME);
-
+    let config_path = application_config_root(config_dir).join(constants::CONFIG_FILE_NAME);
     let mut warnings: Vec<String> = Vec::new();
+    #[cfg(not(target_os = "windows"))]
+    if !config_path.exists() {
+        let shared = config_dir
+            .parent()
+            .unwrap_or(config_dir)
+            .join(constants::CONFIG_FILE_NAME);
+        if shared != config_path && shared.exists() {
+            warnings.push(format!(
+                "Ignoring shared configuration '{}'. Move your LogSleuth settings to '{}'.",
+                shared.display(),
+                config_path.display()
+            ));
+        }
+    }
 
     if !config_path.exists() {
         tracing::debug!(path = %config_path.display(), "No config.toml found; using defaults");
@@ -417,8 +435,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg_dir = dir.path().join("config");
         std::fs::create_dir_all(&cfg_dir).unwrap();
-        std::fs::write(dir.path().join(constants::CONFIG_FILE_NAME), body).unwrap();
+        std::fs::write(
+            application_config_root(&cfg_dir).join(constants::CONFIG_FILE_NAME),
+            body,
+        )
+        .unwrap();
         (dir, cfg_dir)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_config_and_profiles_use_parent_of_config_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_root = dir.path().join("LogSleuth");
+        let config_dir = app_root.join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(app_root.join("config.toml"), "[ui]\nfont_size = 18.0\n").unwrap();
+        std::fs::write(config_dir.join("config.toml"), "[ui]\nfont_size = 12.0\n").unwrap();
+        let (config, warnings) = load_config(&config_dir);
+        assert_eq!(config.font_size, 18.0);
+        assert!(warnings.is_empty());
+        assert_eq!(
+            application_config_root(&config_dir).join("profiles"),
+            app_root.join("profiles")
+        );
     }
 
     /// config.example.toml advertises [discovery] include_patterns, but the
@@ -462,5 +502,65 @@ mod tests {
             cfg.include_patterns.len(),
             constants::DEFAULT_INCLUDE_PATTERNS.len()
         );
+    }
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod unix_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_config_and_profiles_use_application_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("logsleuth");
+        std::fs::create_dir(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[discovery]\nmax_files = 100\n",
+        )
+        .unwrap();
+        let (config, warnings) = load_config(&config_dir);
+        assert_eq!(config.max_files, 100);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(application_config_root(&config_dir), config_dir);
+        assert_eq!(
+            application_config_root(&config_dir).join(constants::PROFILES_DIR_NAME),
+            config_dir.join("profiles")
+        );
+    }
+
+    #[test]
+    fn shared_config_is_not_loaded_when_canonical_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("logsleuth");
+        std::fs::create_dir(&config_dir).unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[discovery]\nmax_files = 150\n",
+        )
+        .unwrap();
+        let (config, warnings) = load_config(&config_dir);
+        assert_eq!(config.max_files, AppConfig::default().max_files);
+        assert!(warnings.iter().any(|w| w.contains("config.toml")));
+    }
+
+    #[test]
+    fn canonical_config_wins_over_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("logsleuth");
+        std::fs::create_dir(&config_dir).unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[discovery]\nmax_files = 150\n",
+        )
+        .unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[discovery]\nmax_files = 100\n",
+        )
+        .unwrap();
+        let (config, warnings) = load_config(&config_dir);
+        assert_eq!(config.max_files, 100);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 }

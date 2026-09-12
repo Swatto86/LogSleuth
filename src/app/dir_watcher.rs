@@ -559,7 +559,11 @@ fn walk_for_new_files(
             // Short-circuit: never descend into excluded directories,
             // skipping their entire subtree in a single filter_entry call.
             let name = e.file_name().to_string_lossy();
-            !exclude_pats.iter().any(|p| p.matches(&name))
+            if e.file_type().is_dir() {
+                !crate::core::discovery::is_excluded_component(&name, exclude_pats)
+            } else {
+                !exclude_pats.iter().any(|p| p.matches(&name))
+            }
         });
 
     for entry_result in walker {
@@ -676,13 +680,28 @@ mod tests {
         );
         drop(tx); // close sender so the loop below terminates on Disconnected
         let mut out = Vec::new();
-        loop {
-            match rx.try_recv() {
-                Ok(batch) => out.extend(batch),
-                Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
-            }
+        while let Ok(batch) = rx.try_recv() {
+            out.extend(batch);
         }
         out
+    }
+
+    #[test]
+    fn wildcard_exclusions_do_not_hide_scanned_directories() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("folder.tmp");
+        fs::create_dir(&sub).unwrap();
+        let log = sub.join("app.log");
+        fs::write(&log, b"ready").unwrap();
+        let found = walk_collect(
+            dir.path(),
+            &HashSet::new(),
+            &[Pattern::new("*.log").unwrap()],
+            &[Pattern::new("*.tmp").unwrap()],
+            10,
+            None,
+        );
+        assert_eq!(found, vec![log]);
     }
 
     /// Verify that walk_for_new_files finds a newly created file that was not in

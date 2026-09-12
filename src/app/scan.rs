@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 const ENTRY_BATCH_SIZE: usize = 500;
 
 /// Number of sample lines to read from each file for auto-detection.
-const SAMPLE_LINES: usize = 20;
+const SAMPLE_LINES: usize = crate::util::constants::DEFAULT_CONTENT_DETECTION_LINES;
 
 /// Retry limits for transient I/O errors.
 const MAX_RETRIES: usize = 3;

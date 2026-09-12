@@ -778,7 +778,7 @@ timestamp_format = "%Y"
         let profile = validate_and_compile(def, &path, false).unwrap();
 
         // "test-something.log" matches the "test*.log" file_pattern.
-        let result = auto_detect("test-something.log", &[], &[profile.clone()]);
+        let result = auto_detect("test-something.log", &[], std::slice::from_ref(&profile));
         assert!(
             result.is_some(),
             "empty samples + filename match should produce a detection result"

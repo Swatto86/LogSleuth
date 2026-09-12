@@ -105,7 +105,7 @@
 ## Increment 5: Release Pipeline
 **Status: COMPLETE**
 
-- [x] `installer/windows/logsleuth.nsi` - NSIS installer with MultiUser.nsh support (per-user and per-machine), Start Menu shortcuts, Add/Remove Programs registry entry, clean uninstaller; version string updated automatically by `update-application.ps1`
+- [x] `installer/windows/logsleuth.nsi` - NSIS installer with MultiUser.nsh support (per-user and per-machine), Start Menu shortcuts, Add/Remove Programs registry entry, clean uninstaller; version supplied from Cargo.toml by `scripts/build-installer.ps1`
 - [x] `installer/macos/create-dmg.sh` - Builds a macOS .app bundle (Info.plist, binary, .icns via sips/iconutil) then produces a DMG with `create-dmg` (falls back to plain `hdiutil` if unavailable)
 - [x] `installer/linux/create-appimage.sh` - Builds a portable Linux AppImage: constructs AppDir (AppRun, .desktop, icon, binary), downloads `appimagetool` automatically if not in PATH
 - [x] `.github/workflows/ci.yml` - Triggered on push/PR to main; matrix build (ubuntu-latest, windows-latest, macos-latest); steps: `cargo build --release`, `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo test`; Linux apt deps for eframe/rfd

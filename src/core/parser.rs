@@ -328,20 +328,14 @@ pub fn parse_content(
 /// Patterns are tried from most-precise (RFC 3339 with explicit timezone)
 /// to least-precise (year-less BSD syslog), so higher-confidence results
 /// take priority over looser matches on the same line.
-/// Convenience wrapper without tier-caching.  Production code in
-/// `parse_content` uses [`sniff_timestamp_hinted`] directly for the
-/// cached fast-path; this wrapper is kept for callers that parse a
-/// single line at a time.
+/// Convenience wrapper for callers that do not retain the last matched tier.
 #[allow(dead_code)] // Public API used by tests; parse_content uses the hinted variant.
 pub(crate) fn sniff_timestamp(raw_line: &str) -> Option<DateTime<Utc>> {
     sniff_timestamp_hinted(raw_line, &mut None)
 }
 
-/// Inner implementation of [`sniff_timestamp`] that accepts a mutable tier
-/// hint.  When `last_successful_tier` contains a tier index from a previous
-/// successful match, that tier is tried first before falling back to the
-/// full sequential scan.  For homogeneous log files this reduces per-entry
-/// cost from 15 regex attempts to 1.
+/// Record the matched tier for the caller, while always trying patterns in
+/// precision order. A previous match cannot rule out a more precise next line.
 fn sniff_timestamp_hinted(
     raw_line: &str,
     last_successful_tier: &mut Option<usize>,
@@ -384,7 +378,7 @@ fn sniff_timestamp_hinted(
             //   2024-01-15T14:30:22+05:30
             //   2024-01-15T14:30:22.999+05:30
             // ------------------------------------------------------------------
-            try_re(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})").map(
+            try_re(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.,][0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})").map(
                 |r| Sniffer {
                     re: r,
                     parse: |s| {
@@ -399,9 +393,8 @@ fn sniff_timestamp_hinted(
                                 // Bug fix: previously used `s.len() - 4` which kept
                                 // the sign character, producing "+...++05:30".
                                 format!(
-                                    "{}{}",
-                                    &s[..s.len() - 5],
-                                    &format!("{}:{}", &tail[..3], &tail[3..])
+                                    "{}{}:{}",
+                                    &s[..s.len() - 5], &tail[..3], &tail[3..]
                                 )
                             } else {
                                 s.to_owned()
@@ -621,14 +614,21 @@ fn sniff_timestamp_hinted(
             // avoid matching large port numbers / PIDs mid-line).
             // Example: 1705329022 ... or 1705329022.123 ...
             // ------------------------------------------------------------------
-            try_re(r"^\d{10}(?:\.\d+)?").map(|r| Sniffer {
+            try_re(r"^[0-9]{10}(?:\.[0-9]+)?\b").map(|r| Sniffer {
                 re: r,
                 parse: |s| {
-                    let (secs_str, _) = s.split_once('.').unwrap_or((s, ""));
-                    secs_str
-                        .parse::<i64>()
-                        .ok()
-                        .and_then(|secs| DateTime::from_timestamp(secs, 0))
+                    let (secs_str, fraction) = s.split_once('.').unwrap_or((s, ""));
+                    let secs = secs_str.parse::<i64>().ok()?;
+                    let mut nanos = 0u32;
+                    let mut scale = 100_000_000u32;
+                    for digit in fraction.bytes().take(9) {
+                        if !digit.is_ascii_digit() {
+                            return None;
+                        }
+                        nanos += u32::from(digit - b'0') * scale;
+                        scale /= 10;
+                    }
+                    DateTime::from_timestamp(secs, nanos)
                 },
             }),
             // ------------------------------------------------------------------
@@ -636,7 +636,7 @@ fn sniff_timestamp_hinted(
             // Common in JavaScript / Node.js / browser logs.
             // Example: 1705329022123 server started
             // ------------------------------------------------------------------
-            try_re(r"^\d{13}(?:\.\d+)?").map(|r| Sniffer {
+            try_re(r"^[0-9]{13}(?:\.[0-9]+)?\b").map(|r| Sniffer {
                 re: r,
                 parse: |s| {
                     let (ms_str, _) = s.split_once('.').unwrap_or((s, ""));
@@ -686,19 +686,7 @@ fn sniff_timestamp_hinted(
         candidates.into_iter().flatten().collect()
     });
 
-    // If the caller provided a tier hint from a previous successful match,
-    // try that tier first. For files where every line uses the same format,
-    // this turns 15 sequential regex attempts into 1.
-    if let Some(hint) = *last_successful_tier {
-        if let Some(sniffer) = sniffers.get(hint) {
-            if let Some(m) = sniffer.re.find(raw_line) {
-                if let Some(dt) = (sniffer.parse)(m.as_str()) {
-                    return Some(dt);
-                }
-            }
-        }
-    }
-
+    // Preserve precision ordering on every line: sniffer patterns overlap.
     for (idx, sniffer) in sniffers.iter().enumerate() {
         if let Some(m) = sniffer.re.find(raw_line) {
             if let Some(dt) = (sniffer.parse)(m.as_str()) {
@@ -842,6 +830,69 @@ fn format_has_offset_specifier(format: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cached_tier_preserves_timezone_priority() {
+        let mut hint = None;
+        sniff_timestamp_hinted("2024-01-15 14:30:22", &mut hint).unwrap();
+        let actual = sniff_timestamp_hinted("2024-01-15T14:30:22+05:30", &mut hint).unwrap();
+        let expected = DateTime::parse_from_rfc3339("2024-01-15T09:00:22Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(actual, expected);
+        // A cached time-only format must not erase an explicit date either.
+        sniff_timestamp_hinted("14:30:22", &mut hint).unwrap();
+        assert_eq!(
+            sniff_timestamp_hinted("2024-01-15T09:00:22Z", &mut hint),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn test_fractional_epoch_seconds_preserved() {
+        for (fraction, nanos) in [
+            ("750", 750_000_000),
+            ("1", 100_000_000),
+            ("000000001", 1),
+            ("1234567899", 123_456_789),
+        ] {
+            let ts = sniff_timestamp(&format!("1705329022.{fraction} event")).unwrap();
+            assert_eq!(ts.timestamp(), 1705329022);
+            assert_eq!(ts.timestamp_subsec_nanos(), nanos);
+        }
+        assert_eq!(
+            sniff_timestamp("1705329022 event")
+                .unwrap()
+                .timestamp_subsec_nanos(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_epoch_milliseconds_preserved() {
+        let ts = sniff_timestamp("1705329022123 server started").unwrap();
+        assert_eq!(ts.timestamp_millis(), 1705329022123);
+        assert!(sniff_timestamp("17053290221234 too long").is_none());
+        assert!(sniff_timestamp("1705329022suffix").is_none());
+    }
+
+    #[test]
+    fn test_unicode_offset_and_fraction_do_not_panic() {
+        // These unsupported formats may fall back to a less precise tier.
+        let _ = sniff_timestamp("2024-01-15T14:30:22+٠٥٣٠");
+        let _ = sniff_timestamp("2024-01-15T14:30:22.٠٠٠Z");
+        let actual = sniff_timestamp("2024-01-15T14:30:22+0530").unwrap();
+        let expected = DateTime::parse_from_rfc3339("2024-01-15T09:00:22Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_unicode_timestamp_does_not_panic() {
+        assert!(sniff_timestamp("２０２４-０１-１５T１４:３０:２２Z").is_none());
+    }
+
     use crate::core::model::Severity;
     use crate::core::profile;
     use std::path::PathBuf;
@@ -1144,9 +1195,7 @@ info = ["Info"]
 
     fn sniff(s: &str) -> String {
         sniff_timestamp(s)
-            .expect(&format!(
-                "sniff_timestamp should find a timestamp in: {s:?}"
-            ))
+            .unwrap_or_else(|| panic!("sniff_timestamp should find a timestamp in: {s:?}"))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string()
     }
@@ -1556,10 +1605,19 @@ multiline_mode = "raw"
         );
         // Content was non-empty so the fallback in scan.rs would kick in here
         // and re-parse with plain-text, producing at least 3 entries.
-        assert!(
-            !content.trim().is_empty(),
-            "content is non-empty (fallback eligible)"
+        let raw = profile::load_builtin_profiles()
+            .into_iter()
+            .find(|p| p.id == "plain-text")
+            .unwrap();
+        let fallback = parse_content(
+            content,
+            Path::new("vbr.log"),
+            &raw,
+            &ParseConfig::default(),
+            0,
         );
+        assert_eq!(fallback.entries.len(), 3);
+        assert!(fallback.entries[0].message.contains("Job Log Started"));
     }
 
     /// Regression: a single matching line longer than max_entry_size was never

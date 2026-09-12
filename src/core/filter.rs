@@ -345,6 +345,7 @@ impl FilterState {
     /// On success updates `regex_search`; on failure clears it and returns Err.
     pub fn set_regex(&mut self, pattern: &str) -> Result<(), FilterError> {
         self.regex_pattern = pattern.to_string();
+        self.regex_search = None;
         if pattern.is_empty() {
             self.regex_search = None;
             return Ok(());
@@ -827,8 +828,10 @@ mod tests {
     #[test]
     fn test_invalid_regex() {
         let mut filter = FilterState::default();
+        filter.set_regex("ready").unwrap();
         let result = filter.set_regex("[invalid");
         assert!(result.is_err());
+        assert!(filter.regex_search.is_none());
     }
 
     #[test]

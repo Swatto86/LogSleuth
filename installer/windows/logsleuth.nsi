@@ -3,9 +3,9 @@
 ; Uses NSIS MultiUser.nsh and Modern UI 2.
 ;
 ; Build from the workspace root:
-;   makensis installer\windows\logsleuth.nsi
+;   pwsh -File scripts/build-installer.ps1
 ;
-; The version string below is automatically updated by update-application.ps1.
+; The build script reads Cargo.toml and supplies PRODUCT_VERSION.
 
 Unicode True
 SetCompressor /SOLID lzma
@@ -15,7 +15,9 @@ SetCompressor /SOLID lzma
 ; ---------------------------------------------------------------------------
 
 !define PRODUCT_NAME      "LogSleuth"
-!define PRODUCT_VERSION   "1.0.0"
+!ifndef PRODUCT_VERSION
+  !error "Supply /DPRODUCT_VERSION from Cargo.toml (scripts/build-installer.ps1)."
+!endif
 !define PRODUCT_PUBLISHER "Swatto"
 !define PRODUCT_URL       "https://github.com/swatto86/LogSleuth"
 !define PRODUCT_EXE       "logsleuth.exe"

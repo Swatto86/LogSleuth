@@ -10,6 +10,16 @@
 use std::io;
 use std::path::Path;
 
+/// Exclusively create an unpredictable temporary file beside its destination.
+/// Keep this owner alive through `persist` so failure cleans up only our file.
+pub fn create_atomic_temp(dest: &Path) -> io::Result<tempfile::NamedTempFile> {
+    let parent = dest
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    tempfile::NamedTempFile::new_in(parent)
+}
+
 /// Read the first N lines of a file for format detection.
 ///
 /// Returns up to `max_lines` lines from the start of the file.
@@ -52,92 +62,112 @@ pub fn ensure_dir_exists(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)
 }
 
-/// Open a directory in the platform file manager.
-///
-/// Unlike [`reveal_in_file_manager`] (which highlights a specific file),
-/// this opens the directory itself so the user lands inside the folder.
-pub fn open_directory(dir: &Path) {
-    #[cfg(target_os = "windows")]
-    {
-        if let Err(e) = std::process::Command::new("explorer.exe").arg(dir).spawn() {
-            tracing::warn!(
-                dir = %dir.display(),
-                error = %e,
-                "Failed to open directory in Explorer"
-            );
-        }
+/// Launch the platform file manager, reporting path and spawn failures to the caller.
+pub fn open_directory(dir: &Path) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Directory '{}' does not exist", dir.display()),
+        ));
     }
+    #[cfg(windows)]
+    let mut command = std::process::Command::new("explorer.exe");
     #[cfg(target_os = "macos")]
-    {
-        if let Err(e) = std::process::Command::new("open").arg(dir).spawn() {
-            tracing::warn!(
-                dir = %dir.display(),
-                error = %e,
-                "Failed to open directory in Finder"
-            );
-        }
-    }
+    let mut command = std::process::Command::new("open");
     #[cfg(target_os = "linux")]
-    {
-        if let Err(e) = std::process::Command::new("xdg-open").arg(dir).spawn() {
-            tracing::warn!(
-                dir = %dir.display(),
-                error = %e,
-                "Failed to open directory in file manager"
-            );
-        }
-    }
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(dir).spawn().map(|_| ())
 }
 
-/// Open the system file manager and highlight `path` within it.
-///
-/// Platform behaviour:
-/// - **Windows**: `explorer.exe /select,"<path>"` — opens Explorer with the
-///   file pre-selected in its parent folder.
-/// - **macOS**: `open -R "<path>"` — reveals the file in Finder.
-/// - **Linux**: `xdg-open "<parent>"` — opens the parent directory (most
-///   Linux file managers do not support per-file selection via a standard
-///   command-line API).
-///
-/// The subprocess is spawned detached; any launch failure is logged at WARN
-/// level but never propagated so the UI never blocks.
-pub fn reveal_in_file_manager(path: &Path) {
-    #[cfg(target_os = "windows")]
+/// Reveal a file without interpreting its path as shell source.
+pub fn reveal_in_file_manager(path: &Path) -> io::Result<()> {
+    if !path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Path '{}' does not exist", path.display()),
+        ));
+    }
+    #[cfg(windows)]
     {
-        // `/select,<path>` must be a single argument — no space after comma.
-        let arg = format!("/select,{}", path.display());
-        if let Err(e) = std::process::Command::new("explorer").arg(arg).spawn() {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "Failed to reveal file in Explorer"
-            );
-        }
+        std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .map(|_| ())
     }
     #[cfg(target_os = "macos")]
     {
-        if let Err(e) = std::process::Command::new("open")
+        std::process::Command::new("open")
             .arg("-R")
             .arg(path)
             .spawn()
-        {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "Failed to reveal file in Finder"
-            );
-        }
+            .map(|_| ())
     }
     #[cfg(target_os = "linux")]
     {
-        // Best available fallback: open the parent directory.
-        let parent = path.parent().unwrap_or(path);
-        if let Err(e) = std::process::Command::new("xdg-open").arg(parent).spawn() {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "Failed to open parent directory in file manager"
-            );
-        }
+        open_directory(path.parent().unwrap_or(path))
+    }
+}
+
+#[cfg(test)]
+mod file_manager_tests {
+    use super::*;
+    #[test]
+    fn missing_paths_return_actionable_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        assert!(open_directory(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("missing"));
+        assert!(reveal_in_file_manager(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("missing"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn csv_export_temp_leaves_planted_symlink_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("sentinel");
+        std::fs::write(&sentinel, b"original evidence").unwrap();
+        let planted = dir.path().join("report.csv.tmp");
+        symlink(&sentinel, &planted).unwrap();
+        let dest = dir.path().join("report.csv");
+        let mut file = create_atomic_temp(&dest).unwrap();
+        file.write_all(b"exported CSV").unwrap();
+        file.persist(&dest).unwrap();
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"original evidence");
+        assert!(std::fs::symlink_metadata(&planted)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_link(&planted).unwrap(), sentinel);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"exported CSV");
+    }
+    #[test]
+    fn json_export_temp_leaves_planted_symlink_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("sentinel");
+        std::fs::write(&sentinel, b"original evidence").unwrap();
+        let planted = dir.path().join("report.json.tmp");
+        symlink(&sentinel, &planted).unwrap();
+        let dest = dir.path().join("report.json");
+        let mut file = create_atomic_temp(&dest).unwrap();
+        file.write_all(b"exported JSON").unwrap();
+        file.persist(&dest).unwrap();
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"original evidence");
+        assert!(std::fs::symlink_metadata(&planted)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_link(&planted).unwrap(), sentinel);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"exported JSON");
     }
 }

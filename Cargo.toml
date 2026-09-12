@@ -1,6 +1,6 @@
 [package]
 name = "logsleuth"
-version = "1.1.2"
+version = "1.1.3"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Swatto"]
@@ -30,6 +30,7 @@ csv = "1"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Filesystem
+tempfile = "3"
 walkdir = "2"
 glob = "0.3"
 
@@ -60,7 +61,6 @@ clap = { version = "4", features = ["derive"] }
 evtx = "0.8"
 
 [dev-dependencies]
-tempfile = "3"
 # Icon generation tool (examples/gen_icons.rs): render SVG -> PNG -> ICO
 # Run with: cargo run --example gen_icons
 resvg = "0.44"
@@ -76,5 +76,5 @@ winres = "0.1"
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
+# Parser panic containment requires unwinding in shipped builds.
 strip = true

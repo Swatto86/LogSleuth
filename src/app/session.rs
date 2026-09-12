@@ -286,15 +286,13 @@ pub fn save(data: &SessionData, path: &Path) -> Result<(), String> {
     // Atomic write: write to a sibling temp file then rename.
     // A crash between write and rename loses the new session but never
     // corrupts the previous one (rename is atomic on all supported platforms).
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json.as_bytes())
-        .map_err(|e| format!("failed to write session temp file '{}': {e}", tmp.display()))?;
-
-    std::fs::rename(&tmp, path).map_err(|e| {
-        // Clean up the temp file on failure; ignore any secondary error.
-        let _ = std::fs::remove_file(&tmp);
-        format!("failed to finalise session file '{}': {e}", path.display())
-    })?;
+    use std::io::Write;
+    let mut tmp = crate::platform::fs::create_atomic_temp(path)
+        .map_err(|e| format!("failed to create session temp file: {e}"))?;
+    tmp.write_all(json.as_bytes())
+        .map_err(|e| format!("failed to write session temp file: {e}"))?;
+    tmp.persist(path)
+        .map_err(|e| format!("failed to finalise session file '{}': {e}", path.display()))?;
 
     tracing::debug!(path = %path.display(), "Session saved");
     Ok(())
@@ -374,6 +372,17 @@ mod tests {
             max_tail_buffer_entries: default_max_tail_buffer_entries(),
             troubleshoot_mode: false,
         }
+    }
+
+    #[test]
+    fn save_preserves_preexisting_temp_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.json");
+        let planted = path.with_extension("json.tmp");
+        std::fs::write(&planted, b"unrelated evidence").unwrap();
+        save(&sample_data(), &path).unwrap();
+        assert_eq!(std::fs::read(&planted).unwrap(), b"unrelated evidence");
+        assert!(load(&path).is_some());
     }
 
     /// Save and load must round-trip all fields accurately.
